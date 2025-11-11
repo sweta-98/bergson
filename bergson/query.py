@@ -52,7 +52,6 @@ def preprocess_grads(
     of preprocessed gradients with shape [1, grad_dim]. Preprocessing
     includes some combination of unit normalization, accumulation,
     accumulated gradient normalization, and dtype conversion."""
-
     # Short-circuit if possible
     if accumulate_grads == "none" and not unit_normalize:
         return {
@@ -144,9 +143,30 @@ def get_query_ds(query_cfg: QueryConfig):
     if not query_cfg.modules:
         query_cfg.modules = target_modules
 
-    query_ds = load_gradient_dataset(
-        Path(query_cfg.query_path), concatenate_gradients=False
-    )
+    try:
+        query_ds = load_gradient_dataset(
+            Path(query_cfg.query_path), concatenate_gradients=False
+        )
+    except ValueError:
+        query_ds = load_gradient_dataset(
+            Path(query_cfg.query_path), concatenate_gradients=True
+        )
+        # Convert unstructured gradients to a dictionary of module-wise tensors
+        with open(query_path / "info.json", "r") as f:
+            metadata = json.load(f)
+            grad_sizes = metadata["grad_sizes"]
+            names = metadata["names"]
+
+        module_offsets = torch.cumsum(torch.tensor(list(grad_sizes.values())), dim=0)
+
+        query_ds = Dataset.from_dict(
+            {
+                name: query_ds[:][module_offsets[i] : module_offsets[i + 1]]
+                for i, name in enumerate(names)
+                if name in target_modules
+            }
+        )
+
     query_ds = query_ds.with_format("torch", columns=target_modules)
 
     use_q = query_cfg.query_preconditioner_path is not None

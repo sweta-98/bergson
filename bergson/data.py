@@ -18,7 +18,6 @@ from datasets import (
     concatenate_datasets,
     load_dataset,
 )
-from numpy.lib.recfunctions import structured_to_unstructured
 from numpy.typing import DTypeLike
 from simple_parsing import field
 
@@ -451,20 +450,17 @@ def load_gradient_dataset(
     """Load a dataset of gradients from `root_dir`."""
 
     def load_shard(dir: Path) -> Dataset:
-        mmap = load_gradients(dir)
         ds = Dataset.load_from_disk(dir / "data.hf")
 
-        # concatenate the extracted module gradients into a single column
+        # Add gradients to HF dataset.
         if concatenate_gradients:
-            unstructured_data = structured_to_unstructured(mmap)
-            flat = pa.array(unstructured_data.reshape(-1))
-            col_arrow = pa.FixedSizeListArray.from_arrays(
-                flat, unstructured_data.shape[1]
-            )
+            mmap = load_gradients(dir, with_structure=False)
+            flat = pa.array(mmap.reshape(-1))
+            col_arrow = pa.FixedSizeListArray.from_arrays(flat, mmap.shape[1])
 
             ds = ds.add_column("gradients", col_arrow, new_fingerprint="gradients")
-        # Add a column for each module's gradient vectors
         else:
+            mmap = load_gradients(dir)
             for field_name in mmap.dtype.names:
                 flat = pa.array(mmap[field_name].reshape(-1))
                 col = pa.FixedSizeListArray.from_arrays(flat, mmap[field_name].shape[1])
