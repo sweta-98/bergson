@@ -74,14 +74,14 @@ class QueryConfig:
     query_path: str = ""
     """Path to the existing query index."""
 
+    scores_path: str = ""
+    """Path to the directory where query scores should be written."""
+
     score: Literal["mean", "nearest", "individual"] = "mean"
     """Method for scoring the gradients with the query. If mean
     gradients will be scored by their similarity with the mean
     query gradients, if max by the most similar query gradient,
     if individual by each separate query gradient."""
-
-    scores_path: str = ""
-    """Path to the directory where query scores should be written."""
 
     query_preconditioner_path: str | None = None
     """Path to a precomputed preconditioner to be applied to
@@ -420,7 +420,7 @@ def load_data_string(
     return ds
 
 
-def load_gradients(root_dir: Path, with_structure: bool = True) -> np.memmap:
+def load_gradients(root_dir: Path, structured: bool = True) -> np.memmap:
     """Map the structured gradients stored in `root_dir` into memory."""
 
     with (root_dir / "info.json").open("r") as f:
@@ -428,7 +428,7 @@ def load_gradients(root_dir: Path, with_structure: bool = True) -> np.memmap:
 
     num_grads = info["num_grads"]
 
-    if with_structure:
+    if structured:
         dtype = info["dtype"]
         shape = (num_grads,)
     else:
@@ -444,27 +444,26 @@ def load_gradients(root_dir: Path, with_structure: bool = True) -> np.memmap:
     )
 
 
-def load_gradient_dataset(
-    root_dir: Path, concatenate_gradients: bool = False
-) -> Dataset:
+def load_gradient_dataset(root_dir: Path, structured: bool = True) -> Dataset:
     """Load a dataset of gradients from `root_dir`."""
 
     def load_shard(dir: Path) -> Dataset:
         ds = Dataset.load_from_disk(dir / "data.hf")
 
         # Add gradients to HF dataset.
-        if concatenate_gradients:
-            mmap = load_gradients(dir, with_structure=False)
-            flat = pa.array(mmap.reshape(-1))
-            col_arrow = pa.FixedSizeListArray.from_arrays(flat, mmap.shape[1])
-
-            ds = ds.add_column("gradients", col_arrow, new_fingerprint="gradients")
-        else:
+        if structured:
             mmap = load_gradients(dir)
             for field_name in mmap.dtype.names:
                 flat = pa.array(mmap[field_name].reshape(-1))
                 col = pa.FixedSizeListArray.from_arrays(flat, mmap[field_name].shape[1])
                 ds = ds.add_column(field_name, col, new_fingerprint=field_name)
+        else:
+            mmap = load_gradients(dir, structured=False)
+            flat = pa.array(mmap.reshape(-1).copy())
+            col_arrow = pa.FixedSizeListArray.from_arrays(flat, mmap.shape[1])
+
+            ds = ds.add_column("gradients", col_arrow, new_fingerprint="gradients")
+
         return ds
 
     if (root_dir / "data.hf").exists():

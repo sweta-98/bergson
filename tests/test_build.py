@@ -32,9 +32,12 @@ def test_build_e2e(tmp_path: Path):
             "--truncation",
         ],
         cwd=tmp_path,
+        capture_output=True,
+        text=True,
     )
 
     assert result.returncode == 0
+    assert "Error" not in result.stderr, f"Error found in stderr:\n{result.stderr}"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

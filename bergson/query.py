@@ -29,6 +29,7 @@ from .data import (
     allocate_batches,
     load_data_string,
     load_gradient_dataset,
+    load_gradients,
     tokenize,
 )
 from .gradients import GradientProcessor
@@ -123,7 +124,7 @@ def preprocess_grads(
     return grads
 
 
-def get_query_ds(query_cfg: QueryConfig):
+def get_query_ds(query_cfg: QueryConfig, rank: int | None = None):
     """
     Load and optionally precondition the query dataset. Preconditioners
     may be mixed as described in https://arxiv.org/html/2410.17413v1#S3.
@@ -144,25 +145,31 @@ def get_query_ds(query_cfg: QueryConfig):
         query_cfg.modules = target_modules
 
     try:
-        query_ds = load_gradient_dataset(
-            Path(query_cfg.query_path), concatenate_gradients=False
-        )
-    except ValueError:
-        query_ds = load_gradient_dataset(
-            Path(query_cfg.query_path), concatenate_gradients=True
-        )
+        query_ds = load_gradient_dataset(Path(query_cfg.query_path), structured=True)
+    except ValueError as e:
+        if "integer won't fit into a C int" not in str(e):
+            raise e
+
+        if rank == 0 or rank is None:
+            print(
+                "Query gradients are too large to load with structure. "
+                "Attempting to load without structure..."
+            )
+
+        mmap = load_gradients(Path(query_cfg.query_path), structured=False)
+
         # Convert unstructured gradients to a dictionary of module-wise tensors
         with open(query_path / "info.json", "r") as f:
             metadata = json.load(f)
             grad_sizes = metadata["grad_sizes"]
-            names = metadata["names"]
 
-        module_offsets = torch.cumsum(torch.tensor(list(grad_sizes.values())), dim=0)
+        sizes = torch.tensor(list(grad_sizes.values()))
+        module_offsets = torch.tensor([0] + torch.cumsum(sizes, dim=0).tolist())
 
         query_ds = Dataset.from_dict(
             {
-                name: query_ds[:][module_offsets[i] : module_offsets[i + 1]]
-                for i, name in enumerate(names)
+                name: mmap[:, module_offsets[i] : module_offsets[i + 1]].copy()
+                for i, name in enumerate(grad_sizes.keys())
                 if name in target_modules
             }
         )
@@ -341,17 +348,16 @@ def worker(
     else:
         attention_cfgs = {}
 
-    # score_writer_dtype = dtype if dtype != "auto" else torch.float32
-    score_writer_dtype = torch.float32
-
-    query_ds = get_query_ds(query_cfg)
+    score_dtype = model.dtype  # torch.float32 if dtype == "auto" else dtype
+    print(f"Score dtype: {score_dtype}")
+    query_ds = get_query_ds(query_cfg, rank)
     query_grads = preprocess_grads(
         query_ds,
         query_cfg.modules,
         query_cfg.unit_normalize,
         query_cfg.batch_size,
         torch.device(f"cuda:{rank}"),
-        score_writer_dtype,
+        score_dtype,
         accumulate_grads="mean" if query_cfg.score == "mean" else "none",
         normalize_accumulated_grad=query_cfg.score == "mean",
     )
@@ -371,7 +377,7 @@ def worker(
             score_writer,
             index_cfg.module_wise,
             torch.device(f"cuda:{rank}"),
-            score_writer_dtype,
+            score_dtype,
         )
         collect_gradients(
             model,
@@ -414,7 +420,7 @@ def worker(
                 score_writer,
                 index_cfg.module_wise,
                 torch.device(f"cuda:{rank}"),
-                score_writer_dtype,
+                score_dtype,
             )
             collect_gradients(
                 model,
