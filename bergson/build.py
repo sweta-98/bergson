@@ -86,13 +86,18 @@ def worker(
 
     if peft_config is None:
         # Load regular model
-        model = AutoModelForCausalLM.from_pretrained(
-            cfg.model,
-            device_map=device_map,
-            quantization_config=quantization_config,
-            dtype=dtype,
-            revision=cfg.revision,
-        )
+
+        # Handle HF bug in handling
+        # quantization_config=None when model is openai/gpt-oss-20b.
+        model_kwargs = {
+            "device_map": device_map,
+            "dtype": dtype,
+            "revision": cfg.revision,
+        }
+        if quantization_config is not None:
+            model_kwargs["quantization_config"] = quantization_config
+
+        model = AutoModelForCausalLM.from_pretrained(cfg.model, **model_kwargs)
         target_modules = None
 
     else:
