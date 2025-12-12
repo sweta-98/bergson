@@ -18,17 +18,18 @@ from bergson.utils.utils import assert_type, get_layer_list
 
 def create_processor(
     cfg: IndexConfig,
+    local_rank: int,
     rank: int,
 ) -> GradientProcessor:
     """Handle processor creation and normalizer fitting"""
     processor_path = Path(cfg.processor_path)
     if (processor_path / "processor_config.json").exists():
-        if rank == 0:
+        if local_rank == 0:
             print(f"Loading processor from '{cfg.processor_path}'")
 
         processor = GradientProcessor.load(
             processor_path,
-            map_location=f"cuda:{rank}",
+            map_location=f"cuda:{local_rank}",
         )
     else:
         processor = GradientProcessor(
@@ -46,7 +47,7 @@ def create_processor(
 
 def setup_model_and_peft(
     cfg: IndexConfig,
-    rank: int,
+    local_rank: int,
 ) -> tuple[AutoModelForCausalLM, set | None]:
     """Handle model loading, quantization, FSDP, and PEFT detection"""
 
@@ -65,7 +66,7 @@ def setup_model_and_peft(
             raise ValueError(f"Unsupported precision: {other}")
 
     # Common configuration
-    device_map = {"": f"cuda:{rank}"} if not cfg.fsdp else "cpu"
+    device_map = {"": f"cuda:{local_rank}"} if not cfg.fsdp else "cpu"
     quantization_config = None
     if cfg.precision in ("int4", "int8"):
         quantization_config = BitsAndBytesConfig(
