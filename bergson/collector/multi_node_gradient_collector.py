@@ -261,7 +261,6 @@ class MultiNodeGradientCollector(HookCollectorBase):
                     self.mod_grads[name] = self.mod_grads[name].to(
                         dtype=self.save_dtype
                     )
-
         if self.builder:
             self.builder(indices, self.mod_grads)
         if self.scorer:
