@@ -16,6 +16,8 @@ class Scorer:
 
     device: torch.device
 
+    dtype: torch.dtype
+
     def __init__(
         self,
         path: Path,

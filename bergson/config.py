@@ -135,7 +135,7 @@ class IndexConfig:
     """If provided, a glob pattern to filter out modules from gradient collection.
     For example, "transformer.h.*.mlp.*" will exclude all MLP layers in a
     standard transformer architecture."""
-    
+
     overwrite: bool = False
     """Whether to overwrite an existing index without asking for confirmation."""
 
@@ -203,6 +203,9 @@ class ScoreConfig:
     """Coefficient to weight the application of the query preconditioner
     and the pre-computed index preconditioner. 0.0 means only use the
     index preconditioner and 1.0 means only use the query preconditioner."""
+
+    mixed_preconditioner_path: str | None = None
+    """Path to save the mixed preconditioner."""
 
     modules: list[str] = field(default_factory=list)
     """Modules to use for the query. If empty, all modules will be used."""

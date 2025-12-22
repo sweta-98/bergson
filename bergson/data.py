@@ -289,11 +289,13 @@ def load_gradient_dataset(root_dir: Path, structured: bool = True) -> Dataset:
 
         # Add gradients to HF dataset.
         mmap = load_gradients(dir, structured=structured)
-        print("mmap", mmap)
         if structured:
             if len(ds) != mmap.shape[0]:
-                ds = Dataset.from_list([{} for _ in range(mmap.shape[0])])
-                print("new ds", len(ds), ds)
+                print(
+                    "Gradient dataset length mismatch. "
+                    "Assuming gradients are reduced and creating new dataset..."
+                )
+                ds = Dataset.from_list([{"index": i} for i in range(mmap.shape[0])])
 
             for field_name in mmap.dtype.names:
                 flat = pa.array(mmap[field_name].reshape(-1).copy())

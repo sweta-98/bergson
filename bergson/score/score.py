@@ -17,6 +17,7 @@ from bergson.config import IndexConfig, ScoreConfig
 from bergson.data import allocate_batches, load_gradient_dataset, load_gradients
 from bergson.distributed import launch_distributed_run
 from bergson.gradients import GradientProcessor
+from bergson.process_preconditioners import mixed_eigen_decomp
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import assert_type
 from bergson.utils.worker_utils import (
@@ -117,6 +118,7 @@ def precondition_ds(
     score_cfg: ScoreConfig,
     target_modules: list[str],
     device: torch.device,
+    offload_to_cpu: bool = False,
 ):
     """Precondition the dataset with the query and index preconditioners."""
     query_ds = query_ds.with_format(
@@ -127,44 +129,29 @@ def precondition_ds(
     use_i = score_cfg.index_preconditioner_path is not None
 
     if use_q or use_i:
-        q, i = {}, {}
-        if use_q:
-            assert score_cfg.query_preconditioner_path is not None
-            q = GradientProcessor.load(
-                Path(score_cfg.query_preconditioner_path),
-                map_location=device,
-            ).preconditioners
-        if use_i:
-            assert score_cfg.index_preconditioner_path is not None
-            i = GradientProcessor.load(
-                Path(score_cfg.index_preconditioner_path), map_location=device
-            ).preconditioners
-
-        mixed_preconditioner = (
-            {
-                k: q[k] * score_cfg.mixing_coefficient
-                + i[k] * (1 - score_cfg.mixing_coefficient)
-                for k in q
-            }
-            if (q and i)
-            else (q or i)
-        )
-
-        # Compute H^(-1) via eigendecomposition and apply to query gradients
-        h_inv = {}
-        for name, H in mixed_preconditioner.items():
-            H = H.to(device=device, dtype=torch.float64)
-            damping_val = 0.1 * H.abs().mean()
-            H = H + damping_val * torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
-
-            eigval, eigvec = torch.linalg.eigh(H)
-            h_inv[name] = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
-                mixed_preconditioner[name].dtype
+        if score_cfg.mixed_preconditioner_path is not None:
+            mixed_processor = GradientProcessor.load(
+                Path(score_cfg.mixed_preconditioner_path), map_location="cpu"
+            )
+        else:
+            mixed_processor = mixed_eigen_decomp(
+                score_cfg.query_preconditioner_path,
+                score_cfg.index_preconditioner_path,
+                score_cfg.mixing_coefficient,
+                score_cfg.query_path,
+                device,
+                offload_to_cpu=offload_to_cpu,
             )
 
         def precondition(batch):
-            for name in target_modules:
-                batch[name] = (batch[name].to(device) @ h_inv[name]).cpu()
+            # This could be written much more efficiently for large query sets
+            for name in tqdm(target_modules, desc="Preconditioning query batch"):
+                eigval, eigvec = mixed_processor.preconditioners_eigen[name]
+                print(eigval.shape, eigvec.shape)
+                h_inv = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
+                    dtype=mixed_processor.preconditioners[name].dtype, device=device
+                )
+                batch[name] = batch[name].to(device) @ h_inv
 
             return batch
 
@@ -234,7 +221,7 @@ def score_worker(
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
     ds: Dataset | IterableDataset,
-    query_grads: dict[str, torch.Tensor],
+    query_ds: Dataset,
 ):
     """
     Score worker executed per rank to produce and score gradients against a query.
@@ -256,6 +243,7 @@ def score_worker(
         Preprocessed query gradient tensors (often [1, grad_dim]) keyed by module name.
     """
     torch.cuda.set_device(local_rank)
+    local_device = torch.device(f"cuda:{local_rank}")
 
     # These should be set by the main process
     if world_size > 1:
@@ -271,8 +259,27 @@ def score_worker(
             world_size=world_size,
         )
 
+    query_ds = precondition_ds(
+        query_ds,
+        score_cfg,
+        score_cfg.modules,
+        local_device,
+        offload_to_cpu=False,
+        # offload_to_cpu=True,
+    )
+    query_grads = preprocess_grads(
+        query_ds,
+        score_cfg.modules,
+        score_cfg.unit_normalize,
+        score_cfg.batch_size,
+        local_device,
+        accumulate_grads="mean" if score_cfg.score == "mean" else "none",
+        normalize_accumulated_grad=score_cfg.score == "mean",
+    )
+
     model, target_modules = setup_model_and_peft(index_cfg, local_rank)
     model = cast(PreTrainedModel, model)
+    grads_dtype = torch.float32 if model.dtype == torch.float32 else torch.float16
     processor = create_processor(index_cfg, local_rank, rank)
 
     attention_cfgs = {
@@ -295,8 +302,8 @@ def score_worker(
             len(ds),
             query_grads,
             score_cfg,
-            device=torch.device(f"cuda:{rank}"),
-            dtype=model.dtype if model.dtype != "auto" else torch.float32,
+            device=local_device,
+            dtype=grads_dtype,
         )
 
         collect_gradients(**kwargs)
@@ -342,7 +349,6 @@ def score_worker(
 def score_dataset(
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
-    preprocess_device=torch.device("cuda:0"),
 ):
     """
     Score a dataset against an existing gradient index.
@@ -365,22 +371,8 @@ def score_dataset(
     ds = setup_data_pipeline(index_cfg)
 
     query_ds = get_query_ds(score_cfg)
-    query_ds = precondition_ds(
-        query_ds, score_cfg, score_cfg.modules, preprocess_device
-    )
-    query_grads = preprocess_grads(
-        query_ds,
-        score_cfg.modules,
-        score_cfg.unit_normalize,
-        score_cfg.batch_size,
-        preprocess_device,
-        accumulate_grads="mean" if score_cfg.score == "mean" else "none",
-        normalize_accumulated_grad=score_cfg.score == "mean",
-    )
 
-    launch_distributed_run(
-        "score", score_worker, [index_cfg, score_cfg, ds, query_grads]
-    )
+    launch_distributed_run("score", score_worker, [index_cfg, score_cfg, ds, query_ds])
 
     rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
     if rank == 0:

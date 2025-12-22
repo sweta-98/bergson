@@ -261,6 +261,10 @@ class MultiNodeGradientCollector(HookCollectorBase):
                     self.mod_grads[name] = self.mod_grads[name].to(
                         dtype=self.save_dtype
                     )
+        else:
+            # Ensure gradients are synchronized
+            # as they were moved to CPU asynchronously
+            torch.cuda.synchronize()
         if self.builder:
             self.builder(indices, self.mod_grads)
         if self.scorer:
@@ -288,29 +292,37 @@ class MultiNodeGradientCollector(HookCollectorBase):
                 self.rank,
             )
 
-        if self.rank == 0:
-            if self.cfg.drop_columns:
-                self.data = self.data.remove_columns(["input_ids"])
-
-            self.data = self.data.add_column(
-                "loss",
-                self.per_doc_losses.cpu().numpy(),
-                feature=Value(
-                    "float16"
-                    if self.save_dtype == torch.float16
-                    else "float32"  # TODO: This is not robust
-                ),
-                new_fingerprint="loss",
-            )
-
-            self.data.save_to_disk(self.cfg.partial_run_path / "data.hf")
-
-            self.processor.save(self.cfg.partial_run_path)
-
         # Flush and reduce builder if it exists
         if self.builder is not None:
             self.builder.flush()
             self.builder.dist_reduce()
+
+        if self.rank == 0:
+            if self.reduce_cfg is not None:
+                self.data = Dataset.from_list(
+                    [
+                        {"query_index": i}
+                        for i in range(self.builder.grad_buffer.shape[0])
+                    ]
+                )
+            else:
+                if self.cfg.drop_columns:
+                    self.data = self.data.remove_columns(["input_ids"])
+
+                self.data = self.data.add_column(
+                    "loss",
+                    self.per_doc_losses.cpu().numpy(),
+                    feature=Value(
+                        "float16"
+                        if self.save_dtype == torch.float16
+                        else "float32"  # TODO: This is not robust
+                    ),
+                    new_fingerprint="loss",
+                )
+
+            self.data.save_to_disk(str(self.cfg.partial_run_path / "data.hf"))
+
+            self.processor.save(self.cfg.partial_run_path)
 
 
 def exchange_preconditioner_gradients(
