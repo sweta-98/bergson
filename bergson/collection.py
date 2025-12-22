@@ -2,7 +2,9 @@ from datasets import Dataset
 from transformers import PreTrainedModel
 
 from bergson.collector.collector import CollectorComputer
-from bergson.collector.gradient_collectors import GradientCollector
+
+# from bergson.collector.gradient_collectors import GradientCollector
+from bergson.collector.multi_node_gradient_collector import MultiNodeGradientCollector
 from bergson.config import AttentionConfig, IndexConfig, ReduceConfig
 from bergson.gradients import GradientProcessor
 from bergson.score.scorer import Scorer
@@ -23,7 +25,7 @@ def collect_gradients(
     """
     Compute gradients using the hooks specified in the GradientCollector.
     """
-    collector = GradientCollector(
+    collector = MultiNodeGradientCollector(
         model=model.base_model,  # type: ignore
         cfg=cfg,
         processor=processor,

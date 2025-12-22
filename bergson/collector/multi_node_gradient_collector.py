@@ -334,6 +334,9 @@ def exchange_preconditioner_gradients(
         g = g.float()
         if name in preconditioners:
             preconditioners[name].addmm_(g.mT, g)
+            assert not torch.isnan(
+                preconditioners[name]
+            ).any(), "preconditioners[name] is nan"
         else:
             preconditioners[name] = g.mT @ g
 
