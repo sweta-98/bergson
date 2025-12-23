@@ -118,7 +118,9 @@ def precondition_ds(
     score_cfg: ScoreConfig,
     target_modules: list[str],
     device: torch.device,
+    local_rank: int,
     offload_to_cpu: bool = False,
+    
 ):
     """Precondition the dataset with the query and index preconditioners."""
     query_ds = query_ds.with_format(
@@ -130,6 +132,7 @@ def precondition_ds(
 
     if use_q or use_i:
         if score_cfg.mixed_preconditioner_path is not None:
+            print("Loading mixed preconditioner from disk...")
             mixed_processor = GradientProcessor.load(
                 Path(score_cfg.mixed_preconditioner_path), map_location="cpu"
             )
@@ -139,7 +142,9 @@ def precondition_ds(
                 score_cfg.index_preconditioner_path,
                 score_cfg.mixing_coefficient,
                 score_cfg.query_path,
+                target_modules,
                 device,
+                local_rank,
                 offload_to_cpu=offload_to_cpu,
             )
 
@@ -147,10 +152,11 @@ def precondition_ds(
             # This could be written much more efficiently for large query sets
             for name in tqdm(target_modules, desc="Preconditioning query batch"):
                 eigval, eigvec = mixed_processor.preconditioners_eigen[name]
-                print(eigval.shape, eigvec.shape)
+                eigval, eigvec = eigval.to(device), eigvec.to(device)
                 h_inv = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
-                    dtype=mixed_processor.preconditioners[name].dtype, device=device
+                    dtype=mixed_processor.preconditioners[name].dtype
                 )
+                
                 batch[name] = batch[name].to(device) @ h_inv
 
             return batch
@@ -264,6 +270,7 @@ def score_worker(
         score_cfg,
         score_cfg.modules,
         local_device,
+        local_rank,
         offload_to_cpu=False,
         # offload_to_cpu=True,
     )
