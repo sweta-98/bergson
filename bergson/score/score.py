@@ -118,9 +118,7 @@ def precondition_ds(
     score_cfg: ScoreConfig,
     target_modules: list[str],
     device: torch.device,
-    local_rank: int,
-    offload_to_cpu: bool = False,
-    
+    prec_metadata: dict[str, tuple[torch.Size, torch.dtype]],
 ):
     """Precondition the dataset with the query and index preconditioners."""
     query_ds = query_ds.with_format(
@@ -144,8 +142,7 @@ def precondition_ds(
                 score_cfg.query_path,
                 target_modules,
                 device,
-                local_rank,
-                offload_to_cpu=offload_to_cpu,
+                prec_metadata,
             )
 
         def precondition(batch):
@@ -156,7 +153,7 @@ def precondition_ds(
                 h_inv = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
                     dtype=mixed_processor.preconditioners[name].dtype
                 )
-                
+
                 batch[name] = batch[name].to(device) @ h_inv
 
             return batch
@@ -220,6 +217,28 @@ def get_query_ds(score_cfg: ScoreConfig):
     return query_ds.with_format("torch", columns=target_modules)
 
 
+def load_prec_metadata(
+    score_cfg: ScoreConfig,
+) -> dict[str, tuple[torch.Size, torch.dtype]]:
+    """Load the preconditioner metadata from the score configuration."""
+    with open(Path(score_cfg.query_path) / "info.json", "r") as f:
+        metadata = json.load(f)
+
+    base_dtype = metadata["base_dtype"]
+    # Grad sizes are the flattened lengths of the gradient vectors
+    grad_sizes = metadata["grad_sizes"]
+
+    import numpy as np
+
+    base_dtype = np.dtype(base_dtype)
+    torch_dtype = torch.from_numpy(np.array([], dtype=base_dtype)).dtype
+
+    return {
+        name: (torch.Size([grad_sizes[name], grad_sizes[name]]), torch_dtype)
+        for name in grad_sizes.keys()
+    }
+
+
 def score_worker(
     rank: int,
     local_rank: int,
@@ -265,14 +284,14 @@ def score_worker(
             world_size=world_size,
         )
 
+    prec_metadata = load_prec_metadata(score_cfg)
+
     query_ds = precondition_ds(
         query_ds,
         score_cfg,
         score_cfg.modules,
         local_device,
-        local_rank,
-        offload_to_cpu=False,
-        # offload_to_cpu=True,
+        prec_metadata,
     )
     query_grads = preprocess_grads(
         query_ds,

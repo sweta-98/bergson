@@ -94,9 +94,7 @@ def mixed_eigen_decomp(
     save_path: str,
     target_modules: list[str],
     device: torch.device,
-    local_rank: int,
     prec_metadata: dict[str, tuple[torch.Size, torch.dtype]],
-    offload_to_cpu: bool = False,
 ):
     """Mix query and index preconditioners."""
     print("Mixed eigen decomp started")
@@ -111,9 +109,7 @@ def mixed_eigen_decomp(
 
     # Assign preconditioners to this rank
     rank_prec_names = [
-        name 
-        for idx, name in enumerate(target_modules) 
-        if idx % world_size == rank
+        name for idx, name in enumerate(target_modules) if idx % world_size == rank
     ]
 
     if rank == 0:
@@ -126,13 +122,13 @@ def mixed_eigen_decomp(
 
     # Load preconditioners: rank 0 loads and distributes to other ranks
     q, i = {}, {}
-    
+
     # Use rank 0 to distribute preconditioners to other ranks
     # to minimize CPU RAM usage.
     if dist.is_initialized():
         # Create a CPU group for communication
         cpu_group = dist.new_group(backend="gloo")
-        
+
         if rank == 0:
             print("Rank 0 loading preconditioners...")
             # Rank 0 loads full preconditioner files
@@ -142,23 +138,25 @@ def mixed_eigen_decomp(
                     Path(query_preconditioner_path),
                     map_location="cpu",
                 ).preconditioners
-            
+
             if use_i:
                 i_full = GradientProcessor.load(
                     Path(index_preconditioner_path),
                     map_location="cpu",
                 ).preconditioners
-            
+
             print(f"Rank 0 distributing preconditioners to {world_size} ranks...")
-            
+
             # Send preconditioners to each rank
-            for target_rank in tqdm(range(1, world_size), desc="Distributing preconditioners"):
+            for target_rank in tqdm(
+                range(1, world_size), desc="Distributing preconditioners"
+            ):
                 target_rank_prec_names = [
-                    name 
-                    for idx, name in enumerate(target_modules) 
+                    name
+                    for idx, name in enumerate(target_modules)
                     if idx % world_size == target_rank
                 ]
-                
+
                 # Send query preconditioners
                 if use_q:
                     for name in target_rank_prec_names:
@@ -166,7 +164,7 @@ def mixed_eigen_decomp(
                         if name in q_full:
                             dist.send(q_full[name], dst=target_rank, group=cpu_group)
                 print("send q")
-                
+
                 # Send index preconditioners
                 if use_i:
                     for name in target_rank_prec_names:
@@ -174,7 +172,7 @@ def mixed_eigen_decomp(
                         if name in i_full:
                             dist.send(i_full[name], dst=target_rank, group=cpu_group)
                 print("send i")
-            
+
             # Rank 0 keeps its own preconditioners
             if use_q:
                 q = {name: q_full[name] for name in rank_prec_names}
@@ -188,20 +186,24 @@ def mixed_eigen_decomp(
             if use_q:
                 for name in rank_prec_names:
                     prec_shape, prec_dtype = prec_metadata[name]
-                    recv_tensor = torch.zeros(prec_shape, dtype=prec_dtype, device="cpu")
+                    recv_tensor = torch.zeros(
+                        prec_shape, dtype=prec_dtype, device="cpu"
+                    )
                     dist.recv(recv_tensor, src=0, group=cpu_group)
                     q[name] = recv_tensor
-            
+
             if use_i:
                 for name in rank_prec_names:
                     prec_shape, prec_dtype = prec_metadata[name]
-                    recv_tensor = torch.zeros(prec_shape, dtype=prec_dtype, device="cpu")
+                    recv_tensor = torch.zeros(
+                        prec_shape, dtype=prec_dtype, device="cpu"
+                    )
                     dist.recv(recv_tensor, src=0, group=cpu_group)
                     i[name] = recv_tensor
-        
+
         # Synchronize after distribution
         dist.barrier(group=cpu_group)
-        
+
     else:
         # Single rank case - just load directly
         if use_q:
@@ -210,7 +212,7 @@ def mixed_eigen_decomp(
                 map_location="cpu",
             ).preconditioners
             q = {name: q[name] for name in rank_prec_names}
-        
+
         if use_i:
             i = GradientProcessor.load(
                 Path(index_preconditioner_path),
@@ -222,26 +224,17 @@ def mixed_eigen_decomp(
         print("Mixing preconditioners...")
 
     # Mix only assigned preconditioners
-    # If offload_to_cpu is False, they're already on GPU, so mixing happens on GPU
-    # If offload_to_cpu is True, they're on CPU, mix on CPU (or move to GPU temporarily)
-    if not offload_to_cpu:
-        mixed_preconditioners = (
-            {
-                k: (
-                    q[k].to(device=device) * mixing_coefficient
-                    + i[k].to(device=device) * (1 - mixing_coefficient)
-                ).cpu()
-                for k in q
-            }
-            if (q and i)
-            else (q or i)
-        )
-    else:
-        mixed_preconditioners = (
-            {k: q[k] * mixing_coefficient + i[k] * (1 - mixing_coefficient) for k in q}
-            if (q and i)
-            else (q or i)
-        )
+    mixed_preconditioners = (
+        {
+            k: (
+                q[k].to(device=device) * mixing_coefficient
+                + i[k].to(device=device) * (1 - mixing_coefficient)
+            ).cpu()
+            for k in q
+        }
+        if (q and i)
+        else (q or i)
+    )
 
     if rank == 0:
         print(
@@ -267,16 +260,13 @@ def mixed_eigen_decomp(
             eigvec.to(dtype=original_dtype).contiguous(),
         )
 
-        if offload_to_cpu:
-            H = H.cpu()
-
     # Gather results from all ranks to rank 0
     if dist.is_initialized():
+        # Probably unnecessary
+        dist.barrier()
+
         if rank == 0:
             print("Gathering preconditioner eigen decompositions from all ranks...")
-
-        # Create a CPU group for gathering (similar to process_preconditioners)
-        cpu_group = dist.new_group(backend="gloo")
 
         # Move eigen decompositions to CPU for communication
         for name in eigen_decompositions.keys():
@@ -287,55 +277,26 @@ def mixed_eigen_decomp(
 
         # Gather all eigen decomposition results to rank 0
         # using point-to-point communication
+        # Interleave sends and receives to avoid deadlock
         all_eigen_decompositions = {}
-        # Build metadata cache once if rank 0 needs to receive
-        metadata_cache = {}
-        if rank == 0:
-            # Load metadata once for all preconditioners
-            temp_path = query_preconditioner_path or index_preconditioner_path
-            assert temp_path is not None
-            temp_processor = GradientProcessor.load(
-                Path(temp_path),
-                map_location="cpu",
-            )
-            metadata_cache = {
-                name: (
-                    temp_processor.preconditioners[name].shape,
-                    temp_processor.preconditioners[name].dtype,
-                )
-                for name in target_modules
-            }
-            del temp_processor
-
-        # First phase: all ranks send their computed eigen decompositions to rank 0
         for name in target_modules:
             prec_rank = target_modules.index(name) % world_size
             if rank == prec_rank and rank != 0:
-                # This rank computed it - send to rank 0
-                local_eigen_decomp = eigen_decompositions.get(name)
-                if local_eigen_decomp is not None:
-                    # Send both tensors to rank 0
-                    dist.send(local_eigen_decomp[0], dst=0, group=cpu_group)
-                    dist.send(local_eigen_decomp[1], dst=0, group=cpu_group)
-                    # Free memory after sending
-                    del eigen_decompositions[name]
-            elif rank == prec_rank and rank == 0:
-                # Rank 0 computed it - keep it
-                local_eigen_decomp = eigen_decompositions.get(name)
-                if local_eigen_decomp is not None:
-                    loc = device if not offload_to_cpu else "cpu"
-                    all_eigen_decompositions[name] = (
-                        local_eigen_decomp[0].to(device=loc),
-                        local_eigen_decomp[1].to(device=loc),
-                    )
-
-        # Second phase: rank 0 receives all eigen decompositions from other ranks
-        if rank == 0:
-            for name in target_modules:
-                prec_rank = target_modules.index(name) % world_size
-                if prec_rank != 0:
+                # Send to rank 0 then free memory
+                local_eigen_decomp = eigen_decompositions[name]
+                dist.send(local_eigen_decomp[0], dst=0, group=cpu_group)
+                dist.send(local_eigen_decomp[1], dst=0, group=cpu_group)
+                print(f"Rank {rank} sent {name}")
+                del eigen_decompositions[name]
+            elif rank == 0:
+                # Rank 0 receives immediately after the send
+                if prec_rank == 0:
+                    print("rank 0 keeping rank 0 prec")
+                    recv_eigval = eigen_decompositions[name][0]
+                    recv_eigvec = eigen_decompositions[name][1]
+                else:
                     # Rank 0 receives from the rank that computed it
-                    prec_shape, prec_dtype = metadata_cache[name]
+                    prec_shape, prec_dtype = prec_metadata[name]
                     # Receive eigenvalues (1D tensor) -
                     # use the same dtype as the preconditioner
                     recv_eigval = torch.zeros(
@@ -346,12 +307,20 @@ def mixed_eigen_decomp(
                     recv_eigvec = torch.zeros(
                         prec_shape, dtype=prec_dtype, device="cpu"
                     )
+                    print(f"Rank {rank} receiving {name} from rank {prec_rank}")
                     dist.recv(recv_eigval, src=prec_rank, group=cpu_group)
+                    print(f"Rank {rank} received eigenvalues from rank {prec_rank}")
                     dist.recv(recv_eigvec, src=prec_rank, group=cpu_group)
-                    all_eigen_decompositions[name] = (
-                        recv_eigval.to(device=device if not offload_to_cpu else "cpu"),
-                        recv_eigvec.to(device=device if not offload_to_cpu else "cpu"),
-                    )
+                    print(f"Rank {rank} received {name} from rank {prec_rank}")
+
+                all_eigen_decompositions[name] = (
+                    recv_eigval,  # .to(device=device),
+                    recv_eigvec,  # .to(device=device),
+                )
+                print(f"Rank {rank} received {name}")
+
+        dist.barrier()
+        print("Gathering phase finished")
 
         eigen_decompositions = all_eigen_decompositions if rank == 0 else {}
 
@@ -367,6 +336,7 @@ def mixed_eigen_decomp(
     mixed_processor = None
     if rank == 0:
         if dist.is_initialized():
+            print("Rank 0 loading preconditioners for saving...")
             # Load all preconditioners for saving
             q = {}
             i = {}
@@ -374,20 +344,19 @@ def mixed_eigen_decomp(
                 assert query_preconditioner_path is not None
                 q = GradientProcessor.load(
                     Path(query_preconditioner_path),
-                    map_location="cpu" if offload_to_cpu else device,
+                    map_location=device,
                 ).preconditioners
             if use_i:
                 assert index_preconditioner_path is not None
                 i = GradientProcessor.load(
                     Path(index_preconditioner_path),
-                    map_location="cpu" if offload_to_cpu else device,
+                    map_location=device,
                 ).preconditioners
 
             # Mix all preconditioners for saving
             mixed_preconditioners_for_save = (
                 {
-                    k: q[k] * mixing_coefficient
-                    + i[k] * (1 - mixing_coefficient)
+                    k: q[k] * mixing_coefficient + i[k] * (1 - mixing_coefficient)
                     for k in q
                 }
                 if (q and i)
@@ -399,19 +368,22 @@ def mixed_eigen_decomp(
             final_eigen_decompositions = all_eigen_decompositions
         else:
             # Single GPU case - use already computed values
-            # mixed_preconditioners and eigen_decompositions are defined above (lines 247/259 and 271)
             mixed_preconditioners_for_save = mixed_preconditioners  # type: ignore
             final_eigen_decompositions = eigen_decompositions  # type: ignore
 
-        mixed_processor = GradientProcessor()
-        mixed_processor.preconditioners = mixed_preconditioners_for_save
-        mixed_processor.preconditioners_eigen = final_eigen_decompositions
+        mixed_processor = GradientProcessor(
+            preconditioners=mixed_preconditioners_for_save,
+            preconditioners_eigen=final_eigen_decompositions,
+        )
+        print("Rank 0 saving preconditioners...")
         mixed_processor.save(Path(save_path))
+        print("Rank 0 saved preconditioners")
 
     if dist.is_initialized():
         dist.barrier()
 
     if rank == 0:
+        assert mixed_processor is not None
         return mixed_processor
     else:
         return GradientProcessor.load(Path(save_path), map_location="cpu")
