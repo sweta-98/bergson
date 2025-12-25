@@ -121,14 +121,15 @@ def reduce(index_cfg: IndexConfig, reduce_cfg: ReduceConfig):
     reduce_cfg : ReduceConfig
         Specifies aggregation strategy (mean/sum, unit normalization).
     """
-    index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
-    with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
-        json.dump(asdict(index_cfg), f, indent=2)
+    rank = int(os.environ.get("START_RANK", os.environ.get("RANK", 0)))
+    if rank == 0:
+        index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
+        with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
+            json.dump(asdict(index_cfg), f, indent=2)
 
     ds = setup_data_pipeline(index_cfg)
 
     launch_distributed_run("reduce", reduce_worker, [index_cfg, reduce_cfg, ds])
 
-    rank = int(os.environ.get("START_RANK", os.environ.get("RANK", 0)))
     if rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)

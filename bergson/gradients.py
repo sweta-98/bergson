@@ -290,6 +290,12 @@ class GradientProcessor:
         torch.save(self.preconditioners, precond_path)
         torch.save(self.preconditioners_eigen, precond_eigen_path)
 
+        # Ensure all torch.save files are synced to disk
+        import os
+        for file_path in [norm_path, precond_path, precond_eigen_path]:
+            with open(file_path, "rb") as f:
+                os.fsync(f.fileno())
+
 
 class LayerAdapter:
     supported_modules = (nn.Linear, HFConv1D, nn.Conv1d, nn.Conv2d, nn.Conv3d)

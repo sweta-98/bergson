@@ -122,6 +122,7 @@ def build(index_cfg: IndexConfig):
 
     launch_distributed_run("build", build_worker, [index_cfg, ds])
 
-    rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
+    start_rank = int(os.environ.get("START_RANK", 0))
+    rank = start_rank + int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
     if rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)

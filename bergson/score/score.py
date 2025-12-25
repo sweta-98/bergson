@@ -8,7 +8,7 @@ from typing import Literal, cast
 
 import torch
 import torch.distributed as dist
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, IterableDataset, load_from_disk
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 
@@ -17,7 +17,7 @@ from bergson.config import IndexConfig, ScoreConfig
 from bergson.data import allocate_batches, load_gradient_dataset, load_gradients
 from bergson.distributed import launch_distributed_run
 from bergson.gradients import GradientProcessor
-from bergson.process_preconditioners import mixed_eigen_decomp
+from bergson.process_preconditioners import mix_and_save_processors
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import assert_type
 from bergson.utils.worker_utils import (
@@ -121,6 +121,8 @@ def precondition_ds(
     prec_metadata: dict[str, tuple[torch.Size, torch.dtype]],
 ):
     """Precondition the dataset with the query and index preconditioners."""
+    rank = dist.get_rank() if dist.is_initialized() else 0
+
     query_ds = query_ds.with_format(
         "torch", columns=target_modules, output_all_columns=True
     )
@@ -129,38 +131,83 @@ def precondition_ds(
     use_i = score_cfg.index_preconditioner_path is not None
 
     if use_q or use_i:
-        if score_cfg.mixed_preconditioner_path is not None:
-            print("Loading mixed preconditioner from disk...")
-            mixed_processor = GradientProcessor.load(
-                Path(score_cfg.mixed_preconditioner_path), map_location="cpu"
-            )
-        else:
-            mixed_processor = mixed_eigen_decomp(
-                score_cfg.query_preconditioner_path,
-                score_cfg.index_preconditioner_path,
-                score_cfg.mixing_coefficient,
-                score_cfg.query_path,
-                target_modules,
-                device,
-                prec_metadata,
-            )
+        print("dsfsd")
+        if score_cfg.mixed_preconditioner_path is None:
+            print("Mixing and saving processors...")
+            if use_q and not use_i:
+                score_cfg.mixed_preconditioner_path = score_cfg.query_preconditioner_path
+            elif not use_q and use_i:
+                score_cfg.mixed_preconditioner_path = score_cfg.index_preconditioner_path
+            else:
+                mix_and_save_processors(
+                    score_cfg.query_preconditioner_path,
+                    score_cfg.index_preconditioner_path,
+                    score_cfg.mixing_coefficient,
+                    score_cfg.query_path,
+                    target_modules,
+                    device,
+                    prec_metadata,
+                )
+                score_cfg.mixed_preconditioner_path = score_cfg.query_path
+                print("Mixed processor saved to disk")
 
-        def precondition(batch):
-            # This could be written much more efficiently for large query sets
-            for name in tqdm(target_modules, desc="Preconditioning query batch"):
-                eigval, eigvec = mixed_processor.preconditioners_eigen[name]
-                eigval, eigvec = eigval.to(device), eigvec.to(device)
-                h_inv = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
-                    dtype=mixed_processor.preconditioners[name].dtype
+        query_path = Path(score_cfg.query_path)
+        query_path.mkdir(parents=True, exist_ok=True)
+        preconditioned_path = str(query_path / "preconditioned")
+        if rank == 0:
+
+            def process_sample(sample, processor: GradientProcessor):
+                for name in target_modules:
+                    print(name)
+                    eigval, eigvec = processor.preconditioners_eigen[name]
+                    eigval, eigvec = eigval.to(device), eigvec.to(device)
+                    h_inv = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
+                        dtype=processor.preconditioners[name].dtype
+                    )
+                    sample[name] = (sample[name].to(device) @ h_inv).cpu()
+
+                return sample
+
+            def generator():
+                assert score_cfg.mixed_preconditioner_path is not None
+
+                # Load process inside generator so Datasets doesn't attempt
+                # to duplicate the processor in CPU RAM for hashing.
+                print(f"Loading mixed processor from {score_cfg.mixed_preconditioner_path}...")
+
+                mixed_processor = GradientProcessor.load(
+                    score_cfg.mixed_preconditioner_path, map_location="cpu"
                 )
 
-                batch[name] = batch[name].to(device) @ h_inv
+                print("Loaded")
 
-            return batch
+                for sample in query_ds:
+                    yield process_sample(sample, mixed_processor)
 
-        query_ds = query_ds.map(
-            precondition, batched=True, batch_size=score_cfg.batch_size
-        )
+            # Use a generator rather than a map to avoid hashing the mixed preconditioner
+            # once it's already loaded into memory (2x RAM consumption).
+            ds = assert_type(
+                Dataset, Dataset.from_generator(generator, features=query_ds.features)
+            )
+            
+            print(ds[0], "ds[0]")
+            print(len(ds), "ds")
+
+            print("materializing ds")
+            _ = ds[:]  # This forces the dataset to materialize
+            # file size of item 1
+            import sys
+            print(sys.getsizeof(ds[0]), "sys.getsizeof(ds[0])")
+            ds = ds.from_list(ds.to_list())
+            print("listified")
+            print(preconditioned_path, "preconditioned_path")
+            os.makedirs(Path(preconditioned_path).parent, exist_ok=True)
+            ds.save_to_disk(preconditioned_path, num_proc=1)
+
+        dist.barrier()
+
+        print("All loading preconditioned dataset from disk...")
+        query_ds = assert_type(Dataset, load_from_disk(preconditioned_path))
 
     return query_ds.with_format("torch", columns=score_cfg.modules)
 
@@ -267,6 +314,7 @@ def score_worker(
     query_grads : dict[str, torch.Tensor]
         Preprocessed query gradient tensors (often [1, grad_dim]) keyed by module name.
     """
+    print("score_worker")
     torch.cuda.set_device(local_rank)
     local_device = torch.device(f"cuda:{local_rank}")
 
@@ -285,6 +333,7 @@ def score_worker(
         )
 
     prec_metadata = load_prec_metadata(score_cfg)
+    print("prec_metadata")
 
     query_ds = precondition_ds(
         query_ds,
@@ -293,6 +342,7 @@ def score_worker(
         local_device,
         prec_metadata,
     )
+    print("prepreoc")
     query_grads = preprocess_grads(
         query_ds,
         score_cfg.modules,
@@ -302,6 +352,7 @@ def score_worker(
         accumulate_grads="mean" if score_cfg.score == "mean" else "none",
         normalize_accumulated_grad=score_cfg.score == "mean",
     )
+    print("preproc done")
 
     model, target_modules = setup_model_and_peft(index_cfg, local_rank)
     model = cast(PreTrainedModel, model)
@@ -322,7 +373,9 @@ def score_worker(
     }
 
     if isinstance(ds, Dataset):
+        print("ds is a Dataset")
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
+        print(f"scorer")
         kwargs["scorer"] = Scorer(
             index_cfg.partial_run_path,
             len(ds),
@@ -388,11 +441,15 @@ def score_dataset(
         Specifies the query path, target modules, and scoring method
         (mean/nearest/individual).
     """
-    index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
-    with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
-        json.dump(asdict(index_cfg), f, indent=2)
-    with (index_cfg.partial_run_path / "score_config.json").open("w") as f:
-        json.dump(asdict(score_cfg), f, indent=2)
+    rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
+
+    if rank == 0:
+        index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
+        with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
+            json.dump(asdict(index_cfg), f, indent=2)
+        print("dumping json")
+        with (index_cfg.partial_run_path / "score_config.json").open("w") as f:
+            json.dump(asdict(score_cfg), f, indent=2)
 
     ds = setup_data_pipeline(index_cfg)
 
