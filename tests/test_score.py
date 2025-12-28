@@ -151,7 +151,7 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
         processor=processor,
         cfg=cfg,
     )
-    processor.save(tmp_path)
+    processor.save(tmp_path, 0)
 
     # Produce gradients dataset
     query_ds = Dataset.from_dict(
@@ -169,15 +169,17 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
         query_preconditioner_path=str(tmp_path),
     )
 
+    grad_sizes = {name: math.prod(s) for name, s in collector.shapes().items()}
+
     preconditioned_query_ds = precondition_ds(
-        query_ds, score_cfg, score_cfg.modules, preprocess_device
+        query_ds, score_cfg, score_cfg.modules, preprocess_device, grad_sizes
     )
 
     # Produce query dataset without preconditioning
     score_cfg.query_preconditioner_path = None
 
     vanilla_query_ds = precondition_ds(
-        query_ds, score_cfg, score_cfg.modules, preprocess_device
+        query_ds, score_cfg, score_cfg.modules, preprocess_device, grad_sizes
     )
 
     # Compare the two query datasets

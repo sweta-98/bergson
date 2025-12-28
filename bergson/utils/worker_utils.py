@@ -39,8 +39,7 @@ def create_processor(
             projection_type=cfg.projection_type,
             include_bias=cfg.include_bias,
         )
-        if rank == 0:
-            processor.save(cfg.partial_run_path, rank, all_ranks=False)
+        processor.save(cfg.partial_run_path, rank)
 
     return processor
 

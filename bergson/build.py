@@ -97,8 +97,6 @@ def build_worker(
                 flush(kwargs=kwargs)
 
         flush(kwargs=kwargs)  # Final flush
-        if rank == 0:
-            processor.save(cfg.partial_run_path)
 
 
 def build(index_cfg: IndexConfig):

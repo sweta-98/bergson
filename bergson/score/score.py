@@ -1,6 +1,13 @@
+import psutil
+import pynvml
 import json
 import os
+import faulthandler
+faulthandler.enable()
+import random
+import psutil
 import shutil
+import time
 from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
@@ -8,7 +15,7 @@ from typing import Literal, cast
 
 import torch
 import torch.distributed as dist
-from datasets import Dataset, IterableDataset, load_from_disk
+from datasets import Dataset, load_from_disk
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 
@@ -131,9 +138,9 @@ def precondition_ds(
     use_i = score_cfg.index_preconditioner_path is not None
 
     if use_q or use_i:
-        print("dsfsd")
+        # print("dsfsd")
         if score_cfg.mixed_preconditioner_path is None:
-            print("Mixing and saving processors...")
+            # print("Mixing and saving processors...")
             if use_q and not use_i:
                 score_cfg.mixed_preconditioner_path = (
                     score_cfg.query_preconditioner_path
@@ -153,74 +160,103 @@ def precondition_ds(
                     grad_sizes,
                 )
                 score_cfg.mixed_preconditioner_path = score_cfg.query_path
-                print("Mixed processor saved to disk")
+                # print("Mixed processor saved to disk")
 
-        print("Making query path")
+        # print("Making query path")
         query_path = Path(score_cfg.query_path)
         query_path.mkdir(parents=True, exist_ok=True)
         preconditioned_path = str(query_path / "preconditioned")
-        print("made query path")
-        
-        if rank == 0:
+        # print("made query path")
 
-            def process_sample(sample, processor: GradientProcessor):
-                for name in target_modules:
-                    print(name)
-                    eigval, eigvec = processor.preconditioners_eigen[name]
-                    eigval, eigvec = eigval.to(device), eigvec.to(device)
-                    h_inv = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
-                        dtype=processor.preconditioners[name].dtype
-                    )
-                    sample[name] = (sample[name].to(device) @ h_inv).cpu()
+        assert score_cfg.mixed_preconditioner_path is not None
+        mixed_processor_path = Path(score_cfg.mixed_preconditioner_path)
 
-                return sample
-
-            def generator():
-                assert score_cfg.mixed_preconditioner_path is not None
-
-                # Load process inside generator so Datasets doesn't attempt
-                # to duplicate the processor in CPU RAM for hashing.
-                mixed_processor_path = Path(score_cfg.mixed_preconditioner_path)
-                print(f"Loading mixed processor from {mixed_processor_path}...")
-                mixed_processor = GradientProcessor.load(
-                    mixed_processor_path, map_location="cpu"
-                )
-                print("Loaded")
-
-                for sample in query_ds:
-                    yield process_sample(sample, mixed_processor)
-
-            # Use a generator rather than a map to avoid hashing the mixed
-            # preconditioner
-            # once it's already loaded into memory (2x RAM consumption).
-            print("Generating ds")
-            ds = assert_type(
-                Dataset, Dataset.from_generator(generator, features=query_ds.features)
+        # Validate that all target_modules exist in grad_sizes before processing
+        missing_modules = [name for name in target_modules if name not in grad_sizes]
+        if missing_modules:
+            raise KeyError(
+                f"Modules not found in grad_sizes: {missing_modules}. "
+                f"Available modules: {list(grad_sizes.keys())[:10]}..."
             )
 
-            print(ds[0], "ds[0]")
-            print(len(ds), "ds")
+        if rank == 0:
+            processed_data = {}
+            for name in target_modules:
+                print(f"Rank 0 processing module {name}", flush=True)
+                module_data = query_ds[:][name]
+                print("1", flush=True)
+                assert isinstance(module_data, torch.Tensor)
+                print("2", flush=True)
 
-            print("materializing ds")
-            _ = ds[:]  # This forces the dataset to materialize
-            # file size of item 1
-            import sys
+                processor = GradientProcessor.load(
+                    mixed_processor_path, map_location="cpu", module_names=[name]
+                )
+                print("2.1 asserting", flush=True)
+                assert name in processor.preconditioners, f"Module {name} not found in preconditioners"
+                assert name in processor.preconditioners_eigen, f"Module {name} not found in preconditioners_eigen"
+                print("3", flush=True)
+                prec = processor.preconditioners[name]
+                print("3.1", flush=True)
+                eigval, eigvec = processor.preconditioners_eigen[name]
+                print("3.2", flush=True)
+                eigval, eigvec = eigval.to(device), eigvec.to(device)
+                print("4", flush=True)
 
-            print(sys.getsizeof(ds[0]), "sys.getsizeof(ds[0])")
-            ds = ds.from_list(ds.to_list())
-            print("listified")
-            print(preconditioned_path, "preconditioned_path")
+                # Compute H_inv
+                h_inv = (eigvec * (1.0 / eigval) @ eigvec.mT).to(dtype=prec.dtype)
+                print("5", flush=True)
+
+                # 4. Apply Transformation
+                # module_data is [1, dim], h_inv is [dim, dim] -> Result is [1, dim]
+                # Use torch.cuda.synchronize() to ensure GPU operations complete before .cpu()
+                torch.cuda.synchronize(device)
+                print("6", flush=True)
+                module_data_gpu = module_data.to(device)
+                result_gpu = module_data_gpu @ h_inv
+                print("7", flush=True)
+                processed_tensor = result_gpu.cpu()  # type: ignore
+                print("8", flush=True)
+                torch.cuda.synchronize(device)
+                print("9", flush=True)
+
+                processed_data[name] = processed_tensor
+
+                del processor, h_inv, eigval, eigvec, module_data
+                print("10", flush=True)
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+                gc.collect()
+                print("11", flush=True)
+
+                # Log memory usage
+                print("Memory usage:", torch.cuda.memory_allocated(device) / (1024 ** 3), "GB", flush=True)
+                # Log CPU memory usage
+                print("CPU memory usage:", psutil.cpu_percent(), flush=True)
+
+            print("Constructing final preconditioned dataset...", flush=True)
+            
+            ds = Dataset.from_dict(processed_data)
+
             os.makedirs(Path(preconditioned_path).parent, exist_ok=True)
             ds.save_to_disk(preconditioned_path, num_proc=1)
 
         if dist.is_initialized():
             rank = dist.get_rank()
-            print(f"[precondition_ds] Rank {rank} waiting at barrier before loading preconditioned dataset...")
-            dist.barrier()
-            print(f"[precondition_ds] Rank {rank} passed barrier, loading preconditioned dataset...")
+            print(
+                f"[precondition_ds] Rank {rank} dist.barrier())",
+                flush=True,
+            )
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            dist.barrier(device_ids=[local_rank])
+            # Log IMMEDIATELY after barrier with print (no file I/O)
+            print(
+                f"[precondition_ds] Rank {rank} passed barrier...",
+                flush=True,
+            )
 
-        print("All loading preconditioned dataset from disk...")
-        query_ds = assert_type(Dataset, load_from_disk(preconditioned_path))
+        print("All loading preconditioned dataset from disk...", rank)
+        query_ds = assert_type(Dataset, load_from_disk(preconditioned_path, keep_in_memory=False))
 
     return query_ds.with_format("torch", columns=score_cfg.modules)
 
@@ -284,7 +320,7 @@ def get_query_ds(score_cfg: ScoreConfig):
 
 def load_grad_sizes(
     score_cfg: ScoreConfig,
-) -> dict[str, tuple[torch.Size, torch.dtype]]:
+) -> dict[str, int]:
     """Load the preconditioner metadata from the score configuration."""
     # Grad sizes are the flattened lengths of the gradient vectors
     with open(Path(score_cfg.query_path) / "info.json", "r") as f:
@@ -297,7 +333,7 @@ def score_worker(
     world_size: int,
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
-    ds: Dataset | IterableDataset,
+    # ds: Dataset | IterableDataset,
 ):
     """
     Score worker executed per rank to produce and score gradients against a query.
@@ -318,7 +354,19 @@ def score_worker(
     query_grads : dict[str, torch.Tensor]
         Preprocessed query gradient tensors (often [1, grad_dim]) keyed by module name.
     """
-    print(f"[score_worker] Rank {rank} starting, local_rank={local_rank}, world_size={world_size}")
+
+    import sys
+
+    print(
+        f"[score_worker] Rank {rank} starting, local_rank={local_rank}, world_size={world_size}",
+        flush=True,
+    )
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    ds = load_from_disk("tmp_score")
+    print(f"[score_worker] Rank {rank} dataset loaded, length={len(ds)}")
+
     torch.cuda.set_device(local_rank)
     local_device = torch.device(f"cuda:{local_rank}")
 
@@ -327,23 +375,40 @@ def score_worker(
         addr = os.environ.get("MASTER_ADDR", "localhost")
         port = os.environ.get("MASTER_PORT", "29500")
 
-        print(f"[score_worker] Rank {rank} initializing process group at {addr}:{port}...")
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{local_rank}"),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
+        print(
+            f"[score_worker] Rank {rank} initializing process group at {addr}:{port}..."
         )
-        print(f"[score_worker] Rank {rank} process group initialized")
+        try:
+            dist.init_process_group(
+                "nccl",
+                init_method=f"tcp://{addr}:{port}",
+                device_id=torch.device(f"cuda:{local_rank}"),
+                rank=rank,
+                timeout=timedelta(hours=1),
+                world_size=world_size,
+            )
+            print(f"[score_worker] Rank {rank} process group initialized")
+            # Add barrier to ensure all workers are synchronized before loading dataset
+            dist.barrier()
+            # Stagger dataset loading to avoid file lock conflicts
+            # Each rank waits a small random amount to avoid simultaneous file access
+            time.sleep(rank * 0.1 + random.uniform(0, 0.05))
+        except Exception as e:
+            print(
+                f"[score_worker] Rank {rank} process group initialization failed: {e}",
+                flush=True,
+            )
+            raise
 
     grad_sizes = load_grad_sizes(score_cfg)
 
     # Load query_ds inside the worker to avoid serialization issues
-    print(f"[score_worker] Rank {rank} loading query dataset...")
+    print(f"[score_worker] Rank {rank} loading query dataset...", flush=True)
     query_ds = get_query_ds(score_cfg)
-    print(f"[score_worker] Rank {rank} query dataset loaded, starting precondition_ds...")
+    print(
+        f"[score_worker] Rank {rank} query dataset loaded, starting precondition_ds...",
+        flush=True,
+    )
     query_ds = precondition_ds(
         query_ds,
         score_cfg,
@@ -351,7 +416,7 @@ def score_worker(
         local_device,
         grad_sizes,
     )
-    print(f"[score_worker] Rank {rank} precondition_ds completed")
+    print(f"[score_worker] Rank {rank} precondition_ds completed", flush=True)
     query_grads = preprocess_grads(
         query_ds,
         score_cfg.modules,
@@ -361,16 +426,19 @@ def score_worker(
         accumulate_grads="mean" if score_cfg.score == "mean" else "none",
         normalize_accumulated_grad=score_cfg.score == "mean",
     )
-    print("preproc done")
+    print("preproc done", flush=True)
 
     model, target_modules = setup_model_and_peft(index_cfg, local_rank)
     model = cast(PreTrainedModel, model)
     grads_dtype = torch.float32 if model.dtype == torch.float32 else torch.float16
     processor = create_processor(index_cfg, local_rank, rank)
+    print("Created processor", flush=True)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
     }
+
+    print("A", flush=True)
 
     kwargs = {
         "model": model,
@@ -380,11 +448,12 @@ def score_worker(
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
     }
+    print("B", flush=True)
 
     if isinstance(ds, Dataset):
-        print("ds is a Dataset")
+        print("ds is a Dataset", flush=True)
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
-        print("scorer")
+        print("scorer", flush=True)
         kwargs["scorer"] = Scorer(
             index_cfg.partial_run_path,
             len(ds),
@@ -393,6 +462,7 @@ def score_worker(
             device=local_device,
             dtype=grads_dtype,
         )
+        print("Scorer", flush=True)
 
         collect_gradients(**kwargs)
     else:
@@ -430,7 +500,7 @@ def score_worker(
                 flush(kwargs=kwargs)
 
         flush(kwargs=kwargs)  # Final flush
-        processor.save(index_cfg.partial_run_path, rank, all_ranks=True)
+        processor.save(index_cfg.partial_run_path, rank)
 
 
 def score_dataset(
@@ -453,7 +523,9 @@ def score_dataset(
     start_rank = int(os.environ.get("START_RANK", 0))
     actual_rank = start_rank + rank
 
-    print(f"[score_dataset] Rank {actual_rank} (start_rank={start_rank}, local_rank={rank}) starting")
+    print(
+        f"[score_dataset] Rank {actual_rank} (start_rank={start_rank}, local_rank={rank}) starting"
+    )
 
     if actual_rank == 0:
         index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
@@ -465,15 +537,19 @@ def score_dataset(
 
     print(f"[score_dataset] Rank {actual_rank} loading dataset...")
     ds = setup_data_pipeline(index_cfg)
-    print(f"[score_dataset] Rank {actual_rank} dataset loaded, loading query dataset...")
+    ds.save_to_disk("tmp_score")
+    print(
+        f"[score_dataset] Rank {actual_rank} dataset loaded, loading query dataset..."
+    )
 
     # Don't load query_ds here - load it inside the worker to avoid serialization issues
     # query_ds = get_query_ds(score_cfg)
     # print(f"[score_dataset] Rank {actual_rank} query dataset loaded, launching distributed run...")
 
-    print(f"[score_dataset] Rank {actual_rank} launching distributed run (query_ds will be loaded in worker)...")
-    launch_distributed_run("score", score_worker, [index_cfg, score_cfg, ds])
+    print(
+        f"[score_dataset] Rank {actual_rank} launching distributed run (query_ds will be loaded in worker)..."
+    )
+    launch_distributed_run("score", score_worker, [index_cfg, score_cfg])
 
-    
     if rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)

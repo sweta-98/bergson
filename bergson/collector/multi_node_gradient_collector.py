@@ -275,6 +275,8 @@ class MultiNodeGradientCollector(HookCollectorBase):
         """
         Finalize gradient collection, save results and flush/reduce the Builder.
         """
+        print("teardown!", flush=True)
+
         assert isinstance(
             self.cfg, IndexConfig
         ), "cfg is required for GradientCollector"  # pleasing type checker
@@ -282,11 +284,14 @@ class MultiNodeGradientCollector(HookCollectorBase):
             dist.reduce(self.per_doc_losses, dst=0)
 
         if self.processor.preconditioners:
+            print("Processing", flush=True)
             self.processor.process_preconditioners(
                 len(self.data),
                 self.rank,
             )
-            self.processor.save(self.cfg.partial_run_path, self.rank, all_ranks=True)
+            print("Saving", flush=True)
+            self.processor.save(self.cfg.partial_run_path, self.rank)
+            print("Saved processor", flush=True)
 
         # Flush and reduce builder if it exists
         if self.builder is not None:
@@ -294,18 +299,18 @@ class MultiNodeGradientCollector(HookCollectorBase):
             self.builder.dist_reduce()
 
         import sys
-        print(f"[Teardown] Rank {self.rank} (world_size={dist.get_world_size() if dist.is_initialized() else 1}), reduce_cfg={self.reduce_cfg is not None}, builder={self.builder is not None}", file=sys.stderr)
+        print(f"[Teardown] Rank {self.rank} (world_size={dist.get_world_size() if dist.is_initialized() else 1}), reduce_cfg={self.reduce_cfg is not None}, builder={self.builder is not None}", file=sys.stderr, flush=True)
         sys.stderr.flush()
         
         # Save data.hf on rank 0, even if other operations fail
         if self.rank == 0:
-            print(f"[Rank 0] Starting teardown, reduce_cfg={self.reduce_cfg is not None}, builder={self.builder is not None}", file=sys.stderr)
+            print(f"[Rank 0] Starting teardown, reduce_cfg={self.reduce_cfg is not None}, builder={self.builder is not None}", file=sys.stderr, flush=True)
             sys.stderr.flush()
             
             if self.reduce_cfg is not None:
                 assert self.builder is not None, "Builder must exist for reduce operation"
                 num_grads = self.builder.grad_buffer.shape[0]
-                print(f"[Rank 0] Creating dataset with {num_grads} gradients", file=sys.stderr)
+                print(f"[Rank 0] Creating dataset with {num_grads} gradients", file=sys.stderr, flush=True)
                 sys.stderr.flush()
                 self.data = Dataset.from_list(
                     [

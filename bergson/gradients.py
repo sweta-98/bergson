@@ -1,9 +1,9 @@
+from functools import total_ordering
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, Mapping
-
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -171,10 +171,6 @@ class AdamNormalizer(Normalizer):
         )
 
 
-
-
-
-
 @dataclass
 class GradientProcessor:
     """Configuration for processing and compressing gradients."""
@@ -220,6 +216,10 @@ class GradientProcessor:
     include_bias: bool = False
     """Whether to include bias gradients when present on a module."""
 
+    grad_sizes: dict[str, int] = field(
+        default_factory=dict
+    )
+
     def __post_init__(self):
         self._projection_matrices: dict[
             tuple[str, Literal["left", "right"], torch.device], Tensor
@@ -234,40 +234,79 @@ class GradientProcessor:
         module_names: list[str] | None = None,
     ) -> dict[str, Tensor]:
         """
-        Load preconditioners from memmap or pytorch format.
-        Detects the format and optionally filters by module names.
+        Load preconditioners from memmap.
+        Optionally filters by module names.
         Always uses unstructured format with offsets.
         """
         precond_info_path = path / "preconditioners_info.json"
-        if precond_info_path.exists():
-            # Load from memmap
-            precond_memmap = load_preconditioners(path)
-            preconditioners = {}
-            
-            # Load metadata to get grad_sizes and module_names
-            import json
-            with precond_info_path.open("r") as f:
-                info = json.load(f)
-            grad_sizes = info["grad_sizes"]
-            available_module_names = info.get("module_names", list(grad_sizes.keys()))
-            
-            names_to_load = (
-                module_names if module_names is not None else available_module_names
-            )
+        if not precond_info_path.exists():
+            return {}
 
-            for name in names_to_load:
-                if name in grad_sizes:
-                    offset = get_preconditioner_offset(grad_sizes, name)
-                    size = grad_sizes[name]
-                    # Extract the flattened preconditioner and reshape it
-                    precond_flat = precond_memmap[offset:offset + size * size]
-                    precond_array = precond_flat.reshape(size, size)
-                    precond_tensor = torch.from_numpy(precond_array.copy())
-                    if map_location is not None:
-                        precond_tensor = precond_tensor.to(map_location)
-                    preconditioners[name] = precond_tensor
-        else:
-            preconditioners = {}
+        mmap = load_preconditioners(path)
+
+        # Load metadata to get grad_sizes and module_names
+        with precond_info_path.open("r") as f:
+            info = json.load(f)
+
+        grad_sizes = info["grad_sizes"]
+        available_module_names = info.get("module_names", list(grad_sizes.keys()))
+
+        names_to_load = module_names or available_module_names
+
+        preconditioners = {}
+        for name in names_to_load:
+            offset = get_preconditioner_offset(grad_sizes, name)
+            size = grad_sizes[name]
+
+            print(
+                f"[_load_preconditioners] Loading {name}: offset={offset}, size={size}, size*size={size*size}, mmap_len={len(mmap)}",
+                flush=True,
+            )
+            # Extract the flattened preconditioner and reshape it
+            import os
+            print("loading offset")
+            start = np.int64(offset)
+            end = np.int64(offset + size * size)
+
+            total_elements = size * size
+            dtype_obj = np.float32
+            # Test
+            print("loading offset", flush=True)
+            print(f"Testing small read at offset {start}...", flush=True)
+            test_slice = mmap[start:start+100]
+            print(f"Small read succeeded: {test_slice.shape}", flush=True)
+            print(f"Now trying full read to {end}...", flush=True)
+            precond_flat = mmap[start:end]
+            print(f"Full read succeeded: {precond_flat.shape}", flush=True)
+            print(f"Reshaping to ({size}, {size})...", flush=True)
+            precond_array = precond_flat.reshape(size, size)
+            print(f"Reshape succeeded: {precond_array.shape}", flush=True)
+            print(f"Copying to numpy array...", flush=True)
+            precond_array_copy = precond_array.copy()
+            print(f"Copy succeeded: {precond_array_copy.shape}, nbytes={precond_array_copy.nbytes}", flush=True)
+            print(f"Converting to torch tensor...", flush=True)
+            precond_tensor = torch.from_numpy(precond_array_copy)
+            print(f"Tensor created: {precond_tensor.shape}", flush=True)
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
+            import time
+            time.sleep(0.1)
+            print(f"After sleep", flush=True)
+
+            # Test end
+
+            # print(
+            #     f"[_load_preconditioners] File size: {os.path.getsize(path / 'preconditioners.bin')}, expected bytes: {total_elements * dtype_obj.itemsize}",
+            #     flush=True,
+            # )
+            precond_flat = mmap[start : end]
+            print("done")
+            precond_array = precond_flat.reshape(size, size)
+            precond_tensor = torch.from_numpy(precond_array.copy())
+            if map_location is not None:
+                precond_tensor = precond_tensor.to(map_location)
+            preconditioners[name] = precond_tensor
 
         return preconditioners
 
@@ -280,44 +319,50 @@ class GradientProcessor:
         module_names: list[str] | None = None,
     ) -> dict[str, tuple[Tensor, Tensor]]:
         """
-        Load eigen decompositions from memmap or pytorch format.
-        Automatically detects the format and optionally filters by module names.
+        Load eigen decompositions from memmap.
+        Optionally filters by module names.
         Always uses unstructured format with offsets.
         """
         eigen_info_path = path / "preconditioners_eigen_info.json"
-        if eigen_info_path.exists():
-            # Load from memmap
-            eigen_memmap = load_eigen(path)
-            preconditioners_eigen = {}
+        if not eigen_info_path.exists():
+            return {}
 
-            # Load metadata to get grad_sizes and module_names
-            import json
-            with eigen_info_path.open("r") as f:
-                info = json.load(f)
-            grad_sizes = info["grad_sizes"]
-            available_module_names = info.get("module_names", list(grad_sizes.keys()))
+        mmap = load_eigen(path)
 
-            # Use provided module names or all available
-            names_to_load = (
-                module_names if module_names is not None else available_module_names
-            )
+        # Load metadata to get grad_sizes and module_names
+        with eigen_info_path.open("r") as f:
+            info = json.load(f)
+        grad_sizes = info["grad_sizes"]
 
-            for name in names_to_load:
-                if name in grad_sizes:
-                    eigval_offset, eigvec_offset = get_eigen_offset(grad_sizes, name)
-                    size = grad_sizes[name]
-                    # Extract eigenvalues (1D) and eigenvectors (2D)
-                    eigval_array = eigen_memmap[eigval_offset:eigval_offset + size]
-                    eigvec_flat = eigen_memmap[eigvec_offset:eigvec_offset + size * size]
-                    eigvec_array = eigvec_flat.reshape(size, size)
-                    eigval_tensor = torch.from_numpy(eigval_array.copy())
-                    eigvec_tensor = torch.from_numpy(eigvec_array.copy())
-                    if map_location is not None:
-                        eigval_tensor = eigval_tensor.to(map_location)
-                        eigvec_tensor = eigvec_tensor.to(map_location)
-                    preconditioners_eigen[name] = (eigval_tensor, eigvec_tensor)
-        else:
-            preconditioners_eigen = {}
+        # Use provided module names or all available
+        names_to_load = module_names or info.get(
+            "module_names", list(grad_sizes.keys())
+        )
+
+        preconditioners_eigen = {}
+        for name in names_to_load:
+            eigval_offset, eigvec_offset = get_eigen_offset(grad_sizes, name)
+            size = grad_sizes[name]
+
+            print("loading offset eigen")
+
+            start = np.int64(eigval_offset)
+            end = np.int64(eigval_offset + size)
+            eigval_array = mmap[start:end]
+            start = np.int64(eigvec_offset)
+            end = np.int64(eigvec_offset + size * size)
+            eigvec_flat = mmap[start:end]
+            print("done eigen")
+            # Extract eigenvalues (1D) and eigenvectors (2D)
+            # eigval_array = mmap[eigval_offset : eigval_offset + size]
+            # eigvec_flat = mmap[eigvec_offset : eigvec_offset + size * size]
+            eigvec_array = eigvec_flat.reshape(size, size)
+            eigval_tensor = torch.from_numpy(eigval_array.copy())
+            eigvec_tensor = torch.from_numpy(eigvec_array.copy())
+            if map_location is not None:
+                eigval_tensor = eigval_tensor.to(map_location)
+                eigvec_tensor = eigvec_tensor.to(map_location)
+            preconditioners_eigen[name] = (eigval_tensor, eigvec_tensor)
 
         return preconditioners_eigen
 
@@ -367,14 +412,16 @@ class GradientProcessor:
             for name, state in norm_state.items()
         }
 
-        # Load preconditioners (detects memmap vs pytorch)
+        print("Loading preconditioners...")
+
         preconditioners = cls._load_preconditioners(
             path,
             map_location=map_location,
             module_names=module_names,
         )
 
-        # Load eigen decompositions (detects memmap vs pytorch)
+        print("Loading preconditioner eigen decompositions...")
+
         preconditioners_eigen = cls._load_eigen_decompositions(
             path,
             map_location=map_location,
@@ -388,61 +435,91 @@ class GradientProcessor:
             **cfg,
         )
 
-
     def save_preconditioners(self, path: Path):
-        # Determine dtype from first preconditioner
-        first_prec = next(iter(self.preconditioners.values()))
-        dtype = first_prec.dtype
-        np_dtype = np.float32 if dtype == torch.float32 else np.float16
-
-        # Get grad_sizes from preconditioner shapes
-        grad_sizes = {
+        local_grad_sizes = {
             name: prec.shape[0] for name, prec in self.preconditioners.items()
         }
-
         if dist.is_initialized():
-            dist.barrier()
+            all_grad_sizes_list = [None] * dist.get_world_size()
+            dist.all_gather_object(all_grad_sizes_list, local_grad_sizes)
+            grad_sizes = {}
+            for gs in all_grad_sizes_list:
+                grad_sizes.update(gs)
+        else:
+            grad_sizes = local_grad_sizes
 
+        print("grad sizes", flush=True)
+
+        # Determine dtype from first preconditioner
+        dtype = next(iter(self.preconditioners.values())).dtype
+        np_dtype = np.float32 if dtype == torch.float32 else np.float16
+
+        print("Creating memmap", flush=True)
         mmap = create_preconditioner_index(path, grad_sizes, np_dtype)
+        print(len(grad_sizes), "column in mmap", flush=True)
+        import gc
+        import psutil
 
         for name, prec in self.preconditioners.items():
             # Always use offsets for unstructured format
             offset = get_preconditioner_offset(grad_sizes, name)
             size = grad_sizes[name]
-            mmap[offset:offset + size * size] = prec.cpu().numpy().astype(np_dtype).flatten()
+            mmap[offset : offset + size * size] = (
+                prec.cpu().numpy().astype(np_dtype).flatten()
+            )
+            print("Saved preconditioner for", name, flush=True)
+
+            mmap.flush()
+            
+            gc.collect()
+            print(psutil.cpu_percent(), "percent memory used", flush=True)
+
+        
+        if dist.is_initialized():
+            dist.barrier()
 
         mmap.flush()
 
+        for name in self.preconditioners.keys():
+            offset = get_preconditioner_offset(grad_sizes, name)
+            if not np.all(np.isfinite(mmap[offset : offset + grad_sizes[name] * grad_sizes[name]].copy())):
+                raise ValueError(f"Non-finite values found in preconditioner {name}")
+
+
     def save_eigen_decompositions(self, path: Path):
+        local_grad_sizes = {
+            name: prec.shape[0] for name, prec in self.preconditioners.items()
+        }
+        if dist.is_initialized():
+            all_grad_sizes_list = [None] * dist.get_world_size()
+            dist.all_gather_object(all_grad_sizes_list, local_grad_sizes)
+            grad_sizes = {}
+            for gs in all_grad_sizes_list:
+                grad_sizes.update(gs)
+        else:
+            grad_sizes = local_grad_sizes
+                
         # Determine dtype from first eigen decomposition
         first_eigval, _ = next(iter(self.preconditioners_eigen.values()))
         dtype = first_eigval.dtype
         np_dtype = np.float32 if dtype == torch.float32 else np.float16
 
-        # Get grad_sizes from eigen decomposition shapes
-        grad_sizes = {
-            name: eigval.shape[0]
-            for name, (eigval, _) in self.preconditioners_eigen.items()
-        }
-
-        # Create or load eigen memmap
         mmap = create_eigen_index(path, grad_sizes, np_dtype)
 
-        # Write eigen decompositions to memmap using offsets
         for name, (eigval, eigvec) in self.preconditioners_eigen.items():
             eigval_offset, eigvec_offset = get_eigen_offset(grad_sizes, name)
             size = grad_sizes[name]
             # Write eigenvalues (1D) and eigenvectors (2D, flattened)
-            mmap[eigval_offset:eigval_offset + size] = (
+            mmap[eigval_offset : eigval_offset + size] = (
                 eigval.cpu().numpy().astype(np_dtype)
             )
-            mmap[eigvec_offset:eigvec_offset + size * size] = (
+            mmap[eigvec_offset : eigvec_offset + size * size] = (
                 eigvec.cpu().numpy().astype(np_dtype).flatten()
             )
 
         mmap.flush()
 
-    def save(self, path: Path, rank: int, all_ranks: bool = False):
+    def save(self, path: Path, rank: int):
         """
         Save the normalizers and preconditioners to a file.
         """
@@ -466,17 +543,14 @@ class GradientProcessor:
                 for name, normalizer in self.normalizers.items()
             }
             torch.save(norm_state, norm_path)
-        
 
-        if all_ranks or rank == 0:
-            # Save preconditioners to memmap
-            if self.preconditioners:
-                self.save_preconditioners(path)
+        if self.preconditioners:
+            print("Save prec", flush=True)
+            self.save_preconditioners(path)
 
-            # Save eigen decompositions to memmap
-            if self.preconditioners_eigen:
-                self.save_eigen_decompositions(path)
-
+        if self.preconditioners_eigen:
+            print("Save eigen", flush=True)
+            self.save_eigen_decompositions(path)
 
     def process_preconditioners(
         self,
@@ -508,9 +582,10 @@ class GradientProcessor:
 
         self.preconditioners_eigen = preconditioners_eigen
 
+        if dist.is_initialized():
+            dist.barrier()
+
         print("Done!")
-
-
 
 
 class LayerAdapter:

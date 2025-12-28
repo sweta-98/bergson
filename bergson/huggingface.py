@@ -195,7 +195,7 @@ class GradientCollectorCallback(TrainerCallback):
             path = self.path / ("train" + epoch_suffix)
 
             assert self.collector is not None
-            self.collector.processor.save(path)
+            self.collector.processor.save(path, rank)
 
         # Ensure the gradients are written to disk
         self.train_grad_buffer.flush()

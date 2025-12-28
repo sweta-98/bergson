@@ -270,7 +270,7 @@ class GradientCollector(HookCollectorBase):
 
             self.data.save_to_disk(str(self.cfg.partial_run_path / "data.hf"))
 
-            self.processor.save(self.cfg.partial_run_path, self.rank, all_ranks=False)
+            self.processor.save(self.cfg.partial_run_path, self.rank)
 
 
 @dataclass(kw_only=True)

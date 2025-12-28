@@ -1,5 +1,7 @@
+import json
 import os
 import socket
+import time
 from typing import Any, Callable
 
 import torch
@@ -7,12 +9,45 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
 
+# #region agent log
+DEBUG_LOG_PATH = "/home/a5k/lucia.a5k/bergson/.cursor/debug.log"
+# #endregion
+
 
 def dist_worker(
     worker: Callable,
     *worker_args,
 ):
+    # #region agent log
     try:
+        with open(DEBUG_LOG_PATH, "a") as f:
+            json.dump({
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "C",
+                "location": "distributed.py:dist_worker",
+                "message": "dist_worker entry",
+                "data": {"pid": os.getpid(), "env_RANK": os.environ.get("RANK"), "env_LOCAL_RANK": os.environ.get("LOCAL_RANK"), "env_WORLD_SIZE": os.environ.get("WORLD_SIZE"), "env_MASTER_ADDR": os.environ.get("MASTER_ADDR"), "env_MASTER_PORT": os.environ.get("MASTER_PORT")},
+                "timestamp": int(time.time() * 1000)
+            }, f)
+            f.write("\n")
+    except Exception:
+        pass
+    # #endregion
+    try:
+        # #region agent log
+        with open(DEBUG_LOG_PATH, "a") as f:
+            json.dump({
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "C",
+                "location": "distributed.py:dist_worker",
+                "message": "About to call worker function",
+                "data": {"pid": os.getpid()},
+                "timestamp": int(time.time() * 1000)
+            }, f)
+            f.write("\n")
+        # #endregion
         worker(*worker_args)
     finally:
         if dist.is_initialized():
@@ -61,6 +96,19 @@ def launch_distributed_run(process_name: str, worker, const_worker_args: list[An
 
         ctx = None
         try:
+            # #region agent log
+            with open(DEBUG_LOG_PATH, "a") as f:
+                json.dump({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "A",
+                    "location": "distributed.py:launch_distributed_run",
+                    "message": "About to call start_processes",
+                    "data": {"pid": os.getpid(), "local_world_size": local_world_size, "world_size": world_size, "master_addr": master_addr, "master_port": master_port, "start_rank": start_rank},
+                    "timestamp": int(time.time() * 1000)
+                }, f)
+                f.write("\n")
+            # #endregion
             print(f"[launch_distributed_run] Calling start_processes...")
             ctx = start_processes(
                 process_name,
@@ -81,9 +129,66 @@ def launch_distributed_run(process_name: str, worker, const_worker_args: list[An
                 },
                 logs_specs=DefaultLogsSpecs(),
             )
+            # #region agent log
+            with open(DEBUG_LOG_PATH, "a") as f:
+                json.dump({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "A",
+                    "location": "distributed.py:launch_distributed_run",
+                    "message": "start_processes returned",
+                    "data": {"pid": os.getpid()},
+                    "timestamp": int(time.time() * 1000)
+                }, f)
+                f.write("\n")
+            # #endregion
             print(f"[launch_distributed_run] start_processes returned, waiting for completion...")
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
+            # #region agent log
+            with open(DEBUG_LOG_PATH, "a") as f:
+                json.dump({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "F",
+                    "location": "distributed.py:launch_distributed_run",
+                    "message": "About to call ctx.wait()",
+                    "data": {"pid": os.getpid()},
+                    "timestamp": int(time.time() * 1000)
+                }, f)
+                f.write("\n")
+            # #endregion
             ctx.wait()
+            # #region agent log
+            with open(DEBUG_LOG_PATH, "a") as f:
+                json.dump({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "F",
+                    "location": "distributed.py:launch_distributed_run",
+                    "message": "ctx.wait() returned",
+                    "data": {"pid": os.getpid()},
+                    "timestamp": int(time.time() * 1000)
+                }, f)
+                f.write("\n")
+            # #endregion
             print(f"[launch_distributed_run] All processes completed")
+        except Exception as e:
+            # #region agent log
+            with open(DEBUG_LOG_PATH, "a") as f:
+                json.dump({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "A",
+                    "location": "distributed.py:launch_distributed_run",
+                    "message": "Exception in start_processes",
+                    "data": {"pid": os.getpid(), "error": str(e), "error_type": type(e).__name__},
+                    "timestamp": int(time.time() * 1000)
+                }, f)
+                f.write("\n")
+            # #endregion
+            raise
         finally:
             if ctx is not None:
                 print(f"[launch_distributed_run] Closing process context...")

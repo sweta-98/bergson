@@ -499,11 +499,15 @@ class CollectorComputer:
                 if self.cfg.profile:
                     assert isinstance(prof, profile), "Profiler is not set up correctly"
                     prof.step()
+
                 step += 1
                 total_processed += len(indices)
 
+                print("process batch enter", flush=True)
                 self.collector.process_batch(indices, losses=losses)
+                print("process batch exit", flush=True)
 
+        print("teardown enter", flush=True)
         self.collector.teardown()
         if dist.is_initialized():
             dist.all_reduce(total_processed, op=dist.ReduceOp.SUM)

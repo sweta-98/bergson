@@ -85,7 +85,7 @@ def test_GPTNeoX():
                     processor = GradientProcessor(
                         normalizers=normalizers, projection_dim=p
                     )
-                    processor.save(temp_dir / "processor")
+                    processor.save(temp_dir / "processor", 0)
 
                 collector.processor = processor
                 with collector:
