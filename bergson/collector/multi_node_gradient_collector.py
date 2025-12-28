@@ -293,12 +293,24 @@ class MultiNodeGradientCollector(HookCollectorBase):
             self.builder.flush()
             self.builder.dist_reduce()
 
+        import sys
+        print(f"[Teardown] Rank {self.rank} (world_size={dist.get_world_size() if dist.is_initialized() else 1}), reduce_cfg={self.reduce_cfg is not None}, builder={self.builder is not None}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        # Save data.hf on rank 0, even if other operations fail
         if self.rank == 0:
+            print(f"[Rank 0] Starting teardown, reduce_cfg={self.reduce_cfg is not None}, builder={self.builder is not None}", file=sys.stderr)
+            sys.stderr.flush()
+            
             if self.reduce_cfg is not None:
+                assert self.builder is not None, "Builder must exist for reduce operation"
+                num_grads = self.builder.grad_buffer.shape[0]
+                print(f"[Rank 0] Creating dataset with {num_grads} gradients", file=sys.stderr)
+                sys.stderr.flush()
                 self.data = Dataset.from_list(
                     [
                         {"query_index": i}
-                        for i in range(self.builder.grad_buffer.shape[0])
+                        for i in range(num_grads)
                     ]
                 )
             else:
@@ -360,34 +372,42 @@ def exchange_preconditioner_gradients(
     current_rank_chunk = torch.empty(0, device=device, dtype=torch.float32)
 
     # Flatten batch dimension: all to all works on contiguous 1-D tensors
-    send_chunks = [
-        (
-            current_rank_chunk
-            if dest == rank
-            else torch.cat(
-                [
-                    mod_grads[name].flatten()
-                    for name in module_names
-                    if module_to_rank[name] == dest
-                ]
-            )
-        )
-        for dest in range(world_size)
-    ]
+    send_chunks = []
+    for dest in range(world_size):
+        if dest == rank:
+            send_chunks.append(current_rank_chunk)
+        else:
+            chunks_to_send = [
+                mod_grads[name].flatten()
+                for name in module_names
+                if module_to_rank[name] == dest
+            ]
+            if len(chunks_to_send) == 0:
+                send_chunks.append(current_rank_chunk)
+            else:
+                # Ensure all chunks are on the correct device before concatenating
+                chunks_to_send = [chunk.to(device=device) for chunk in chunks_to_send]
+                send_chunks.append(torch.cat(chunks_to_send))
 
     # --- collective exchange of gradient sizes in order of mod_grads ---
     send_sizes = torch.tensor(
         [t.numel() for t in send_chunks], device=device, dtype=torch.int64
-    )
-    recv_sizes = torch.empty_like(send_sizes)
+    ).contiguous()
+    recv_sizes = torch.empty_like(send_sizes).contiguous()
 
+    # Ensure tensors are synchronized before NCCL call
+    if send_sizes.is_cuda:
+        torch.cuda.synchronize(device)
     dist.all_to_all_single(recv_sizes, send_sizes)
 
     # --- collective exchange of gradient in order of mod_grads ---
-    send_buf = torch.cat(send_chunks)
+    # Ensure all chunks are on GPU before concatenating
+    send_chunks = [chunk.to(device=device) if chunk.device != device else chunk for chunk in send_chunks]
+    send_buf = torch.cat(send_chunks) if len(send_chunks) > 0 else torch.empty(0, device=device, dtype=torch.float32)
+    send_buf = send_buf.contiguous()  # Ensure contiguous for NCCL
     recv_buf = torch.empty(
         int(recv_sizes.sum().item()), device=device, dtype=torch.float32
-    )
+    ).contiguous()
 
     dist.all_to_all_single(
         recv_buf,

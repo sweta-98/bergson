@@ -17,7 +17,7 @@ from bergson.config import IndexConfig, ScoreConfig
 from bergson.data import allocate_batches, load_gradient_dataset, load_gradients
 from bergson.distributed import launch_distributed_run
 from bergson.gradients import GradientProcessor
-from bergson.process_preconditioners import mix_and_save_processors
+from bergson.score.process_preconditioners import mix_and_save_processors
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import assert_type
 from bergson.utils.worker_utils import (
@@ -155,9 +155,12 @@ def precondition_ds(
                 score_cfg.mixed_preconditioner_path = score_cfg.query_path
                 print("Mixed processor saved to disk")
 
+        print("Making query path")
         query_path = Path(score_cfg.query_path)
         query_path.mkdir(parents=True, exist_ok=True)
         preconditioned_path = str(query_path / "preconditioned")
+        print("made query path")
+        
         if rank == 0:
 
             def process_sample(sample, processor: GradientProcessor):
@@ -190,6 +193,7 @@ def precondition_ds(
             # Use a generator rather than a map to avoid hashing the mixed
             # preconditioner
             # once it's already loaded into memory (2x RAM consumption).
+            print("Generating ds")
             ds = assert_type(
                 Dataset, Dataset.from_generator(generator, features=query_ds.features)
             )
@@ -209,7 +213,11 @@ def precondition_ds(
             os.makedirs(Path(preconditioned_path).parent, exist_ok=True)
             ds.save_to_disk(preconditioned_path, num_proc=1)
 
-        dist.barrier()
+        if dist.is_initialized():
+            rank = dist.get_rank()
+            print(f"[precondition_ds] Rank {rank} waiting at barrier before loading preconditioned dataset...")
+            dist.barrier()
+            print(f"[precondition_ds] Rank {rank} passed barrier, loading preconditioned dataset...")
 
         print("All loading preconditioned dataset from disk...")
         query_ds = assert_type(Dataset, load_from_disk(preconditioned_path))
@@ -222,6 +230,7 @@ def get_query_ds(score_cfg: ScoreConfig):
     Load and preprocess the query dataset to get the query gradients. Preconditioners
     may be mixed as described in https://arxiv.org/html/2410.17413v1#S3.
     """
+    print(f"[get_query_ds] Loading query dataset from {score_cfg.query_path}...")
     # Collect the query gradients if they don't exist
     query_path = Path(score_cfg.query_path)
     if not query_path.exists():
@@ -230,15 +239,19 @@ def get_query_ds(score_cfg: ScoreConfig):
             "Please build a query dataset index first."
         )
 
+    print(f"[get_query_ds] Reading info.json...")
     # Load the query dataset
     with open(query_path / "info.json", "r") as f:
         target_modules = json.load(f)["dtype"]["names"]
+    print(f"[get_query_ds] Found {len(target_modules)} target modules")
 
     if not score_cfg.modules:
         score_cfg.modules = target_modules
 
+    print(f"[get_query_ds] Loading gradient dataset (structured=True)...")
     try:
         query_ds = load_gradient_dataset(Path(score_cfg.query_path), structured=True)
+        print(f"[get_query_ds] Gradient dataset loaded, length={len(query_ds)}")
     except ValueError as e:
         if "integer won't fit into a C int" not in str(e):
             raise e
@@ -285,7 +298,6 @@ def score_worker(
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
     ds: Dataset | IterableDataset,
-    query_ds: Dataset,
 ):
     """
     Score worker executed per rank to produce and score gradients against a query.
@@ -306,7 +318,7 @@ def score_worker(
     query_grads : dict[str, torch.Tensor]
         Preprocessed query gradient tensors (often [1, grad_dim]) keyed by module name.
     """
-    print("score_worker")
+    print(f"[score_worker] Rank {rank} starting, local_rank={local_rank}, world_size={world_size}")
     torch.cuda.set_device(local_rank)
     local_device = torch.device(f"cuda:{local_rank}")
 
@@ -315,6 +327,7 @@ def score_worker(
         addr = os.environ.get("MASTER_ADDR", "localhost")
         port = os.environ.get("MASTER_PORT", "29500")
 
+        print(f"[score_worker] Rank {rank} initializing process group at {addr}:{port}...")
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
@@ -323,9 +336,14 @@ def score_worker(
             timeout=timedelta(hours=1),
             world_size=world_size,
         )
+        print(f"[score_worker] Rank {rank} process group initialized")
 
     grad_sizes = load_grad_sizes(score_cfg)
 
+    # Load query_ds inside the worker to avoid serialization issues
+    print(f"[score_worker] Rank {rank} loading query dataset...")
+    query_ds = get_query_ds(score_cfg)
+    print(f"[score_worker] Rank {rank} query dataset loaded, starting precondition_ds...")
     query_ds = precondition_ds(
         query_ds,
         score_cfg,
@@ -333,7 +351,7 @@ def score_worker(
         local_device,
         grad_sizes,
     )
-    print("prepreoc")
+    print(f"[score_worker] Rank {rank} precondition_ds completed")
     query_grads = preprocess_grads(
         query_ds,
         score_cfg.modules,
@@ -432,8 +450,12 @@ def score_dataset(
         (mean/nearest/individual).
     """
     rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
+    start_rank = int(os.environ.get("START_RANK", 0))
+    actual_rank = start_rank + rank
 
-    if rank == 0:
+    print(f"[score_dataset] Rank {actual_rank} (start_rank={start_rank}, local_rank={rank}) starting")
+
+    if actual_rank == 0:
         index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
         with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
             json.dump(asdict(index_cfg), f, indent=2)
@@ -441,12 +463,17 @@ def score_dataset(
         with (index_cfg.partial_run_path / "score_config.json").open("w") as f:
             json.dump(asdict(score_cfg), f, indent=2)
 
+    print(f"[score_dataset] Rank {actual_rank} loading dataset...")
     ds = setup_data_pipeline(index_cfg)
+    print(f"[score_dataset] Rank {actual_rank} dataset loaded, loading query dataset...")
 
-    query_ds = get_query_ds(score_cfg)
+    # Don't load query_ds here - load it inside the worker to avoid serialization issues
+    # query_ds = get_query_ds(score_cfg)
+    # print(f"[score_dataset] Rank {actual_rank} query dataset loaded, launching distributed run...")
 
-    launch_distributed_run("score", score_worker, [index_cfg, score_cfg, ds, query_ds])
+    print(f"[score_dataset] Rank {actual_rank} launching distributed run (query_ds will be loaded in worker)...")
+    launch_distributed_run("score", score_worker, [index_cfg, score_cfg, ds])
 
-    rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", 0)))
+    
     if rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)

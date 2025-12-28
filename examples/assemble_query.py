@@ -15,7 +15,7 @@ from datasets import (
 
 from bergson import DataConfig, IndexConfig, ReduceConfig, load_gradients
 from bergson.data import tokenize
-from bergson.utils import assert_type
+from bergson.utils.utils import assert_type
 
 
 def lm_eval_harness_format(x):
@@ -173,7 +173,7 @@ def main():
     # TODO migrate to a larger model
     model_name = "EleutherAI/deep_ignorance_pretraining_baseline_small"
     ds_path = "runs/ds_wmdp_bio_robust_mcqa"
-    projection_dim = 256
+    projection_dim = 128
 
     # Spend all day on getting a setup without FSDP working.
     index_path = f"runs/wmdp_bio_robust_mcqa_query_{projection_dim}"
@@ -183,6 +183,7 @@ def main():
         lm_eval_harness_format, remove_columns=["choices", "answer", "question"]
     )
     mcqa_ds.save_to_disk(ds_path)
+    exit()
 
     # Add chat template following whatever the original deep ignorance project did
     data_config = DataConfig(

@@ -8,6 +8,8 @@ from tqdm import tqdm
 from bergson.data import (
     create_eigen_index,
     create_preconditioner_index,
+    get_eigen_offset,
+    get_preconditioner_offset,
 )
 from bergson.gradients import GradientProcessor
 
@@ -91,7 +93,10 @@ def mix_and_save_processors(
         prec_mmap = create_preconditioner_index(save_path, grad_sizes, np_dtype)
 
         for name, prec in mixed_preconditioners.items():
-            prec_mmap[0][name] = prec.cpu().numpy().astype(np_dtype)
+            # Always use offsets for unstructured format
+            offset = get_preconditioner_offset(grad_sizes, name)
+            size = grad_sizes[name]
+            prec_mmap[offset:offset + size * size] = prec.cpu().numpy().astype(np_dtype).flatten()
 
         prec_mmap.flush()
 
@@ -116,8 +121,11 @@ def mix_and_save_processors(
         eigval_cpu = eigval.to(dtype=original_dtype).contiguous().cpu()
         eigvec_cpu = eigvec.to(dtype=original_dtype).contiguous().cpu()
 
-        eigen_mmap[0][f"{name}_eigval"] = eigval_cpu.numpy().astype(np_dtype)
-        eigen_mmap[0][f"{name}_eigvec"] = eigvec_cpu.numpy().astype(np_dtype)
+        # Always use offsets for unstructured format
+        eigval_offset, eigvec_offset = get_eigen_offset(grad_sizes, name)
+        size = grad_sizes[name]
+        eigen_mmap[eigval_offset:eigval_offset + size] = eigval_cpu.numpy().astype(np_dtype)
+        eigen_mmap[eigvec_offset:eigvec_offset + size * size] = eigvec_cpu.numpy().astype(np_dtype).flatten()
 
     # Barrier to ensure all ranks have written
     if dist.is_initialized():

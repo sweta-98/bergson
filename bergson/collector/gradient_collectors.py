@@ -235,6 +235,7 @@ class GradientCollector(HookCollectorBase):
             self.processor.process_preconditioners(
                 len(self.data),
                 self.rank,
+                save_path=self.cfg.partial_run_path,
             )
 
         # Flush and reduce builder if it exists

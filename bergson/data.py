@@ -262,18 +262,15 @@ def create_preconditioner_index(
     grad_sizes: dict[str, int],
     dtype: DTypeLike,
 ) -> np.memmap:
-    """Create a memory-mapped file for storing structured preconditioners
-    and persist metadata."""
-    precond_path = root / "preconditioners.bin"
+    """Create a memory-mapped file for storing unstructured preconditioners
+    and persist metadata. Always uses unstructured format with offsets."""
+    path = root / "preconditioners.bin"
     rank = dist.get_rank() if dist.is_initialized() else 0
 
-    # Build a json-serializable structured dtype
-    # Each preconditioner is a square matrix of size grad_size x grad_size
-    struct_dtype = {
-        "names": [name for name in grad_sizes.keys()],
-        "formats": [f"({size},{size}){np.dtype(dtype).str}" for size in grad_sizes.values()],
-        "itemsize": np.dtype(dtype).itemsize * sum(size * size for size in grad_sizes.values()),
-    }
+    # Calculate total size for unstructured format
+    total_elements = sum(size * size for size in grad_sizes.values())
+    itemsize = np.dtype(dtype).itemsize
+    nbytes = total_elements * itemsize
 
     # ── 1. Rank-0 creates file & metadata exactly once ─────────────────────────
     if rank == 0:
@@ -282,8 +279,7 @@ def create_preconditioner_index(
 
         # Allocate (extends file to right size without writing zeros byte-by-byte)
         # We only need one entry per preconditioner (not per gradient)
-        nbytes = struct_dtype["itemsize"]
-        with open(precond_path, "wb") as f:
+        with open(path, "wb") as f:
             f.truncate(nbytes)
 
             # Force the directory entry + data to disk *before* other ranks continue
@@ -293,9 +289,9 @@ def create_preconditioner_index(
         with (root / "preconditioners_info.json").open("w") as f:
             json.dump(
                 {
-                    "dtype": struct_dtype,
                     "grad_sizes": grad_sizes,
                     "base_dtype": np.dtype(dtype).str,
+                    "module_names": list(grad_sizes.keys()),
                 },
                 f,
                 indent=2,
@@ -305,26 +301,37 @@ def create_preconditioner_index(
     if dist.is_initialized():
         dist.barrier()
 
-    dtype_obj = np.dtype(struct_dtype)  # type: ignore
-    shape = (1,)  # Only one entry per preconditioner
-
     return np.memmap(
-        precond_path,
-        dtype=dtype_obj,
+        path,
+        dtype=np.dtype(dtype),
         mode="r+",
-        shape=shape,
+        shape=(total_elements,),
     )
 
 
+def get_preconditioner_offset(grad_sizes: dict[str, int], module_name: str) -> int:
+    """Get the offset in the unstructured memmap for a given module's preconditioner."""
+    offset = 0
+    for name, size in grad_sizes.items():
+        if name == module_name:
+            return offset
+        offset += size * size
+    raise KeyError(f"Module {module_name} not found in grad_sizes")
+
+
 def load_preconditioners(root_dir: Path | str) -> np.memmap:
-    """Map the structured preconditioners stored in `root_dir` into memory."""
+    """Map the unstructured preconditioners stored in `root_dir` into memory.
+    Always uses unstructured format with offsets."""
     root_dir = Path(root_dir)
     with (root_dir / "preconditioners_info.json").open("r") as f:
         info = json.load(f)
     
-    struct_dtype = info["dtype"]
-    dtype_obj = np.dtype(struct_dtype)  # type: ignore
-    shape = (1,)  # Only one entry per preconditioner
+    grad_sizes = info["grad_sizes"]
+    base_dtype = info["base_dtype"]
+    total_elements = sum(size * size for size in grad_sizes.values())
+    
+    dtype_obj = np.dtype(base_dtype)
+    shape = (total_elements,)
 
     return np.memmap(
         root_dir / "preconditioners.bin",
@@ -340,22 +347,18 @@ def create_eigen_index(
     dtype: DTypeLike,
 ) -> np.memmap:
     """Create a memory-mapped file for storing eigen decompositions
-    (eigenvalues and eigenvectors) and persist metadata."""
-    eigen_path = root / "preconditioners_eigen.bin"
+    (eigenvalues and eigenvectors) and persist metadata.
+    Always uses unstructured format with offsets."""
+    path = root / "preconditioners_eigen.bin"
     rank = dist.get_rank() if dist.is_initialized() else 0
 
-    # Build a json-serializable structured dtype
+    # Calculate total size for unstructured format
     # Each eigen decomposition has:
     # - eigenvalues: 1D array of size grad_size
     # - eigenvectors: 2D array of size grad_size x grad_size
-    struct_dtype = {
-        "names": [f"{name}_eigval" for name in grad_sizes.keys()] + [f"{name}_eigvec" for name in grad_sizes.keys()],
-        "formats": (
-            [f"({size},){np.dtype(dtype).str}" for size in grad_sizes.values()] +  # eigenvalues
-            [f"({size},{size}){np.dtype(dtype).str}" for size in grad_sizes.values()]  # eigenvectors
-        ),
-        "itemsize": np.dtype(dtype).itemsize * sum(size * (1 + size) for size in grad_sizes.values()),
-    }
+    total_elements = sum(size * (1 + size) for size in grad_sizes.values())
+    itemsize = np.dtype(dtype).itemsize
+    nbytes = total_elements * itemsize
 
     # ── 1. Rank-0 creates file & metadata exactly once ─────────────────────────
     if rank == 0:
@@ -364,8 +367,7 @@ def create_eigen_index(
 
         # Allocate (extends file to right size without writing zeros byte-by-byte)
         # We only need one entry per eigen decomposition
-        nbytes = struct_dtype["itemsize"]
-        with open(eigen_path, "wb") as f:
+        with open(path, "wb") as f:
             f.truncate(nbytes)
 
             # Force the directory entry + data to disk *before* other ranks continue
@@ -375,9 +377,9 @@ def create_eigen_index(
         with (root / "preconditioners_eigen_info.json").open("w") as f:
             json.dump(
                 {
-                    "dtype": struct_dtype,
                     "grad_sizes": grad_sizes,
                     "base_dtype": np.dtype(dtype).str,
+                    "module_names": list(grad_sizes.keys()),
                 },
                 f,
                 indent=2,
@@ -387,26 +389,43 @@ def create_eigen_index(
     if dist.is_initialized():
         dist.barrier()
 
-    dtype_obj = np.dtype(struct_dtype)  # type: ignore
-    shape = (1,)  # Only one entry per eigen decomposition
-
     return np.memmap(
-        eigen_path,
-        dtype=dtype_obj,
+        path,
+        dtype=np.dtype(dtype),
         mode="r+",
-        shape=shape,
+        shape=(total_elements,),
     )
 
 
+def get_eigen_offset(grad_sizes: dict[str, int], module_name: str) -> tuple[int, int]:
+    """Get the offsets in the unstructured memmap for a given module's eigen decomposition.
+    Returns (eigval_offset, eigvec_offset).
+    Eigenvalues and eigenvectors are stored sequentially: eigval (size) then eigvec (size*size)."""
+    offset = 0
+    for name, size in grad_sizes.items():
+        if name == module_name:
+            # eigval starts at offset, eigvec starts right after eigval
+            eigval_offset = offset
+            eigvec_offset = offset + size
+            return eigval_offset, eigvec_offset
+        # Each module has: eigval (size elements) + eigvec (size * size elements)
+        offset += size + size * size
+    raise KeyError(f"Module {module_name} not found in grad_sizes")
+
+
 def load_eigen(root_dir: Path | str) -> np.memmap:
-    """Map the structured eigen decompositions stored in `root_dir` into memory."""
+    """Map the unstructured eigen decompositions stored in `root_dir` into memory.
+    Always uses unstructured format with offsets."""
     root_dir = Path(root_dir)
     with (root_dir / "preconditioners_eigen_info.json").open("r") as f:
         info = json.load(f)
     
-    struct_dtype = info["dtype"]
-    dtype_obj = np.dtype(struct_dtype)  # type: ignore
-    shape = (1,)  # Only one entry per eigen decomposition
+    grad_sizes = info["grad_sizes"]
+    base_dtype = info["base_dtype"]
+    total_elements = sum(size * (1 + size) for size in grad_sizes.values())
+    
+    dtype_obj = np.dtype(base_dtype)
+    shape = (total_elements,)
 
     return np.memmap(
         root_dir / "preconditioners_eigen.bin",
@@ -444,7 +463,18 @@ def load_gradient_dataset(root_dir: Path, structured: bool = True) -> Dataset:
     """Load a dataset of gradients from `root_dir`."""
 
     def load_shard(dir: Path) -> Dataset:
-        ds = Dataset.load_from_disk(str(dir / "data.hf"))
+        # Check if data.hf exists, if not, create a minimal dataset from gradients
+        if (dir / "data.hf").exists():
+            ds = Dataset.load_from_disk(str(dir / "data.hf"))
+        else:
+            # No data.hf file - this is likely a reduced query
+            # Create a minimal dataset based on gradient shape
+            mmap = load_gradients(dir, structured=structured)
+            if structured:
+                num_grads = mmap.shape[0]
+            else:
+                num_grads = mmap.shape[0]
+            ds = Dataset.from_list([{"index": i} for i in range(num_grads)])
 
         # Add gradients to HF dataset.
         mmap = load_gradients(dir, structured=structured)
@@ -470,9 +500,19 @@ def load_gradient_dataset(root_dir: Path, structured: bool = True) -> Dataset:
     if (root_dir / "data.hf").exists():
         return load_shard(root_dir)
 
+    # Check if this is a single reduced query (has gradients.bin but no data.hf)
+    if (root_dir / "gradients.bin").exists():
+        # Single reduced query - load it directly
+        return load_shard(root_dir)
+
     # Flatten indices to avoid CPU OOM
+    subdirs = [path for path in sorted(root_dir.iterdir()) if path.is_dir()]
+    if not subdirs:
+        # No subdirectories and no data.hf - try loading as single shard
+        return load_shard(root_dir)
+    
     return concatenate_datasets(
-        [load_shard(path) for path in sorted(root_dir.iterdir()) if path.is_dir()]
+        [load_shard(path) for path in subdirs]
     ).flatten_indices()
 
 

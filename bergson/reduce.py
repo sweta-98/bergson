@@ -55,7 +55,7 @@ def reduce_worker(
             init_method=f"tcp://{addr}:{port}",
             device_id=torch.device(f"cuda:{local_rank}"),
             rank=rank,
-            timeout=timedelta(minutes=30),
+            timeout=timedelta(minutes=10),
             world_size=world_size,
         )
 
