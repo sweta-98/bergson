@@ -106,7 +106,7 @@ def reduce_worker(
 
         flush(kwargs=kwargs)  # Final flush
         if rank == 0:
-            processor.save(index_cfg.partial_run_path)
+            processor.save(index_cfg.partial_run_path, rank, all_ranks=False)
 
 
 def reduce(index_cfg: IndexConfig, reduce_cfg: ReduceConfig):

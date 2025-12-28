@@ -16,7 +16,6 @@ from bergson.gradients import (
     AdamNormalizer,
     LayerAdapter,
 )
-from bergson.process_preconditioners import process_preconditioners
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import assert_type
 
@@ -282,15 +281,12 @@ class MultiNodeGradientCollector(HookCollectorBase):
         if dist.is_initialized():
             dist.reduce(self.per_doc_losses, dst=0)
 
-        grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
         if self.processor.preconditioners:
-            process_preconditioners(
-                self.processor,
-                self.processor.preconditioners,
+            self.processor.process_preconditioners(
                 len(self.data),
-                grad_sizes,
                 self.rank,
             )
+            self.processor.save(self.cfg.partial_run_path, self.rank, all_ranks=True)
 
         # Flush and reduce builder if it exists
         if self.builder is not None:
@@ -322,7 +318,7 @@ class MultiNodeGradientCollector(HookCollectorBase):
 
             self.data.save_to_disk(str(self.cfg.partial_run_path / "data.hf"))
 
-            self.processor.save(self.cfg.partial_run_path)
+            
 
 
 def exchange_preconditioner_gradients(

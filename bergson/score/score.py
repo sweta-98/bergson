@@ -118,7 +118,7 @@ def precondition_ds(
     score_cfg: ScoreConfig,
     target_modules: list[str],
     device: torch.device,
-    prec_metadata: dict[str, tuple[torch.Size, torch.dtype]],
+    grad_sizes: dict[str, int],
 ):
     """Precondition the dataset with the query and index preconditioners."""
     rank = dist.get_rank() if dist.is_initialized() else 0
@@ -135,18 +135,22 @@ def precondition_ds(
         if score_cfg.mixed_preconditioner_path is None:
             print("Mixing and saving processors...")
             if use_q and not use_i:
-                score_cfg.mixed_preconditioner_path = score_cfg.query_preconditioner_path
+                score_cfg.mixed_preconditioner_path = (
+                    score_cfg.query_preconditioner_path
+                )
             elif not use_q and use_i:
-                score_cfg.mixed_preconditioner_path = score_cfg.index_preconditioner_path
+                score_cfg.mixed_preconditioner_path = (
+                    score_cfg.index_preconditioner_path
+                )
             else:
                 mix_and_save_processors(
                     score_cfg.query_preconditioner_path,
                     score_cfg.index_preconditioner_path,
                     score_cfg.mixing_coefficient,
-                    score_cfg.query_path,
+                    Path(score_cfg.query_path),
                     target_modules,
                     device,
-                    prec_metadata,
+                    grad_sizes,
                 )
                 score_cfg.mixed_preconditioner_path = score_cfg.query_path
                 print("Mixed processor saved to disk")
@@ -173,23 +177,23 @@ def precondition_ds(
 
                 # Load process inside generator so Datasets doesn't attempt
                 # to duplicate the processor in CPU RAM for hashing.
-                print(f"Loading mixed processor from {score_cfg.mixed_preconditioner_path}...")
-
+                mixed_processor_path = Path(score_cfg.mixed_preconditioner_path)
+                print(f"Loading mixed processor from {mixed_processor_path}...")
                 mixed_processor = GradientProcessor.load(
-                    score_cfg.mixed_preconditioner_path, map_location="cpu"
+                    mixed_processor_path, map_location="cpu"
                 )
-
                 print("Loaded")
 
                 for sample in query_ds:
                     yield process_sample(sample, mixed_processor)
 
-            # Use a generator rather than a map to avoid hashing the mixed preconditioner
+            # Use a generator rather than a map to avoid hashing the mixed
+            # preconditioner
             # once it's already loaded into memory (2x RAM consumption).
             ds = assert_type(
                 Dataset, Dataset.from_generator(generator, features=query_ds.features)
             )
-            
+
             print(ds[0], "ds[0]")
             print(len(ds), "ds")
 
@@ -197,6 +201,7 @@ def precondition_ds(
             _ = ds[:]  # This forces the dataset to materialize
             # file size of item 1
             import sys
+
             print(sys.getsizeof(ds[0]), "sys.getsizeof(ds[0])")
             ds = ds.from_list(ds.to_list())
             print("listified")
@@ -264,26 +269,13 @@ def get_query_ds(score_cfg: ScoreConfig):
     return query_ds.with_format("torch", columns=target_modules)
 
 
-def load_prec_metadata(
+def load_grad_sizes(
     score_cfg: ScoreConfig,
 ) -> dict[str, tuple[torch.Size, torch.dtype]]:
     """Load the preconditioner metadata from the score configuration."""
-    with open(Path(score_cfg.query_path) / "info.json", "r") as f:
-        metadata = json.load(f)
-
-    base_dtype = metadata["base_dtype"]
     # Grad sizes are the flattened lengths of the gradient vectors
-    grad_sizes = metadata["grad_sizes"]
-
-    import numpy as np
-
-    base_dtype = np.dtype(base_dtype)
-    torch_dtype = torch.from_numpy(np.array([], dtype=base_dtype)).dtype
-
-    return {
-        name: (torch.Size([grad_sizes[name], grad_sizes[name]]), torch_dtype)
-        for name in grad_sizes.keys()
-    }
+    with open(Path(score_cfg.query_path) / "info.json", "r") as f:
+        return json.load(f)["grad_sizes"]
 
 
 def score_worker(
@@ -332,15 +324,14 @@ def score_worker(
             world_size=world_size,
         )
 
-    prec_metadata = load_prec_metadata(score_cfg)
-    print("prec_metadata")
+    grad_sizes = load_grad_sizes(score_cfg)
 
     query_ds = precondition_ds(
         query_ds,
         score_cfg,
         score_cfg.modules,
         local_device,
-        prec_metadata,
+        grad_sizes,
     )
     print("prepreoc")
     query_grads = preprocess_grads(
@@ -375,7 +366,7 @@ def score_worker(
     if isinstance(ds, Dataset):
         print("ds is a Dataset")
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
-        print(f"scorer")
+        print("scorer")
         kwargs["scorer"] = Scorer(
             index_cfg.partial_run_path,
             len(ds),
@@ -421,8 +412,7 @@ def score_worker(
                 flush(kwargs=kwargs)
 
         flush(kwargs=kwargs)  # Final flush
-        if rank == 0:
-            processor.save(index_cfg.partial_run_path)
+        processor.save(index_cfg.partial_run_path, rank, all_ranks=True)
 
 
 def score_dataset(

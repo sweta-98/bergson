@@ -4,10 +4,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, Mapping
 
+import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from torch import Tensor
 from transformers.pytorch_utils import Conv1D as HFConv1D
+
+from bergson.data import (
+    create_eigen_index,
+    create_preconditioner_index,
+    load_eigen,
+    load_preconditioners,
+)
 
 NORMALIZER_TYPES: dict[str, type["Normalizer"]] = {}
 
@@ -160,6 +169,10 @@ class AdamNormalizer(Normalizer):
         )
 
 
+
+
+
+
 @dataclass
 class GradientProcessor:
     """Configuration for processing and compressing gradients."""
@@ -211,20 +224,105 @@ class GradientProcessor:
         ] = {}
 
     @classmethod
+    def _load_preconditioners(
+        cls,
+        path: Path,
+        *,
+        map_location: str | torch.device | None = None,
+        module_names: list[str] | None = None,
+    ) -> dict[str, Tensor]:
+        """
+        Load preconditioners from memmap or pytorch format.
+        Detects the format and optionally filters by module names.
+        """
+        precond_info_path = path / "preconditioners_info.json"
+        if precond_info_path.exists():
+            # Load from memmap
+            precond_memmap = load_preconditioners(path)
+            preconditioners = {}
+            names_to_load = (
+                module_names if module_names is not None else precond_memmap.dtype.names
+            )
+
+            for name in names_to_load:
+                if name in precond_memmap.dtype.names:
+                    precond_array = precond_memmap[0][name]
+                    precond_tensor = torch.from_numpy(precond_array.copy())
+                    if map_location is not None:
+                        precond_tensor = precond_tensor.to(map_location)
+                    preconditioners[name] = precond_tensor
+        else:
+            preconditioners = {}
+
+        return preconditioners
+
+    @classmethod
+    def _load_eigen_decompositions(
+        cls,
+        path: Path,
+        *,
+        map_location: str | torch.device | None = None,
+        module_names: list[str] | None = None,
+    ) -> dict[str, tuple[Tensor, Tensor]]:
+        """
+        Load eigen decompositions from memmap or pytorch format.
+        Automatically detects the format and optionally filters by module names.
+        """
+        if (path / "preconditioners_eigen_info.json").exists():
+            # Load from memmap
+            eigen_memmap = load_eigen(path)
+            preconditioners_eigen = {}
+
+            # Extract all module names from field names if not provided
+            if module_names is None:
+                module_names_set = set()
+                for field_name in eigen_memmap.dtype.names:
+                    if field_name.endswith("_eigval"):
+                        module_name = field_name[:-7]  # Remove "_eigval" suffix
+                        module_names_set.add(module_name)
+                module_names = list(module_names_set)
+
+            for name in module_names:
+                eigval_field = f"{name}_eigval"
+                eigvec_field = f"{name}_eigvec"
+                if eigval_field in eigen_memmap.dtype.names:
+                    eigval_array = eigen_memmap[0][eigval_field]
+                    eigvec_array = eigen_memmap[0][eigvec_field]
+                    eigval_tensor = torch.from_numpy(eigval_array.copy())
+                    eigvec_tensor = torch.from_numpy(eigvec_array.copy())
+                    if map_location is not None:
+                        eigval_tensor = eigval_tensor.to(map_location)
+                        eigvec_tensor = eigvec_tensor.to(map_location)
+                    preconditioners_eigen[name] = (eigval_tensor, eigvec_tensor)
+        else:
+            preconditioners_eigen = {}
+
+        return preconditioners_eigen
+
+    @classmethod
     def load(
         cls,
         path: Path | str,
         *,
         map_location: str | torch.device | None = None,
+        module_names: list[str] | None = None,
     ) -> "GradientProcessor":
         """
         Load the normalizers and preconditioners from a file.
+
+        Parameters
+        ----------
+        path : Path | str
+            Path to the processor directory
+        map_location : str | torch.device | None
+            Device to map tensors to (e.g., "cpu", "cuda:0")
+        module_names : list[str] | None
+            Optional list of module names to load. If None, loads all modules.
+            Useful for distributed loading where each rank only needs specific modules.
         """
         path = Path(path)
         cfg_path = path / "processor_config.json"
         norm_path = path / "normalizers.pth"
-        precond_path = path / "preconditioners.pth"
-        precond_eigen_path = path / "preconditioners_eigen.pth"
 
         # Load configuration
         with cfg_path.open("r") as f:
@@ -247,54 +345,141 @@ class GradientProcessor:
             for name, state in norm_state.items()
         }
 
+        # Load preconditioners (detects memmap vs pytorch)
+        preconditioners = cls._load_preconditioners(
+            path,
+            map_location=map_location,
+            module_names=module_names,
+        )
+
+        # Load eigen decompositions (detects memmap vs pytorch)
+        preconditioners_eigen = cls._load_eigen_decompositions(
+            path,
+            map_location=map_location,
+            module_names=module_names,
+        )
+
         return cls(
             normalizers=normalizers,
-            preconditioners=torch.load(
-                precond_path,
-                map_location=map_location,
-                weights_only=True,
-            ),
-            preconditioners_eigen=torch.load(
-                precond_eigen_path,
-                map_location=map_location,
-                weights_only=True,
-            ),
+            preconditioners=preconditioners,
+            preconditioners_eigen=preconditioners_eigen,
             **cfg,
         )
 
-    def save(self, path: Path):
+    def save_preconditioners(self, path: Path):
+        # Determine dtype from first preconditioner
+        first_prec = next(iter(self.preconditioners.values()))
+        dtype = first_prec.dtype
+        np_dtype = np.float32 if dtype == torch.float32 else np.float16
+
+        # Get grad_sizes from preconditioner shapes
+        grad_sizes = {
+            name: prec.shape[0] for name, prec in self.preconditioners.items()
+        }
+
+        # Create or load memmap
+        precond_memmap = create_preconditioner_index(path, grad_sizes, np_dtype)
+
+        for name, prec in self.preconditioners.items():
+            precond_memmap[0][name] = prec.cpu().numpy().astype(np_dtype)
+
+        precond_memmap.flush()
+
+    def save_eigen_decompositions(self, path: Path):
+        # Determine dtype from first eigen decomposition
+        first_eigval, _ = next(iter(self.preconditioners_eigen.values()))
+        dtype = first_eigval.dtype
+        np_dtype = np.float32 if dtype == torch.float32 else np.float16
+
+        # Get grad_sizes from eigen decomposition shapes
+        grad_sizes = {
+            name: eigval.shape[0]
+            for name, (eigval, _) in self.preconditioners_eigen.items()
+        }
+
+        # Create or load eigen memmap
+        eigen_memmap = create_eigen_index(path, grad_sizes, np_dtype)
+
+        # Write eigen decompositions to memmap
+        for name, (eigval, eigvec) in self.preconditioners_eigen.items():
+            eigen_memmap[0][f"{name}_eigval"] = (
+                eigval.cpu().numpy().astype(np_dtype)
+            )
+            eigen_memmap[0][f"{name}_eigvec"] = (
+                eigvec.cpu().numpy().astype(np_dtype)
+            )
+
+        eigen_memmap.flush()
+
+    def save(self, path: Path, rank: int, all_ranks: bool = False):
         """
         Save the normalizers and preconditioners to a file.
         """
-        path.mkdir(parents=True, exist_ok=True)
+        if rank == 0:
+            path.mkdir(parents=True, exist_ok=True)
 
-        cfg_path = path / "processor_config.json"
-        norm_path = path / "normalizers.pth"
-        precond_path = path / "preconditioners.pth"
-        precond_eigen_path = path / "preconditioners_eigen.pth"
+            cfg_path = path / "processor_config.json"
+            norm_path = path / "normalizers.pth"
 
-        # Save configuration separately
-        cfg = asdict(self)
-        del cfg["normalizers"]
-        del cfg["preconditioners"]
-        del cfg["preconditioners_eigen"]
-        with cfg_path.open("w") as f:
-            json.dump(cfg, f, indent=2)
+            # Save configuration separately
+            cfg = asdict(self)
+            del cfg["normalizers"]
+            del cfg["preconditioners"]
+            del cfg["preconditioners_eigen"]
+            with cfg_path.open("w") as f:
+                json.dump(cfg, f, indent=2)
 
-        # Save normalizers
-        norm_state = {
-            name: normalizer.state_dict()
-            for name, normalizer in self.normalizers.items()
-        }
-        torch.save(norm_state, norm_path)
-        torch.save(self.preconditioners, precond_path)
-        torch.save(self.preconditioners_eigen, precond_eigen_path)
+            # Save normalizers
+            norm_state = {
+                name: normalizer.state_dict()
+                for name, normalizer in self.normalizers.items()
+            }
+            torch.save(norm_state, norm_path)
+        
 
-        # Ensure all torch.save files are synced to disk
-        import os
-        for file_path in [norm_path, precond_path, precond_eigen_path]:
-            with open(file_path, "rb") as f:
-                os.fsync(f.fileno())
+        if all_ranks or rank == 0:
+            # Save preconditioners to memmap
+            if self.preconditioners:
+                self.save_preconditioners(path)
+
+            # Save eigen decompositions to memmap
+            if self.preconditioners_eigen:
+                self.save_eigen_decompositions(path)
+
+
+    def process_preconditioners(
+        self,
+        len_data: int,
+        rank: int,
+    ):
+        """
+        Aggregate preconditioners across ranks and compute their eigen decompositions.
+        """
+        device = next(iter(self.preconditioners.values())).device
+        dtype = next(iter(self.preconditioners.values())).dtype
+
+        # Normalize preconditioners
+        for name, prec in self.preconditioners.items():
+            self.preconditioners[name] = (prec / len_data).cpu()
+
+        if rank == 0:
+            print("Computing preconditioner eigen decompositions...")
+
+        # Eigen decompose preconditioners
+        preconditioners_eigen = {}
+        for name in self.preconditioners.keys():
+            prec = self.preconditioners[name].to(dtype=torch.float64, device=device)
+            eigvals, eigvecs = torch.linalg.eigh(prec)
+            preconditioners_eigen[name] = (
+                eigvals.to(dtype=dtype).contiguous().cpu(),
+                eigvecs.to(dtype=dtype).contiguous().cpu(),
+            )
+
+        self.preconditioners_eigen = preconditioners_eigen
+
+        print("Done!")
+
+
 
 
 class LayerAdapter:

@@ -40,7 +40,7 @@ def create_processor(
             include_bias=cfg.include_bias,
         )
         if rank == 0:
-            processor.save(cfg.partial_run_path)
+            processor.save(cfg.partial_run_path, rank, all_ranks=False)
 
     return processor
 

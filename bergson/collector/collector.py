@@ -500,6 +500,7 @@ class CollectorComputer:
                     assert isinstance(prof, profile), "Profiler is not set up correctly"
                     prof.step()
                 step += 1
+                total_processed += len(indices)
 
                 self.collector.process_batch(indices, losses=losses)
 
