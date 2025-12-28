@@ -8,9 +8,15 @@ This script alternates between:
 Repeats for n=2 epochs total.
 """
 
+from timeit import timeit
+import os
+import math
+from pathlib import Path
+
+import wandb
+from torch.utils.data import IterableDataset as TorchIterableDataset
 import torch
 import torch.nn as nn
-from torch.nn.utils.rnn import pad_sequence
 from transformers import (
     AutoModelForCausalLM,
     Trainer,
@@ -18,15 +24,7 @@ from transformers import (
     TrainerCallback,
     AutoTokenizer,
 )
-from datasets import Dataset, IterableDataset, load_from_disk, load_dataset
-from functools import partial
-from timeit import timeit
-import os
-import math
-from pathlib import Path
-
-import wandb
-
+from datasets import load_from_disk, load_dataset
 from lm_eval import simple_evaluate
 from lm_eval.models.huggingface import HFLM 
 
@@ -41,7 +39,7 @@ WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
 BIO_RETAIN_PATH = "/projects/a5k/public/lucia/rmu/bio-retain"
 
 STUDENT_MODEL_NAME = "EleutherAI/deep-ignorance-unfiltered"
-OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_to_rewritten_transfer"
+OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_to_rewritten_transfer_10_epochs"
 
 SEQ_LEN = 1024
 TARGET_MODULES = [
@@ -54,7 +52,7 @@ TARGET_MODULES = [
 PAIRS_PER_BATCH = 4
 GRAD_ACCUMULATION = 1
 LEARNING_RATE = 1e-5
-NUM_EPOCHS = 2  # Total epochs: 1 transfer + 1 retain, repeated
+NUM_EPOCHS = 10  # Total epochs: 1 transfer + 1 retain, repeated
 MAX_DS_LENGTH = 200_000
 
 # Run evaluation every N steps
@@ -69,10 +67,20 @@ ALIGNMENT_STRATEGY = SnapAlignmentStrategy()
 class TransferDataCollator:
     """Data collator for transfer phase: bio-forget -> wmdp-lie-o-rewritten."""
     
-    def __init__(self, alignment_strategy, pad_token_id):
+    def __init__(self, alignment_strategy, pad_token_id, max_seq_len):
         self.alignment_strategy = alignment_strategy
         self.pad_token_id = pad_token_id
+        self.max_seq_len = max_seq_len
     
+    def _pad_tensor(self, tensor, pad_value):
+        """Pad or truncate tensor to fixed max_seq_len."""
+        curr_len = len(tensor)
+        if curr_len >= self.max_seq_len:
+            return tensor[:self.max_seq_len]
+        
+        padding = torch.full((self.max_seq_len - curr_len,), pad_value, dtype=tensor.dtype, device=tensor.device)
+        return torch.cat([tensor, padding])
+
     def __call__(self, features):
         bio_forget_ids = []
         rewritten_ids = []
@@ -104,13 +112,12 @@ class TransferDataCollator:
             bio_forget_mask.append(ensure_tensor(aligned_bio_mask))
             rewritten_mask.append(ensure_tensor(aligned_rewritten_mask))
 
-        # Pad all sequences together to ensure bio and rewritten have identical shapes
-        # (Needed for concatenation and MSE calculation later)
+        # Pad everything to strict fixed length (SEQ_LEN) to satisfy Accelerate's requirements
         combined_ids = bio_forget_ids + rewritten_ids
         combined_masks = bio_forget_mask + rewritten_mask
 
-        padded_ids = pad_sequence(combined_ids, batch_first=True, padding_value=self.pad_token_id)
-        padded_masks = pad_sequence(combined_masks, batch_first=True, padding_value=0)
+        padded_ids = torch.stack([self._pad_tensor(t, self.pad_token_id) for t in combined_ids])
+        padded_masks = torch.stack([self._pad_tensor(t, 0) for t in combined_masks])
 
         # Split back into bio and rewritten batches
         split_idx = len(bio_forget_ids)
@@ -143,8 +150,18 @@ class TransferDataCollator:
 class RetainDataCollator:
     """Data collator for retain phase: standard language modeling."""
     
-    def __init__(self, pad_token_id):
+    def __init__(self, pad_token_id, max_seq_len):
         self.pad_token_id = pad_token_id
+        self.max_seq_len = max_seq_len
+
+    def _pad_tensor(self, tensor, pad_value):
+        """Pad or truncate tensor to fixed max_seq_len."""
+        curr_len = len(tensor)
+        if curr_len >= self.max_seq_len:
+            return tensor[:self.max_seq_len]
+        
+        padding = torch.full((self.max_seq_len - curr_len,), pad_value, dtype=tensor.dtype, device=tensor.device)
+        return torch.cat([tensor, padding])
 
     def __call__(self, features):
         input_ids = []
@@ -160,9 +177,9 @@ class RetainDataCollator:
             mask = f.get("attention_mask", [1] * len(f["input_ids"]))
             attention_mask.append(ensure_tensor(mask))
 
-        # Pad sequences
-        input_ids_batch = pad_sequence(input_ids, batch_first=True, padding_value=self.pad_token_id)
-        attention_mask_batch = pad_sequence(attention_mask, batch_first=True, padding_value=0)
+        # Pad to strict fixed length
+        input_ids_batch = torch.stack([self._pad_tensor(t, self.pad_token_id) for t in input_ids])
+        attention_mask_batch = torch.stack([self._pad_tensor(t, 0) for t in attention_mask])
         
         labels_batch = input_ids_batch.clone()
         # Mask padding in labels
@@ -429,12 +446,9 @@ class AlternatingDistillationTrainer(Trainer):
             self.log_ce_accum = 0.0
             self.log_mse_accum = 0.0
             self.log_steps_count = 0
-        super().log(logs, start_time)
+        super().log(logs)
 
-# Change import
-from torch.utils.data import IterableDataset as TorchIterableDataset
 
-# Inherit from TorchIterableDataset instead of datasets.IterableDataset
 class AlternatingDataset(TorchIterableDataset):
     """
     Dataset that alternates between transfer and retain phases based on epoch.
@@ -442,7 +456,7 @@ class AlternatingDataset(TorchIterableDataset):
     """
     
     def __init__(self, bio_forget_set, rewritten_set, retain_set, rank, world_size, max_seq_len, num_epochs):
-        super().__init__() # Initialize PyTorch parent
+        super().__init__()
         self.bio_forget_set = bio_forget_set
         self.rewritten_set = rewritten_set
         self.retain_set = retain_set
@@ -481,30 +495,6 @@ class AlternatingDataset(TorchIterableDataset):
                 self.world_size,
                 self.max_seq_len,
             )
-
-
-def alternating_generator(bio_forget_set, rewritten_set, retain_set, rank, world_size, max_seq_len, num_epochs, current_epoch):
-    """Generator that alternates between transfer and retain phases based on epoch."""
-    # Determine phase based on current epoch
-    is_transfer = (int(current_epoch) % 2) == 0
-    
-    if is_transfer:
-        # Transfer phase: bio-forget -> wmdp-lie-o-rewritten
-        yield from transfer_generator(
-            bio_forget_set,
-            rewritten_set,
-            rank,
-            world_size,
-            max_seq_len,
-        )
-    else:
-        # Retain phase: standard language modeling
-        yield from retain_generator(
-            retain_set,
-            rank,
-            world_size,
-            max_seq_len,
-        )
 
 
 def load_datasets():
@@ -603,6 +593,15 @@ def main():
     print("Tokenize", flush=True)
     ds = tokenize_ds(ds, tokenizer)
     print("Done", flush=True)
+    # Create dataset dict
+    from datasets import DatasetDict
+    dataset_dict = DatasetDict({
+        "bio_forget": ds["bio_forget"],
+        "rewritten": ds["rewritten"],
+        "retain": ds["retain"],
+    })
+    # Save to disk
+    dataset_dict.save_to_disk(OUTPUT_DIR + "/aligned_tokenized_datasets")
 
     # Dataset Prep
     for key, value in ds.items():
@@ -678,8 +677,9 @@ def main():
             else:
                 return self.retain_collator(features)
     
-    transfer_collator = TransferDataCollator(ALIGNMENT_STRATEGY, tokenizer.pad_token_id)
-    retain_collator = RetainDataCollator(tokenizer.pad_token_id)
+    # Pass tokenizer.pad_token_id AND SEQ_LEN to collators
+    transfer_collator = TransferDataCollator(ALIGNMENT_STRATEGY, tokenizer.pad_token_id, SEQ_LEN)
+    retain_collator = RetainDataCollator(tokenizer.pad_token_id, SEQ_LEN)
     phase_collator = PhaseAwareCollator(transfer_collator, retain_collator)
 
     trainer = AlternatingDistillationTrainer(
