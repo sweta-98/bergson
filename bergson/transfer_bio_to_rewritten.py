@@ -322,11 +322,7 @@ class LmEvalHarnessCallback(TrainerCallback):
 class AlternatingDistillationTrainer(Trainer):
     """
     Trainer that alternates between transfer and retain phases.
-    
-    Phase 1 (transfer): Transfer activations from bio-forget to wmdp-lie-o-rewritten
-    Phase 2 (retain): Standard language modeling on bio-retain
     """
-    
     def __init__(self, target_modules, lambda_mse: float = 1.0, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.target_modules = target_modules
@@ -339,24 +335,16 @@ class AlternatingDistillationTrainer(Trainer):
         self.log_ce_accum = 0.0
         self.log_steps_count = 0
         
-        # Track current phase: True = transfer phase, False = retain phase
         self.current_phase = None
         self._last_epoch = -1
 
     def _is_transfer_phase(self, epoch):
-        """Determine if we're in transfer phase based on epoch.
-        
-        Epochs 0, 2, 4, ... are transfer phases
-        Epochs 1, 3, 5, ... are retain phases
-        """
         return int(epoch) % 2 == 0
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        """Update dataset epoch and phase when epoch begins."""
         current_epoch = int(state.epoch)
         self.current_phase = self._is_transfer_phase(current_epoch)
         
-        # Update dataset epoch if it's an AlternatingDataset
         if hasattr(self.train_dataset, 'set_epoch'):
             self.train_dataset.set_epoch(current_epoch)
         
@@ -371,33 +359,25 @@ class AlternatingDistillationTrainer(Trainer):
     ):
         self.hooks.clear()
         
-        # Determine current phase from state
         if hasattr(self, 'state'):
             current_epoch = int(self.state.epoch)
             self.current_phase = self._is_transfer_phase(current_epoch)
         elif self.current_phase is None:
-            # Fallback: assume transfer phase (epoch 0)
             self.current_phase = True
 
         if self.current_phase:
-            # TRANSFER PHASE: bio-forget -> wmdp-lie-o-rewritten
             return self._compute_transfer_loss(model, inputs, return_outputs)
         else:
-            # RETAIN PHASE: standard language modeling
             return self._compute_retain_loss(model, inputs, return_outputs)
 
     def _compute_transfer_loss(self, model, inputs, return_outputs=False):
-        """Compute loss for transfer phase: MSE on activations + CE on rewritten."""
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             labels=inputs["labels"],
         )
-        
-        # CE loss is computed only on rewritten tokens (bio-forget has -100 labels)
         ce_loss = outputs.loss
 
-        # MSE loss: align activations from bio-forget to wmdp-lie-o-rewritten
         mse_loss_total = torch.tensor(0.0, device=model.device, dtype=torch.bfloat16)
         full_batch_size = inputs["input_ids"].shape[0]
         half_batch_size = full_batch_size // 2
@@ -421,13 +401,11 @@ class AlternatingDistillationTrainer(Trainer):
         return (total_loss, outputs) if return_outputs else total_loss
 
     def _compute_retain_loss(self, model, inputs, return_outputs=False):
-        """Compute loss for retain phase: standard language modeling."""
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             labels=inputs["labels"],
         )
-        
         ce_loss = outputs.loss
 
         if model.training:
@@ -505,11 +483,9 @@ def load_datasets():
     def resolve_path(path):
         if os.path.isabs(path):
             return path
-        # Try relative to project root
         full_path = project_root / path
         if full_path.exists():
             return str(full_path)
-        # Try as-is (might be absolute or in current dir)
         return path
     
     bio_forget_path = resolve_path(BIO_FORGET_PATH)
@@ -527,12 +503,10 @@ def load_datasets():
     except Exception as e:
         print(f"Error loading from disk: {e}")
         print("Trying to load from HuggingFace Hub...")
-        # Fallback: try loading from HuggingFace
         bio_forget = load_dataset("Unlearning/rmu-training-data", data_files="bio-forget-corpus.jsonl")
         rewritten = load_dataset("Unlearning/wmdp-lie-o-rewritten")
         retain = load_dataset("Unlearning/rmu-training-data", data_files="bio-retain-corpus.jsonl")
         
-        # Handle DatasetDict
         if hasattr(bio_forget, 'keys'):
             bio_forget = bio_forget[list(bio_forget.keys())[0]]
         if hasattr(rewritten, 'keys'):
@@ -662,8 +636,6 @@ def main():
         )
     ]
 
-    # Create data collator that switches based on phase
-    # The collator detects the phase from the feature structure
     class PhaseAwareCollator:
         def __init__(self, transfer_collator, retain_collator):
             self.transfer_collator = transfer_collator
@@ -671,13 +643,12 @@ def main():
         
         def __call__(self, features):
             # Determine phase from first feature structure
-            # Transfer phase has "bio_forget_input_ids", retain phase has "input_ids"
+            # Transfer phase has "bio_forget_input_ids", retain phase has "input_ids
             if features and "bio_forget_input_ids" in features[0]:
                 return self.transfer_collator(features)
             else:
                 return self.retain_collator(features)
     
-    # Pass tokenizer.pad_token_id AND SEQ_LEN to collators
     transfer_collator = TransferDataCollator(ALIGNMENT_STRATEGY, tokenizer.pad_token_id, SEQ_LEN)
     retain_collator = RetainDataCollator(tokenizer.pad_token_id, SEQ_LEN)
     phase_collator = PhaseAwareCollator(transfer_collator, retain_collator)
@@ -693,7 +664,6 @@ def main():
     )
 
     print("Starting training...", flush=True)
-    print(f"Will alternate between transfer and retain phases for {NUM_EPOCHS} epochs", flush=True)
     trainer.train()
 
     if hasattr(trainer, "hooks"):
