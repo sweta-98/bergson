@@ -1,0 +1,5 @@
+"task": "wmdp_bio_shortcut_viral_vector_research"
+"dataset_name": "viral_vector_research"
+"test_split": "shortcut"
+"include": "_default_template_yaml"
+"description": "The following are multiple choice questions (with answers) about biology.\n\n"

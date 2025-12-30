@@ -1,0 +1,5 @@
+"task": "wmdp_bio_shortcut_bioweapons_and_bioterrorism"
+"dataset_name": "bioweapons_and_bioterrorism"
+"test_split": "shortcut"
+"include": "_default_template_yaml"
+"description": "The following are multiple choice questions (with answers) about biology.\n\n"

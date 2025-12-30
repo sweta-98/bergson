@@ -188,3 +188,6 @@ influence_results/
 tmp/
 .idea/
 uv.lock
+tmp_score/
+logs/
+retain_set_1024/

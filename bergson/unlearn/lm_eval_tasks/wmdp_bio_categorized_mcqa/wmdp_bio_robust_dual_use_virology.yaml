@@ -1,0 +1,5 @@
+"task": "wmdp_bio_robust_dual_use_virology"
+"dataset_name": "dual_use_virology"
+"test_split": "robust"
+"include": "_default_template_yaml"
+"description": "The following are multiple choice questions (with answers) about biology.\n\n"

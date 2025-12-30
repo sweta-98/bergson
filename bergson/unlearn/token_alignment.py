@@ -1,174 +1,34 @@
-"""
-Token alignment strategies for matching tokens between aligned datasets.
+from typing import List, Tuple
+from abc import ABC
 
-This module provides strategies for aligning tokens between datasets where
-examples are aligned by index (same DOI, same title) but content may differ.
-"""
-
-from typing import List, Tuple, Optional, Protocol
+debug = False
 
 
-# class TokenAlignmentStrategy(Protocol):
-#     """Protocol for token alignment strategies."""
-    
-#     def align_tokens(
-#         self,
-#         source_tokens: List[int],
-#         target_tokens: List[int],
-#         source_attention_mask: Optional[List[int]] = None,
-#         target_attention_mask: Optional[List[int]] = None,
-#     ) -> Tuple[List[int], List[int], List[int], List[int]]:
-#         """
-#         Align tokens between source and target sequences.
+class AlignmentStrategy(ABC):
+    def align_tokens(
+        self,
+        source_tokens: list[int],
+        target_tokens: list[int],
+    ) -> list[int]:
+        """
+        Abstract method to generate a mapping from Source Token Index -> Target Token Index.
         
-#         Args:
-#             source_tokens: Token IDs from source sequence
-#             target_tokens: Token IDs from target sequence
-#             source_attention_mask: Optional attention mask for source
-#             target_attention_mask: Optional attention mask for target
-            
-#         Returns:
-#             Tuple of (aligned_source_tokens, aligned_target_tokens,
-#                      aligned_source_mask, aligned_target_mask)
-#         """
-#         ...
-
-
-# class PositionalAlignmentStrategy:
-#     """
-#     Simple positional alignment strategy.
-    
-#     Aligns tokens by position, truncating to the minimum length.
-#     This assumes similar structure between source and target.
-#     """
-    
-#     def align_tokens(
-#         self,
-#         source_tokens: List[int],
-#         target_tokens: List[int],
-#         source_attention_mask: Optional[List[int]] = None,
-#         target_attention_mask: Optional[List[int]] = None,
-#     ) -> Tuple[List[int], List[int], List[int], List[int]]:
-#         """
-#         Align tokens by position, using minimum length.
-#         """
-#         min_len = min(len(source_tokens), len(target_tokens))
+        Args:
+            source_tokens: The reference sequence.
+            target_tokens: The sequence to align against.
         
-#         aligned_source = source_tokens[:min_len]
-#         aligned_target = target_tokens[:min_len]
-        
-#         if source_attention_mask is None:
-#             aligned_source_mask = [1] * min_len
-#         else:
-#             aligned_source_mask = source_attention_mask[:min_len]
-            
-#         if target_attention_mask is None:
-#             aligned_target_mask = [1] * min_len
-#         else:
-#             aligned_target_mask = target_attention_mask[:min_len]
-        
-#         return aligned_source, aligned_target, aligned_source_mask, aligned_target_mask
+        """
+        raise NotImplementedError("align_tokens method must be implemented by subclasses.")
 
 
-# class PrefixAlignmentStrategy:
-#     """
-#     Prefix alignment strategy.
-    
-#     Aligns tokens by matching a common prefix (e.g., title/header).
-#     Falls back to positional alignment if prefix matching fails.
-#     """
-    
-#     def __init__(self, prefix_length: int = 50):
-#         """
-#         Args:
-#             prefix_length: Length of prefix to match
-#         """
-#         self.prefix_length = prefix_length
-    
-#     def align_tokens(
-#         self,
-#         source_tokens: List[int],
-#         target_tokens: List[int],
-#         source_attention_mask: Optional[List[int]] = None,
-#         target_attention_mask: Optional[List[int]] = None,
-#     ) -> Tuple[List[int], List[int], List[int], List[int]]:
-#         """
-#         Align tokens by matching prefix, then positional alignment.
-#         """
-#         # Try to find matching prefix
-#         prefix_len = min(self.prefix_length, len(source_tokens), len(target_tokens))
-#         source_prefix = source_tokens[:prefix_len]
-#         target_prefix = target_tokens[:prefix_len]
-        
-#         # If prefixes match, use positional alignment from there
-#         if source_prefix == target_prefix:
-#             # Use full sequences with positional alignment
-#             min_len = min(len(source_tokens), len(target_tokens))
-#             aligned_source = source_tokens[:min_len]
-#             aligned_target = target_tokens[:min_len]
-#         else:
-#             # Fallback to simple positional alignment
-#             min_len = min(len(source_tokens), len(target_tokens))
-#             aligned_source = source_tokens[:min_len]
-#             aligned_target = target_tokens[:min_len]
-        
-#         if source_attention_mask is None:
-#             aligned_source_mask = [1] * len(aligned_source)
-#         else:
-#             aligned_source_mask = source_attention_mask[:len(aligned_source)]
-            
-#         if target_attention_mask is None:
-#             aligned_target_mask = [1] * len(aligned_target)
-#         else:
-#             aligned_target_mask = target_attention_mask[:len(aligned_target)]
-        
-#         return aligned_source, aligned_target, aligned_source_mask, aligned_target_mask
-
-
-# def align_token_sequences(
-#     source_tokens: List[int],
-#     target_tokens: List[int],
-#     strategy: TokenAlignmentStrategy,
-#     source_attention_mask: Optional[List[int]] = None,
-#     target_attention_mask: Optional[List[int]] = None,
-# ) -> Tuple[List[int], List[int], List[int], List[int]]:
-#     """
-#     Convenience function to align token sequences using a strategy.
-    
-#     Args:
-#         source_tokens: Token IDs from source sequence
-#         target_tokens: Token IDs from target sequence
-#         strategy: Alignment strategy to use
-#         source_attention_mask: Optional attention mask for source
-#         target_attention_mask: Optional attention mask for target
-        
-#     Returns:
-#         Tuple of (aligned_source_tokens, aligned_target_tokens,
-#                  aligned_source_mask, aligned_target_mask)
-#     """
-#     return strategy.align_tokens(
-#         source_tokens,
-#         target_tokens,
-#         source_attention_mask,
-#         target_attention_mask,
-#     )
-
-
-
-class SnapAlignmentStrategy:
+class SnapAlignmentStrategy(AlignmentStrategy):
     """
     Snap alignment strategy.
     
-    Finds identical "anchor" stretches between sequences and aligns them 1:1.
-    For differing stretches between anchors, aligns tokens by their fractional
-    position within the stretch (snapping to the nearest target token).
+    Generates a mapping from Source indices to Target indices.
     """
     
     def __init__(self, min_anchor_length: int = 1):
-        """
-        Args:
-            min_anchor_length: Minimum length of matching tokens to consider an anchor
-        """
         self.min_anchor_length = min_anchor_length
     
     def _find_anchors(
@@ -176,24 +36,13 @@ class SnapAlignmentStrategy:
         source_tokens: List[int],
         target_tokens: List[int],
     ) -> List[Tuple[int, int, int]]:
-        """
-        Find matching anchor regions using longest common substring approach.
-        
-        Returns:
-            List of (source_start, target_start, length) tuples for matching regions,
-            sorted by source position.
-        """
-        # Use dynamic programming to find all common substrings
-        # Then greedily select non-overlapping anchors
-        
+        if debug:
+            print(f"  [DEBUG] Finding anchors (Min len: {self.min_anchor_length})...")
         n, m = len(source_tokens), len(target_tokens)
-        if n == 0 or m == 0:
-            return []
         
-        # Build table of match lengths ending at each position
-        # dp[i][j] = length of common substring ending at source[i-1], target[j-1]
+        # DP Table construction
         dp = [[0] * (m + 1) for _ in range(n + 1)]
-        matches = []  # (source_end, target_end, length)
+        matches = []
         
         for i in range(1, n + 1):
             for j in range(1, m + 1):
@@ -202,9 +51,8 @@ class SnapAlignmentStrategy:
                     if dp[i][j] >= self.min_anchor_length:
                         matches.append((i, j, dp[i][j]))
         
-        # Filter to get maximal matches (not subsumed by longer ones)
-        # and select non-overlapping anchors greedily by length
-        matches.sort(key=lambda x: -x[2])  # Sort by length descending
+        # Sort by length descending
+        matches.sort(key=lambda x: -x[2])
         
         anchors = []
         source_used = [False] * n
@@ -214,7 +62,6 @@ class SnapAlignmentStrategy:
             source_start = source_end - length
             target_start = target_end - length
             
-            # Check if this region overlaps with already selected anchors
             source_overlap = any(source_used[i] for i in range(source_start, source_end))
             target_overlap = any(target_used[i] for i in range(target_start, target_end))
             
@@ -225,159 +72,138 @@ class SnapAlignmentStrategy:
                 for i in range(target_start, target_end):
                     target_used[i] = True
         
-        # Sort anchors by source position
+        # Sort by source position
         anchors.sort(key=lambda x: x[0])
+        
+        if debug:
+            print(f"  [DEBUG] Found {len(anchors)} anchors.")
+            for idx, a in enumerate(anchors):
+                print(f"    -> Anchor {idx}: Source[{a[0]}:{a[0]+a[2]}] maps to Target[{a[1]}:{a[1]+a[2]}]")
+            
         return anchors
     
     def _snap_align_stretch(
         self,
         source_len: int,
         target_len: int,
+        fallback_index: int
     ) -> List[int]:
         """
-        For a differing stretch, compute target index for each source position
-        based on fractional position.
-        
-        Args:
-            source_len: Length of source stretch
-            target_len: Length of target stretch
-            
-        Returns:
-            List of target indices (one per source position)
+        Calculates relative target indices for a gap.
+        Returns a list of integer offsets relative to the start of the target gap.
         """
         if source_len == 0:
             return []
+            
+        # If target gap is empty (deletion), snap all source tokens to the fallback index
         if target_len == 0:
-            # No target tokens to align to - return -1 as sentinel
-            return [-1] * source_len
+            if debug:
+                print(f"    [DEBUG] Empty Target Gap. Mapping {source_len} source tokens to index {fallback_index}.")
+            return [fallback_index] * source_len
         
+
+        if debug:
+            print(f"    [DEBUG] Snapping Gap: Squashing {source_len} source tokens into {target_len} target tokens.")
         alignment = []
         for i in range(source_len):
-            # Fractional position in source (0 to 1)
             frac = i / source_len if source_len > 1 else 0.5
-            # Map to target position and snap to nearest
             target_pos = int(frac * target_len)
-            target_pos = min(target_pos, target_len - 1)  # Clamp to valid range
+            target_pos = min(target_pos, target_len - 1)
             alignment.append(target_pos)
-        
         return alignment
     
     def align_tokens(
         self,
-        source_tokens: List[int],
-        target_tokens: List[int],
-        source_attention_mask: Optional[List[int]] = None,
-        target_attention_mask: Optional[List[int]] = None,
-    ) -> Tuple[List[int], List[int], List[int], List[int]]:
+        source_tokens: list[int],
+        target_tokens: list[int],
+    ) -> list[int]:
         """
-        Align tokens using anchor-based snap alignment.
+        Generate a mapping from Source Token Index -> Target Token Index.
         
-        Returns aligned sequences where each source token is paired with
-        a corresponding target token (may have duplicates in target).
-        """
-        anchors = self._find_anchors(source_tokens, target_tokens)
-        
-        # Build alignment: for each source position, what target position?
-        source_to_target = [-1] * len(source_tokens)
-        
-        # Process regions between anchors
-        prev_source_end = 0
-        prev_target_end = 0
-        
-        for source_start, target_start, length in anchors:
-            # Handle the gap before this anchor
-            if prev_source_end < source_start:
-                gap_source_len = source_start - prev_source_end
-                gap_target_len = target_start - prev_target_end
-                
-                gap_alignment = self._snap_align_stretch(gap_source_len, gap_target_len)
-                
-                for i, rel_target in enumerate(gap_alignment):
-                    if rel_target >= 0:
-                        source_to_target[prev_source_end + i] = prev_target_end + rel_target
+        Args:
+            source_tokens: The reference sequence.
+            target_tokens: The sequence to align against.
             
-            # Handle the anchor (1:1 alignment)
-            for i in range(length):
-                source_to_target[source_start + i] = target_start + i
-            
-            prev_source_end = source_start + length
-            prev_target_end = target_start + length
-        
-        # Handle any trailing gap after last anchor
-        if prev_source_end < len(source_tokens):
-            gap_source_len = len(source_tokens) - prev_source_end
-            gap_target_len = len(target_tokens) - prev_target_end
-            
-            gap_alignment = self._snap_align_stretch(gap_source_len, gap_target_len)
-            
-            for i, rel_target in enumerate(gap_alignment):
-                if rel_target >= 0:
-                    source_to_target[prev_source_end + i] = prev_target_end + rel_target
-        
-        # Build output sequences
-        aligned_source = []
-        aligned_target = []
-        aligned_source_mask = []
-        aligned_target_mask = []
-        
-        for src_idx, tgt_idx in enumerate(source_to_target):
-            if tgt_idx >= 0:
-                aligned_source.append(source_tokens[src_idx])
-                aligned_target.append(target_tokens[tgt_idx])
-                
-                if source_attention_mask is not None:
-                    aligned_source_mask.append(source_attention_mask[src_idx])
-                else:
-                    aligned_source_mask.append(1)
-                
-                if target_attention_mask is not None:
-                    aligned_target_mask.append(target_attention_mask[tgt_idx])
-                else:
-                    aligned_target_mask.append(1)
-        
-        return aligned_source, aligned_target, aligned_source_mask, aligned_target_mask
-    
-    def get_alignment_map(
-        self,
-        source_tokens: List[int],
-        target_tokens: List[int],
-    ) -> List[int]:
-        """
-        Get the raw alignment map from source indices to target indices.
-        
-        Useful for debugging or when you need the mapping itself.
-        
         Returns:
-            List where result[i] is the target index aligned to source index i,
-            or -1 if no alignment exists.
+            List[int]: A list of length len(source_tokens).
+                       result[i] is the index j in target_tokens that aligns with source_tokens[i].
+                       
+        Raises:
+            ValueError: If either sequence is empty.
         """
+        # 1. Validation
+        if not source_tokens or not target_tokens:
+            raise ValueError("Alignment failed: Source and Target sequences must not be empty.")
+
+        if debug:
+            print(f"\n[DEBUG] Starting Alignment. Source Len: {len(source_tokens)}, Target Len: {len(target_tokens)}")
+        
         anchors = self._find_anchors(source_tokens, target_tokens)
-        source_to_target = [-1] * len(source_tokens)
+        
+        # Result array: maps source index -> target index
+        alignment_map = [-1] * len(source_tokens)
         
         prev_source_end = 0
         prev_target_end = 0
         
-        for source_start, target_start, length in anchors:
+        # Iterate through anchors and fill gaps
+        for i, (source_start, target_start, length) in enumerate(anchors):
+            # --- GAP HANDLING (Before Anchor) ---
             if prev_source_end < source_start:
                 gap_source_len = source_start - prev_source_end
                 gap_target_len = target_start - prev_target_end
-                gap_alignment = self._snap_align_stretch(gap_source_len, gap_target_len)
-                for i, rel_target in enumerate(gap_alignment):
-                    if rel_target >= 0:
-                        source_to_target[prev_source_end + i] = prev_target_end + rel_target
+                
+                # If target gap is empty, fallback to the last valid target token
+                fallback_idx = max(0, prev_target_end - 1)
+                
+                if debug:
+                    print(f"  [DEBUG] Processing GAP before Anchor {i}")
+                
+                if gap_target_len == 0:
+                    # Direct mapping to fallback
+                    for k in range(gap_source_len):
+                        alignment_map[prev_source_end + k] = fallback_idx
+                else:
+                    # Interpolation
+                    gap_offsets = self._snap_align_stretch(
+                        gap_source_len, 
+                        gap_target_len, 
+                        fallback_index=fallback_idx # Unused in this branch
+                    )
+                    for k, rel_offset in enumerate(gap_offsets):
+                        alignment_map[prev_source_end + k] = prev_target_end + rel_offset
             
-            for i in range(length):
-                source_to_target[source_start + i] = target_start + i
+            # --- ANCHOR HANDLING ---
+            if debug:
+                print(f"  [DEBUG] Locking in Anchor {i}")
+            for k in range(length):
+                alignment_map[source_start + k] = target_start + k
             
             prev_source_end = source_start + length
             prev_target_end = target_start + length
         
+        # --- TRAILING GAP HANDLING ---
         if prev_source_end < len(source_tokens):
+            if debug:
+                print(f"  [DEBUG] Processing trailing GAP")
             gap_source_len = len(source_tokens) - prev_source_end
             gap_target_len = len(target_tokens) - prev_target_end
-            gap_alignment = self._snap_align_stretch(gap_source_len, gap_target_len)
-            for i, rel_target in enumerate(gap_alignment):
-                if rel_target >= 0:
-                    source_to_target[prev_source_end + i] = prev_target_end + rel_target
+            
+            fallback_idx = max(0, prev_target_end - 1)
+            
+            if gap_target_len == 0:
+                for k in range(gap_source_len):
+                    alignment_map[prev_source_end + k] = fallback_idx
+            else:
+                gap_offsets = self._snap_align_stretch(
+                    gap_source_len, 
+                    gap_target_len, 
+                    fallback_index=fallback_idx
+                )
+                for k, rel_offset in enumerate(gap_offsets):
+                    alignment_map[prev_source_end + k] = prev_target_end + rel_offset
         
-        return source_to_target
+        if debug:
+            print(f"[DEBUG] Finished. Map Length: {len(alignment_map)}")
+
+        return alignment_map

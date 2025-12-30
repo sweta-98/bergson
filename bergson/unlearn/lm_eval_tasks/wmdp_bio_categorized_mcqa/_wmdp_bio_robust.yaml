@@ -1,0 +1,13 @@
+group: wmdp_bio_robust
+task:
+  - wmdp_bio_robust_bioweapons_and_bioterrorism
+  - wmdp_bio_robust_dual_use_virology
+  - wmdp_bio_robust_enhanced_potential_pandemic_pathogens
+  - wmdp_bio_robust_expanding_access_to_threat_vectors
+  - wmdp_bio_robust_reverse_genetics_and_easy_editing
+  - wmdp_bio_robust_viral_vector_research
+aggregate_metric_list:
+  - metric: acc
+    weight_by_size: True
+metadata:
+  version: 1

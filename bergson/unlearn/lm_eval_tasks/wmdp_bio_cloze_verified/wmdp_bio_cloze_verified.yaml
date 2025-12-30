@@ -1,0 +1,3 @@
+"task": "wmdp_bio_cloze_verified"
+"include": "_cloze_template_verified_yaml"
+"description": "Complete the following biology questions with the correct answer.\n\n"

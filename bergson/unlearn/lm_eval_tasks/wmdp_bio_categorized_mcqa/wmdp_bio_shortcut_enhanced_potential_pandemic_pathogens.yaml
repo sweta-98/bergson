@@ -1,0 +1,5 @@
+"task": "wmdp_bio_shortcut_enhanced_potential_pandemic_pathogens"
+"dataset_name": "enhanced_potential_pandemic_pathogens"
+"test_split": "shortcut"
+"include": "_default_template_yaml"
+"description": "The following are multiple choice questions (with answers) about biology.\n\n"

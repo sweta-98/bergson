@@ -1,0 +1,9 @@
+group: wmdp_bio_categorized_mcqa
+task:
+  - wmdp_bio_robust
+  - wmdp_bio_shortcut
+aggregate_metric_list:
+  - metric: acc
+    weight_by_size: True
+metadata:
+  version: 1
