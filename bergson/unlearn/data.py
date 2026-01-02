@@ -1,4 +1,5 @@
 import os
+import re
 
 import torch
 from torch.utils.data import IterableDataset as TorchIterableDataset
@@ -33,9 +34,9 @@ def transfer_generator(combined_set, max_seq_len):
         }
 
 
-def retain_generator(retain_set, max_seq_len):
+def retain_generator(ds, max_seq_len):
     """Generator for retain phase: standard language modeling."""
-    for sample in retain_set:
+    for sample in ds:
         input_ids = sample.get("input_ids", sample.get("text", []))
 
         if isinstance(input_ids, str):
@@ -70,6 +71,9 @@ class AlternatingDataset(TorchIterableDataset):
         max_seq_len,
         num_phases,
         examples_per_phase,
+        first_generator=transfer_generator,
+        second_generator=retain_generator
+
     ):
         super().__init__()
         self.rank = rank
@@ -78,6 +82,9 @@ class AlternatingDataset(TorchIterableDataset):
         self.num_phases = num_phases
         self.examples_per_phase = examples_per_phase
         self._current_phase_idx = 0
+
+        self.first_generator = first_generator
+        self.second_generator = second_generator
 
         self.transfer_ds = transfer_ds.shard(
             num_shards=self.world_size, index=self.rank
@@ -95,21 +102,25 @@ class AlternatingDataset(TorchIterableDataset):
 
         # Determine dataset window start based on epoch idx and examples per epoch
         phase_epoch_idx = self._current_phase_idx // 2
+        
+        examples_per_rank = self.examples_per_phase // self.world_size
+        print("examples per rank", examples_per_rank)
+        remainder = self.examples_per_phase % self.world_size
+        if self.rank < remainder:
+            examples_per_rank += 1
+        rank_start_idx = (phase_epoch_idx * examples_per_rank) % len(
+            self.transfer_ds
+        )
+        window_indices = [
+            (rank_start_idx + i) % len(self.transfer_ds)
+            for i in range(examples_per_rank)
+        ]
 
         is_transfer = (self._current_phase_idx % 2) == 0
+        if is_debug():
+            print("is transfer", is_transfer)
+            
         if is_transfer:
-            examples_per_rank = self.examples_per_phase // self.world_size
-            remainder = self.examples_per_phase % self.world_size
-            if self.rank < remainder:
-                examples_per_rank += 1
-
-            rank_start_idx = (phase_epoch_idx * examples_per_rank) % len(
-                self.transfer_ds
-            )
-            window_indices = [
-                (rank_start_idx + i) % len(self.transfer_ds)
-                for i in range(examples_per_rank)
-            ]
             transfer_ds_window = self.transfer_ds.select(window_indices)
 
             yield from transfer_generator(
@@ -117,16 +128,6 @@ class AlternatingDataset(TorchIterableDataset):
                 self.max_seq_len,
             )
         else:
-            examples_per_rank = self.examples_per_phase // self.world_size
-            remainder = self.examples_per_phase % self.world_size
-            if self.rank < remainder:
-                examples_per_rank += 1
-
-            rank_start_idx = (phase_epoch_idx * examples_per_rank) % len(self.retain_ds)
-            window_indices = [
-                (rank_start_idx + i) % len(self.retain_ds)
-                for i in range(examples_per_rank)
-            ]
             retain_ds_window = self.retain_ds.select(window_indices)
 
             yield from retain_generator(
@@ -135,21 +136,28 @@ class AlternatingDataset(TorchIterableDataset):
             )
 
 
-class EpochUpdateCallback(TrainerCallback):
+class PhaseUpdateCallback(TrainerCallback):
     """
-    Updates the dataset phase at the beginning of each epoch.
+    Updates the dataset phase after every N steps.
     Required for AlternatingDataset.
     """
+    def __init__(self, N: int):
+        self.N = N
+        self.i = 0
 
-    def on_epoch_begin(self, args, state, control, **kwargs):
-        train_dataloader = kwargs.get("train_dataloader")
+    def on_step_begin(self, args, state, control, **kwargs):
+        step_idx = state.global_step
+        if step_idx % self.N == 0 and step_idx > 0:
+            train_dataloader = kwargs.get("train_dataloader")
 
-        assert train_dataloader is not None, "Train dataloader is None."
-        assert hasattr(
-            train_dataloader, "dataset"
-        ), "Train dataloader has no dataset attribute."
-        assert hasattr(
-            train_dataloader.dataset, "set_phase"
-        ), "Dataset has no set_epoch method."
+            assert train_dataloader is not None, "Train dataloader is None."
+            assert hasattr(
+                train_dataloader, "dataset"
+            ), "Train dataloader has no dataset attribute."
+            assert hasattr(
+                train_dataloader.dataset, "set_phase"
+            ), "Dataset has no set_phase method."
 
-        train_dataloader.dataset.set_phase(state.epoch)
+            train_dataloader.dataset.set_phase(self.i)
+            
+            self.i += 1

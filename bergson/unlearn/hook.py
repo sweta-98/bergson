@@ -4,11 +4,12 @@ from bergson.unlearn.utils import stable_rank
 
 
 class ActivationCapture:
-    def __init__(self, model, target_module_names):
+    def __init__(self, model, target_module_names, accelerator=None):
         self.model = model
         self.target_module_names = set(target_module_names)
         self.activations = {}
         self._handles = []
+        self.accelerator = accelerator
 
     def _hook_fn(self, module, input, output, name):
         act = output[0] if isinstance(output, tuple) else output
@@ -16,7 +17,13 @@ class ActivationCapture:
 
     def register(self):
         self.activations = {}
-        for name, module in self.model.named_modules():
+
+        if self.accelerator is not None:
+            model = self.accelerator.unwrap_model(self.model)
+        else:
+            model = self.model
+
+        for name, module in model.named_modules():
             if name in self.target_module_names:
                 handle = module.register_forward_hook(partial(self._hook_fn, name=name))
                 self._handles.append(handle)

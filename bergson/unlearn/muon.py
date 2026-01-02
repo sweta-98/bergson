@@ -34,7 +34,8 @@ class MuonAdamW(torch.optim.Optimizer):
                 muon_params, 
                 lr=muon_lr, 
                 momentum=muon_momentum,
-                weight_decay=weight_decay
+                weight_decay=weight_decay,
+                adjust_lr_fn="match_rms_adamw",
             )
             self.optimizers.append(self.muon)
         

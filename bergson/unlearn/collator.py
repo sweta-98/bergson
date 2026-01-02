@@ -1,12 +1,7 @@
-import os
 import torch
 from typing import Any
 
 from bergson.unlearn.token_alignment import AlignmentStrategy
-
-
-def is_debug():
-    return int(os.environ.get("RANK", "0")) == 0
 
 
 class TransferDataCollator:
@@ -85,7 +80,7 @@ class TransferDataCollator:
             "alignment_map": torch.stack(alignment_map_list),
         }
 
-class RetainDataCollator:
+class VanillaDataCollator:
     """Data collator for retain phase: standard language modeling."""
 
     def __init__(self, pad_token_id, max_seq_len):
@@ -132,7 +127,6 @@ class RetainDataCollator:
         # Mask padding in labels
         labels_batch[labels_batch == self.pad_token_id] = -100
 
-        print("retain input ids", len(input_ids))
         return {
             "input_ids": input_ids_batch,
             "attention_mask": attention_mask_batch,
@@ -149,38 +143,17 @@ class PhaseAwareCollator:
         self.pairs_per_batch = pairs_per_batch
 
     def __call__(self, batch: list[dict[str, Any]]):
-        if is_debug():
-            print(f"PhaseAwareCollator: received {len(batch)} samples", flush=True)
-
         is_transfer_phase = "source_input_ids" in batch[0]
 
         if is_transfer_phase:
-            # Drop incomplete pairs: each sample becomes 2 rows (source, target)
-            # If we have an odd number of samples, drop the last one
-            if is_debug():
-                print(f"Going into transfer collator", flush=True)
-
-            result = self.transfer_collator(batch)
-            if is_debug():
-                if result['input_ids'].shape[0] != self.pairs_per_batch * 2:
-                    print("WARNING: Transfer collator produced wrong batch size", flush=True)
-                    print(f"Transfer collator output: {result['input_ids'].shape} (expected {self.pairs_per_batch * 2} rows for {self.pairs_per_batch} pairs)", flush=True)
-                    raise RuntimeError("Transfer collator batch size mismatch")
+            return self.transfer_collator(batch)
         else:
-            if is_debug():
-                print(f"Going into retain collator with {len(batch)} features", flush=True)
-            result = self.retain_collator(batch)
-            if is_debug():
-                if result['input_ids'].shape[0] != self.pairs_per_batch:
-                    print("WARNING: Retain collator produced wrong batch size", flush=True)
-                    print(f"Retain collator output: {result['input_ids'].shape} (expected {self.pairs_per_batch} rows)", flush=True)
-                    raise RuntimeError("Retain collator batch size mismatch")
-        return result
+            return self.retain_collator(batch)
 
 
-def get_phase_aware_collator(pairs_per_batch, seq_len: int, tokenizer, alignment_strategy: AlignmentStrategy):
+def get_ds_transfer_collator(pairs_per_batch, seq_len: int, tokenizer, alignment_strategy: AlignmentStrategy):
     transfer_collator = TransferDataCollator(
         alignment_strategy, tokenizer.pad_token_id, seq_len
     )
-    retain_collator = RetainDataCollator(tokenizer.pad_token_id, seq_len)
+    retain_collator = VanillaDataCollator(tokenizer.pad_token_id, seq_len)
     return PhaseAwareCollator(transfer_collator, retain_collator, pairs_per_batch=pairs_per_batch)

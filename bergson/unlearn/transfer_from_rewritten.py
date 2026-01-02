@@ -15,13 +15,11 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hu
 
 import math
 import os
-
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import wandb
 from datasets import Dataset, load_dataset, DatasetDict
 from transformers import (
     AutoModelForCausalLM,
@@ -31,8 +29,8 @@ from transformers import (
 )
 from torch.optim import AdamW
 
-from bergson.unlearn.collator import get_phase_aware_collator
-from bergson.unlearn.data import AlternatingDataset, EpochUpdateCallback
+from bergson.unlearn.collator import get_ds_transfer_collator
+from bergson.unlearn.data import AlternatingDataset, PhaseUpdateCallback
 from bergson.unlearn.hook import ActivationCapture
 from bergson.unlearn.token_alignment import SnapAlignmentStrategy
 from bergson.unlearn.utils import EvalCallback
@@ -63,46 +61,60 @@ STUDENT_MODEL_NAME = "EleutherAI/deep-ignorance-unfiltered"
 
 SEQ_LEN = 1024
 TARGET_MODULES = [
+    "gpt_neox.layers.1.mlp.dense_4h_to_h",
+    "gpt_neox.layers.2",
+    "gpt_neox.layers.4",
     "gpt_neox.layers.8.mlp.dense_4h_to_h",
+    "gpt_neox.layers.12",
     "gpt_neox.layers.16.mlp.dense_4h_to_h",
+    "gpt_neox.layers.20",
+    "gpt_neox.layers.22",
     "gpt_neox.layers.24.mlp.dense_4h_to_h",
+    "gpt_neox.layers.26",
+    "gpt_neox.layers.28",
+    "gpt_neox.layers.30",
     "gpt_neox.layers.31.mlp.dense_4h_to_h",
     "embed_out",
 ]
 
-# OPTIMIZER_TYPE = "adamw"
-OPTIMIZER_TYPE = "muon"
+OPTIMIZER_TYPE = "adamw"
+# OPTIMIZER_TYPE = "muon"
 
 PAIRS_PER_BATCH = 16
 GRAD_ACCUMULATION = 1
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-4
 
 NUM_PHASES = 50
+# STEPS_PER_PHASE = 50
 EXAMPLES_PER_PHASE = 8192
 
 # Run evaluation every N steps
 EVAL_STEPS = 50
 
-LAMBDA_MSE = 0.9
+LAMBDA_MSE = 0.5
 
 # Token alignment strategy
 ALIGNMENT_STRATEGY = SnapAlignmentStrategy()
 
 
 def is_debug():
-    return os.environ.get("DEBUG", "0") == "1"
+    return os.environ.get("RANK", "0") == "0"
+
+    # return os.environ.get("DEBUG", "0") == "1"
 
 
-def get_optimizer(model, optim_type: str):
+def get_optimizer(model, optim_type: str, lr: float):
     # Pass all model parameters to the wrapper; it handles the splitting
     if optim_type == "muon":
         return MuonAdamW(
             model.parameters(),
-            muon_lr=0.02, # Muon typically needs higher LR (0.01 ~ 0.05)
-            adam_lr=1e-3, # Default PyTorch AdamW LR
+            # Use the Moonshot Muon implementation that 
+            # enables equal lrs
+            muon_lr=lr,
+            adam_lr=lr,
         )
     elif optim_type == "adamw":
-        return AdamW(model.parameters(),)
+        return AdamW(model.parameters(), lr=lr)
     else:
         raise ValueError(f"Invalid optimizer type: {optim_type}")
 
@@ -122,6 +134,8 @@ class AlternatingDistillationTrainer(Trainer):
 
         self.log_mse_accum = 0.0
         self.log_ce_accum = 0.0
+        self.log_source_ce_accum = 0.0
+        self.log_target_ce_accum = 0.0
         self.log_steps_count = 0
 
         self.is_transfer_phase = None
@@ -138,13 +152,8 @@ class AlternatingDistillationTrainer(Trainer):
     ):
         self.hooks.clear()
 
-        # print("[compute loss] input ids shape", inputs["input_ids"].shape, flush=True)
-
         assert hasattr(self, "state") and hasattr(self.state, "epoch")
         self.is_transfer_phase = "alignment_map" in inputs
-
-        # print("[compute loss] is transfer phase", self.is_transfer_phase)
-        # print("[compute loss] loss input ids shape", inputs["input_ids"].shape, flush=True)
 
         if self.is_transfer_phase:
             return self._compute_transfer_loss(model, inputs, return_outputs)
@@ -152,29 +161,36 @@ class AlternatingDistillationTrainer(Trainer):
             return self._compute_retain_loss(model, inputs, return_outputs)
 
     def _compute_transfer_loss(self, model, inputs, return_outputs=False):
-        # print("[compute transfer loss] About to call model forward pass", flush=True)
-        # print(f"[compute transfer loss] Input shapes - input_ids: {inputs['input_ids'].shape}, attention_mask: {inputs['attention_mask'].shape}, labels: {inputs['labels'].shape}", flush=True)
-        # print(f"[compute transfer loss] Model device: {next(model.parameters()).device}, input_ids device: {inputs['input_ids'].device}", flush=True)
-        try:
-            outputs = model(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                labels=inputs["labels"],
-            )
-            # print("[compute transfer loss] Model forward pass completed", flush=True)
-        except Exception as e:
-            # print(f"[compute transfer loss] ERROR in model forward pass: {e}", flush=True)
-            raise
-        ce_loss = outputs.loss
-        # print("[compute transfer loss] Got ce_loss", flush=True)
+        if is_debug():
+            print("Compute transfer loss")
+
+        outputs = model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            labels=inputs["labels"],
+        )
+        source_logits = outputs.logits[0::2]
+        source_labels = inputs["labels"][0::2]
+        target_logits = outputs.logits[1::2]
+        target_labels = inputs["labels"][1::2]
+
+        source_loss = F.cross_entropy(
+            source_logits[..., :-1, :].flatten(0, 1),
+            source_labels[..., 1:].flatten(),
+            ignore_index=-100,
+        ).detach().float().item()
+
+        target_loss = F.cross_entropy(
+            target_logits[..., :-1, :].flatten(0, 1),
+            target_labels[..., 1:].flatten(),
+            ignore_index=-100,
+        ).detach().float().item()
 
         # --- STEP 1: Slice the Map ---
         # The collator returns [Source, Target, Source, Target...].
         # The alignment map for Source rows is at even indices [0::2].
         # The odd indices are just dummy -1s, so we ignore them.
         alignment_map = inputs["alignment_map"][0::2]
-        # print("[compute transfer loss] alignment map shape", alignment_map.shape, flush=True)
-        # print("[compute transfer loss] unsliced alignment map", inputs["alignment_map"].shape, flush=True)
 
         mse_loss_total = torch.tensor(0.0, device=model.device, dtype=torch.bfloat16)
 
@@ -186,18 +202,8 @@ class AlternatingDistillationTrainer(Trainer):
             source_act = act[0::2]
             # Target is at odd indices
             target_act = act[1::2]
-
-            assert (
-                source_act.shape[0] == target_act.shape[0] == alignment_map.shape[0]
-            ), (
-                f"[compute transfer loss] "
-                f"Batch dimension mismatch: source_act.shape={source_act.shape}, "
-                f"target_act.shape={target_act.shape}, "
-                f"alignment_map.shape={alignment_map.shape}, "
-                f"act.shape={act.shape}. "
-                f"This usually happens when the batch size is odd. "
-                f"Ensure batches have an even number of features."
-            )
+            # source_act = source_acts[name] # Shape: [N, SeqLen, Hidden]
+            # target_act = target_acts[name] # Shape: [N, SeqLen, Hidden]
 
             # Mask valid positions (ignore padding in the map)
             valid_mask = alignment_map != -1
@@ -226,7 +232,6 @@ class AlternatingDistillationTrainer(Trainer):
             # 1. Average over the Hidden Dimension first -> [N, SeqLen]
             # This keeps the loss magnitude interpretable (e.g., 0.05 instead of 200.0)
             mse_per_token = raw_mse_loss.mean(dim=-1)
-            # print("mse per token", mse_per_token[0, :10])
 
             # 2. Zero out loss for invalid/padded tokens
             masked_loss = mse_per_token * valid_mask
@@ -237,28 +242,31 @@ class AlternatingDistillationTrainer(Trainer):
 
         # Average across all layers we are targeting
         mse_loss_term = mse_loss_total / len(self.target_modules)
-        # print("[compute transfer loss] mse loss term", mse_loss_term)
 
-        # Weighted sum
-        total_loss = self.lambda_mse * mse_loss_term + (1 - self.lambda_mse) * ce_loss
-        # print("[compute transfer loss] total loss", total_loss)
+        # Scale the loss according to lambda
+        total_loss = self.lambda_mse * mse_loss_term  
+        # No CE loss for now
+        # #+ (1 - self.lambda_mse) * target_loss
 
         if model.training:
-            self.log_ce_accum += ce_loss.detach().float().item()
+            self.log_ce_accum += (target_loss + source_loss)
+            self.log_source_ce_accum += source_loss
+            self.log_target_ce_accum += target_loss
             self.log_mse_accum += mse_loss_term.detach().float().item()
             self.log_steps_count += 1
 
         return (total_loss, outputs) if return_outputs else total_loss
 
     def _compute_retain_loss(self, model, inputs, return_outputs=False):
+        if is_debug():
+            print("Compute retain loss")
+
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             labels=inputs["labels"],
         )
         ce_loss = outputs.loss
-
-        # print("[compute retain loss] ce loss", ce_loss, inputs["input_ids"].shape, flush=True)
 
         if model.training:
             self.log_ce_accum += ce_loss.detach().float().item()
@@ -269,11 +277,15 @@ class AlternatingDistillationTrainer(Trainer):
     def log(self, logs, start_time=None):
         if self.log_steps_count > 0:
             logs["ce_loss"] = self.log_ce_accum / self.log_steps_count
+            logs["source_ce_loss"] = self.log_source_ce_accum / self.log_steps_count
+            logs["target_ce_loss"] = self.log_target_ce_accum / self.log_steps_count
             if self.is_transfer_phase:
                 logs["mse_loss"] = self.log_mse_accum / self.log_steps_count
             logs["phase"] = "transfer" if self.is_transfer_phase else "retain"  # type: ignore
 
             self.log_ce_accum = 0.0
+            self.log_source_ce_accum = 0.0
+            self.log_target_ce_accum = 0.0
             self.log_mse_accum = 0.0
             self.log_steps_count = 0
         super().log(logs)
@@ -347,7 +359,7 @@ def tokenize_ds(datasets, tokenizer):
     return datasets
 
 
-def main():
+def main(args):
     if not torch.cuda.is_available():
         import sys
         print("Error: CUDA is not available. Aborting to prevent CPU hang.", file=sys.stderr)
@@ -378,8 +390,12 @@ def main():
 
     if tokenizer is not None and tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+        
+    transfer_ds_path = Path(OUTPUT_DIR + "/transfer_ds")
+    retain_ds_path = Path(OUTPUT_DIR + "/mixed_retain_ds")
 
-    if rank == 0 and not Path(OUTPUT_DIR + "/transfer_ds").exists():
+    if rank == 0 and not retain_ds_path.exists():
+        exit()
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
         # Load and tokenize datasets
@@ -396,7 +412,27 @@ def main():
                 )
 
         retain_ds = ds["retain"]
-        retain_ds.save_to_disk(OUTPUT_DIR + "/retain_ds")
+
+        # Mix in ultrachat
+        from datasets import concatenate_datasets
+
+        # Load ultrachat and prepare it for mixing
+        ultrachat = load_dataset("stingning/ultrachat", split="train")
+        ultrachat = assert_type(Dataset, ultrachat)
+        # Mix in at 1:2 ratio
+        ultrachat = ultrachat.select(range(min(len(ultrachat), len(retain_ds) // 2)))
+
+        # Flatten ultrachat conversations to text
+        def flatten_ultrachat(example):
+            return {"text": "\n".join(example["data"])}
+
+        ultrachat = ultrachat.map(flatten_ultrachat, remove_columns=ultrachat.column_names)
+        ultrachat = ultrachat.map(lambda ex: tokenizer(ex["text"], truncation=True, max_length=SEQ_LEN), remove_columns=["text"])
+
+        # Mix with retain set
+        retain_ds = concatenate_datasets([retain_ds, ultrachat]).shuffle(seed=42)
+        retain_ds.save_to_disk(str(retain_ds_path))
+
         if is_debug():
             print("Retain set len", len(retain_ds), flush=True)
 
@@ -434,16 +470,27 @@ def main():
 
         print("transfer ds length", len(transfer_ds), "saving to disk", flush=True)
 
-        transfer_ds.save_to_disk(OUTPUT_DIR + "/transfer_ds")
+        transfer_ds.save_to_disk(str(transfer_ds_path))
         print("done", flush=True)
-    elif rank != 0 and not Path(OUTPUT_DIR + "/transfer_ds").exists():
-        # Wait for rank 0 to finish then re-run
+    elif rank != 0 and not retain_ds_path.exists():
+        # Wait for rank 0 to finish then user must re-run
         exit()
 
     transfer_ds = Dataset.load_from_disk(
-        OUTPUT_DIR + "/transfer_ds", keep_in_memory=False
+        str(transfer_ds_path), keep_in_memory=False
     )
-    retain_ds = Dataset.load_from_disk(OUTPUT_DIR + "/retain_ds", keep_in_memory=False)
+    retain_ds = Dataset.load_from_disk(str(retain_ds_path), keep_in_memory=False)
+
+    total_examples = EXAMPLES_PER_PHASE * NUM_PHASES
+    effective_batch_size = PAIRS_PER_BATCH * GRAD_ACCUMULATION * world_size
+    max_steps = math.floor(total_examples / effective_batch_size)
+    if is_debug():
+        print(f"Total training steps: {max_steps}")
+
+    STEPS_PER_PHASE = math.floor(
+        EXAMPLES_PER_PHASE / (effective_batch_size)
+    )
+    print("steps per phase", STEPS_PER_PHASE)
 
     # Create alternating dataset that provides EXAMPLES_PER_PHASE
     # items per "epoch".
@@ -456,25 +503,19 @@ def main():
         NUM_PHASES,
         examples_per_phase=EXAMPLES_PER_PHASE,
     )
-    phase_collator = get_phase_aware_collator(
+    phase_collator = get_ds_transfer_collator(
         pairs_per_batch=PAIRS_PER_BATCH,
         seq_len=SEQ_LEN,
         tokenizer=tokenizer,
         alignment_strategy=ALIGNMENT_STRATEGY,
     )
 
-    total_examples = EXAMPLES_PER_PHASE * NUM_PHASES
-    effective_batch_size = PAIRS_PER_BATCH * GRAD_ACCUMULATION * world_size
-    max_steps = math.ceil(total_examples / effective_batch_size)
-    if is_debug():
-        print(f"Total training steps: {max_steps}")
-
     kwargs = {}
     if OPTIMIZER_TYPE == "adamw":
         kwargs["optim"] = "adamw_bnb_8bit"
         
     training_args = TrainingArguments(
-        run_name="bio-transfer",
+        run_name=args.wandb_run_name,
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=PAIRS_PER_BATCH,
         gradient_accumulation_steps=GRAD_ACCUMULATION,
@@ -496,19 +537,18 @@ def main():
     callbacks_list = [
         EvalCallback(
             tokenizer=tokenizer,
-            pairs_per_batch=PAIRS_PER_BATCH,
             run_every_steps=EVAL_STEPS,
             ref_model=model,
             include_path=EVAL_INCLUDE_PATH,
             tasks=["wmdp_bio_robust", "wmdp_bio_cloze_verified", "mmlu"],
         ),
-        EpochUpdateCallback(),
+        PhaseUpdateCallback(STEPS_PER_PHASE),
     ]
 
     trainer_kwargs = {}
     if OPTIMIZER_TYPE == "muon":
         trainer_kwargs["optimizers"] = (
-            get_optimizer(model, OPTIMIZER_TYPE), 
+            get_optimizer(model, OPTIMIZER_TYPE, lr=LEARNING_RATE), 
             None
         )
 
@@ -535,4 +575,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--wandb_run_name", type=str, help="WandB run name for logging", default="bio-transfer"
+    )
+    args = parser.parse_args()
+    main(args)
