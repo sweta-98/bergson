@@ -1,8 +1,8 @@
 """
-Transfer activations from bio-forget to wmdp-lie-o-rewritten, then train on retain.
+forget activations from bio-forget to wmdp-lie-o-rewritten, then train on retain.
 
 This script alternates between:
-1. Transfer epoch: Transfer activations from bio-forget to wmdp-lie-o-rewritten
+1. forget epoch: forget activations from bio-forget to wmdp-lie-o-rewritten
 2. Retain epoch: Train on bio-retain set
 
 Repeats for n=2 epochs total.
@@ -20,21 +20,21 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from datasets import Dataset, load_dataset, DatasetDict, concatenate_datasets
+from datasets import Dataset, load_dataset, DatasetDict
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     Trainer,
     TrainingArguments,
 )
+from transformers import BitsAndBytesConfig
 from torch.optim import AdamW
 
-from bergson.unlearn.collator import get_ds_transfer_collator
+from bergson.utils.utils import assert_type
+from bergson.unlearn.collator import VanillaDataCollator
 from bergson.unlearn.data import AlternatingDataset, PhaseUpdateCallback
 from bergson.unlearn.hook import ActivationCapture
-from bergson.unlearn.token_alignment import SnapAlignmentStrategy
 from bergson.unlearn.utils import EvalCallback
-from bergson.utils.utils import assert_type
 from bergson.unlearn.muon import MuonAdamW
 
 
@@ -54,10 +54,14 @@ else:
     WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
     BIO_RETAIN_PATH = "/projects/a5k/public/lucia/rmu/bio-retain"
 
+    # DO NOT CHANGE EVER
     OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_transfer_test"
     EVAL_INCLUDE_PATH = "/home/a5k/lucia.a5k/bergson/bergson/unlearn/lm_eval_tasks"
 
 STUDENT_MODEL_NAME = "EleutherAI/deep-ignorance-unfiltered"
+
+TEACHER_MODEL_NAME = "EleutherAI/deep-ignorance-pretraining-stage-unfiltered"
+TEACHER_CHECKPOINT = "global_step38144"
 
 SEQ_LEN = 1024
 TARGET_MODULES = [
@@ -80,26 +84,22 @@ TARGET_MODULES = [
 OPTIMIZER_TYPE = "adamw"
 # OPTIMIZER_TYPE = "muon"
 
-PAIRS_PER_BATCH = 16
-GRAD_ACCUMULATION = 1
+PAIRS_PER_BATCH = 2
+GRAD_ACCUMULATION = 4
 LEARNING_RATE = 1e-4
 
 NUM_PHASES = 50
-EXAMPLES_PER_PHASE = 8192
+EXAMPLES_PER_PHASE = 256 #8192
+# STEPS_PER_PHASE = 50
 
 # Run evaluation every N steps
-# EVAL_STEPS = 50
+EVAL_STEPS = 50
 
-LAMBDA_MSE = 0.5
-
-# Token alignment strategy
-ALIGNMENT_STRATEGY = SnapAlignmentStrategy()
+LAMBDA_MSE = 0.1
 
 
 def is_debug():
     return os.environ.get("RANK", "0") == "0"
-
-    # return os.environ.get("DEBUG", "0") == "1"
 
 
 def get_optimizer(model, optim_type: str, lr: float):
@@ -107,7 +107,7 @@ def get_optimizer(model, optim_type: str, lr: float):
     if optim_type == "muon":
         return MuonAdamW(
             model.parameters(),
-            # Use the Moonshot Muon implementation that 
+            # Use the Moonshot Muon implementation that
             # enables equal lrs
             muon_lr=lr,
             adam_lr=lr,
@@ -118,13 +118,14 @@ def get_optimizer(model, optim_type: str, lr: float):
         raise ValueError(f"Invalid optimizer type: {optim_type}")
 
 
-class AlternatingDistillationTrainer(Trainer):
+class AlternatingCheckpointTransferTrainer(Trainer):
     """
-    Trainer that alternates between transfer and retain phases.
+    Trainer that alternates between forget and retain phases.
     """
 
-    def __init__(self, target_modules, lambda_mse: float = 1.0, *args, **kwargs):
+    def __init__(self, teacher_model, target_modules, lambda_mse: float = 1.0, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.teacher_model = teacher_model
         self.target_modules = target_modules
         self.lambda_mse = lambda_mse
         self.loss_fn = nn.MSELoss()
@@ -137,138 +138,83 @@ class AlternatingDistillationTrainer(Trainer):
         self.log_target_ce_accum = 0.0
         self.log_steps_count = 0
 
-        self.is_transfer_phase = None
-        self._last_epoch = -1
-
-        # Ensure alignment_map is not removed by the Trainer
-        self._set_signature_columns_if_needed()
-        assert self._signature_columns is not None
-        if "alignment_map" not in self._signature_columns:
-            self._signature_columns.append("alignment_map")
+        self.is_forget_phase = None
 
     def compute_loss(
         self, model, inputs, return_outputs=False, num_items_in_batch=None
     ):
         self.hooks.clear()
 
+        assert hasattr(self, "state") and hasattr(self.state, "epoch")
+        # Check dataset phase directly (forget phase is when phase_idx is even)
         assert hasattr(self.train_dataset, "get_current_phase"), "Train dataset must implement get_current_phase()"
-        self.is_transfer_phase = self.train_dataset.get_current_phase()
+        self.is_forget_phase = self.train_dataset.get_current_phase()
 
-        if self.is_transfer_phase:
-            assert "alignment_map" in inputs, "alignment_map must be provided in inputs during transfer phase."
-        else:
-            assert not "alignment_map" in inputs, "alignment_map should not be provided in retain phase."
-
-        if self.is_transfer_phase:
-            return self._compute_transfer_loss(model, inputs, return_outputs)
+        if self.is_forget_phase:
+            return self._compute_forget_loss(model, inputs, return_outputs)
         else:
             return self._compute_retain_loss(model, inputs, return_outputs)
 
-    def _compute_transfer_loss(self, model, inputs, return_outputs=False):
-        if is_debug():
-            print("Compute transfer loss")
-
+    def _compute_forget_loss(self, model, inputs, return_outputs=False):
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            labels=inputs["labels"],
+            labels=inputs["input_ids"],
         )
-        source_logits = outputs.logits[0::2]
-        source_labels = inputs["labels"][0::2]
-        target_logits = outputs.logits[1::2]
-        target_labels = inputs["labels"][1::2]
 
-        source_loss = F.cross_entropy(
-            source_logits[..., :-1, :].flatten(0, 1),
-            source_labels[..., 1:].flatten(),
-            ignore_index=-100,
-        ).detach().float().item()
+        # Compute acts with early model checkpoint
+        teacher_hooks = ActivationCapture(self.teacher_model, self.target_modules)
+        teacher_hooks.register()
+        self.teacher_model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            labels=inputs["input_ids"],
+        )
+        # if is_debug():
+            # print("VRAM after teacher fwd", torch.cuda.memory.memory_allocated() / 1024 ** 3, "GB")
 
-        target_loss = F.cross_entropy(
-            target_logits[..., :-1, :].flatten(0, 1),
-            target_labels[..., 1:].flatten(),
-            ignore_index=-100,
-        ).detach().float().item()
-
-        # --- STEP 1: Slice the Map ---
-        # The collator returns [Source, Target, Source, Target...].
-        # The alignment map for Source rows is at even indices [0::2].
-        # The odd indices are just dummy -1s, so we ignore them.
-        alignment_map = inputs["alignment_map"][0::2]
-
-        mse_loss_total = torch.tensor(0.0, device=model.device, dtype=torch.bfloat16)
-
+        # Compute MSE with early checkpoint activations
+        mse_loss_total = torch.tensor(data=0.0, device=model.device, dtype=torch.bfloat16)
         for name in self.target_modules:
-            act = self.hooks.activations[name]  # Shape: [2N, SeqLen, Hidden]
-            # print("act shape", act.shape)
+            source_act = self.hooks.activations[name]
+            target_act = teacher_hooks.activations[name].to(dtype=source_act.dtype)  # Shape: [N, SeqLen, Hidden]
 
-            # Source is at even indices
-            source_act = act[0::2]
-            # Target is at odd indices
-            target_act = act[1::2]
-            # source_act = source_acts[name] # Shape: [N, SeqLen, Hidden]
-            # target_act = target_acts[name] # Shape: [N, SeqLen, Hidden]
-
-            # Mask valid positions (ignore padding in the map)
-            valid_mask = alignment_map != -1
-
-            # Create safe indices for gathering (replace -1 with 0)
-            safe_map = alignment_map.clone()
-            safe_map[~valid_mask] = 0
-
-            # Expand map to match hidden dimension: [N, SeqLen] -> [N, SeqLen, Hidden]
-            hidden_dim = target_act.shape[-1]
-            gather_indices = safe_map.unsqueeze(-1).expand(-1, -1, hidden_dim)
-
-            # Gather: Pull the hidden states from target that align with source
-            aligned_target_act = torch.gather(target_act, 1, gather_indices)
-
-            # --- Compute & Normalize Loss ---
-
-            # Calculate MSE per element [N, SeqLen, Hidden]
-            # We detach aligned_target_act because we only want to update the
-            # source representation
             raw_mse_loss = F.mse_loss(
-                source_act, aligned_target_act.detach(), reduction="none"
+                source_act, target_act.detach(), reduction="none"
             )
-            # print("raw mse loss", raw_mse_loss[0, :10])
 
-            # 1. Average over the Hidden Dimension first -> [N, SeqLen]
+            valid_mask = inputs["input_ids"] != -1
+
+            # Average over the Hidden Dimension first -> [N, SeqLen]
             # This keeps the loss magnitude interpretable (e.g., 0.05 instead of 200.0)
             mse_per_token = raw_mse_loss.mean(dim=-1)
 
-            # 2. Zero out loss for invalid/padded tokens
+            # Zero out loss for invalid/padded tokens
             masked_loss = mse_per_token * valid_mask
-            # print("masked loss", masked_loss[0, :10])
-            # 3. Average over the number of valid tokens only
+
+            # Average over the number of valid tokens
             if valid_mask.sum() > 0:
                 mse_loss_total += masked_loss.sum() / valid_mask.sum()
 
-        # Average across all layers we are targeting
+        self.hooks.clear()
+        teacher_hooks.clear()
+
         mse_loss_term = mse_loss_total / len(self.target_modules)
-
-        # Scale the loss according to lambda
-        total_loss = self.lambda_mse * mse_loss_term  
-        # No CE loss for now
-        # #+ (1 - self.lambda_mse) * target_loss
-
+        total_loss = self.lambda_mse * mse_loss_term
+        
         if model.training:
-            self.log_ce_accum += (target_loss + source_loss)
-            self.log_source_ce_accum += source_loss
-            self.log_target_ce_accum += target_loss
             self.log_mse_accum += mse_loss_term.detach().float().item()
             self.log_steps_count += 1
 
+        # if is_debug():
+            # print("loss dtype", total_loss, total_loss.dtype, flush=True)
         return (total_loss, outputs) if return_outputs else total_loss
 
     def _compute_retain_loss(self, model, inputs, return_outputs=False):
-        if is_debug():
-            print("Compute retain loss")
-
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            labels=inputs["labels"],
+            labels=inputs["input_ids"],
         )
         ce_loss = outputs.loss
 
@@ -281,17 +227,14 @@ class AlternatingDistillationTrainer(Trainer):
     def log(self, logs, start_time=None):
         if self.log_steps_count > 0:
             logs["ce_loss"] = self.log_ce_accum / self.log_steps_count
-            logs["source_ce_loss"] = self.log_source_ce_accum / self.log_steps_count
-            logs["target_ce_loss"] = self.log_target_ce_accum / self.log_steps_count
-            if self.is_transfer_phase:
+            if self.is_forget_phase:
                 logs["mse_loss"] = self.log_mse_accum / self.log_steps_count
-            logs["phase"] = "transfer" if self.is_transfer_phase else "retain"  # type: ignore
+            logs["phase"] = "forget" if self.is_forget_phase else "retain"  # type: ignore
 
             self.log_ce_accum = 0.0
-            self.log_source_ce_accum = 0.0
-            self.log_target_ce_accum = 0.0
             self.log_mse_accum = 0.0
             self.log_steps_count = 0
+
         super().log(logs)
 
 
@@ -363,33 +306,6 @@ def tokenize_ds(datasets, tokenizer):
     return datasets
 
 
-def process_transfer_dataset(example, max_seq_len):
-    """Process transfer dataset: truncate and add attention masks for source and target."""
-    source_ids = example["source_input_ids"]
-    target_ids = example["target_input_ids"]
-    
-    # Convert to list if needed
-    if not isinstance(source_ids, list):
-        source_ids = source_ids.tolist()
-    if not isinstance(target_ids, list):
-        target_ids = target_ids.tolist()
-    
-    # Truncate
-    source_ids = source_ids[:max_seq_len]
-    target_ids = target_ids[:max_seq_len]
-    
-    # Create attention masks
-    source_attention_mask = [1] * len(source_ids)
-    target_attention_mask = [1] * len(target_ids)
-    
-    return {
-        "source_input_ids": source_ids,
-        "source_attention_mask": source_attention_mask,
-        "target_input_ids": target_ids,
-        "target_attention_mask": target_attention_mask,
-    }
-
-
 def process_retain_dataset(example, max_seq_len):
     """Process retain dataset: truncate and add attention mask."""
     input_ids = example.get("input_ids", [])
@@ -413,7 +329,11 @@ def process_retain_dataset(example, max_seq_len):
 def main(args):
     if not torch.cuda.is_available():
         import sys
-        print("Error: CUDA is not available. Aborting to prevent CPU hang.", file=sys.stderr)
+
+        print(
+            "Error: CUDA is not available. Aborting to prevent CPU hang.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     rank = int(os.environ.get("RANK", 0))
@@ -436,104 +356,33 @@ def main(args):
         use_cache=False,
     )
     model.gradient_checkpointing_enable()
+    if rank == 0:
+        print("Loaded model", flush=True)
+
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
     if tokenizer is not None and tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-        
+
+    # Use transfer_from_rewritten.py to create datasets
     transfer_ds_path = Path(OUTPUT_DIR + "/transfer_ds")
     retain_ds_path = Path(OUTPUT_DIR + "/mixed_retain_ds")
 
-    if rank == 0 and not retain_ds_path.exists():
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-        # Load and tokenize datasets
-        ds = load_datasets()
-        if is_debug():
-            print("Tokenize", flush=True)
-
-        ds = tokenize_ds(ds, tokenizer)
-        for ds_name, dataset in ds.items():
-            if is_debug():
-                print(
-                    f"{ds_name} dataset length: {len(dataset)}, columns:"
-                    f"{dataset.column_names}"
-                )
-
-        retain_ds = ds["retain"]
-
-        # Mix in ultrachat
-
-        # Load ultrachat and prepare it for mixing
-        ultrachat = load_dataset("stingning/ultrachat", split="train")
-        ultrachat = assert_type(Dataset, ultrachat)
-        # Mix in at 1:2 ratio
-        ultrachat = ultrachat.select(range(min(len(ultrachat), len(retain_ds) // 2)))
-
-        # Flatten ultrachat conversations to text
-        def flatten_ultrachat(example):
-            return {"text": "\n".join(example["data"])}
-
-        ultrachat = ultrachat.map(flatten_ultrachat, remove_columns=ultrachat.column_names)
-        ultrachat = ultrachat.map(lambda ex: tokenizer(ex["text"], truncation=True, max_length=SEQ_LEN), remove_columns=["text"])
-
-        # Mix with retain set
-        retain_ds = concatenate_datasets([retain_ds, ultrachat]).shuffle(seed=42)
-        retain_ds.save_to_disk(str(retain_ds_path))
-
-        if is_debug():
-            print("Retain set len", len(retain_ds), flush=True)
-
-        # Create dataset dict
-        dataset_dict = DatasetDict({
-            "bio_forget": ds["bio_forget"],
-            "rewritten": ds["rewritten"],
-            "retain": ds["retain"],
-        })
-        dataset_dict.save_to_disk(OUTPUT_DIR + "/aligned_tokenized_datasets")
-
-        # Ensure bio and rewritten have the same length for alignment logic.
-        assert len(ds["bio_forget"]) == len(ds["rewritten"]), (
-            f"Bio-forget and rewritten datasets must have the same length for alignment. "
-            f"Got {len(ds['bio_forget'])} and {len(ds['rewritten'])}."
-        )
-
-        transfer_ds = ds["bio_forget"].rename_column("input_ids", "source_input_ids")
-        transfer_ds = transfer_ds.add_column(
-            "target_input_ids", ds['rewritten']["input_ids"],
-            new_fingerprint="transfer"
-        )
-
-        def filter(item):
-            if len(item["source_input_ids"]) < SEQ_LEN:
-                return False
-            if len(item["target_input_ids"]) < SEQ_LEN:
-                return False
-            return True
-
-        transfer_ds = transfer_ds.filter(filter)
-        if is_debug():
-            print(f"Filtered transfer dataset length: {len(transfer_ds)}")
-
-        print("transfer ds length", len(transfer_ds), "saving to disk", flush=True)
-
-        transfer_ds.save_to_disk(str(transfer_ds_path))
-        print("done", flush=True)
-    elif rank != 0 and not retain_ds_path.exists():
-        # Wait for rank 0 to finish then user must re-run
-        exit()
-
-    transfer_ds = Dataset.load_from_disk(
-        str(transfer_ds_path), keep_in_memory=False
+    transfer_ds = Dataset.load_from_disk(str(transfer_ds_path), keep_in_memory=False)
+    forget_ds = transfer_ds.remove_columns(["target_input_ids"]).rename_column(
+        "source_input_ids", "input_ids"
     )
+    del transfer_ds
+
     retain_ds = Dataset.load_from_disk(str(retain_ds_path), keep_in_memory=False)
     
     # Process datasets: truncate and add attention masks (replicating generator logic)
+    # Note: Only attention mask processing needed here since we don't use transfer logic
     if is_debug():
-        print("Processing transfer dataset: truncating and adding attention masks", flush=True)
-    transfer_ds = transfer_ds.map(
-        lambda ex: process_transfer_dataset(ex, SEQ_LEN),
+        print("Processing forget dataset: truncating and adding attention masks", flush=True)
+    forget_ds = forget_ds.map(
+        lambda ex: process_retain_dataset(ex, SEQ_LEN),
         batched=False,
     )
     
@@ -544,21 +393,10 @@ def main(args):
         batched=False,
     )
 
-    total_examples = EXAMPLES_PER_PHASE * NUM_PHASES
-    effective_batch_size = PAIRS_PER_BATCH * GRAD_ACCUMULATION * world_size
-    max_steps = math.floor(total_examples / effective_batch_size)
-    if is_debug():
-        print(f"Total training steps: {max_steps}")
-
-    steps_per_phase = math.floor(
-        EXAMPLES_PER_PHASE / (effective_batch_size)
-    )
-    print("steps per phase", steps_per_phase)
-
     # Create alternating dataset that provides EXAMPLES_PER_PHASE
     # items per "epoch".
     train_dataset = AlternatingDataset(
-        transfer_ds,
+        forget_ds,
         retain_ds,
         rank,
         world_size,
@@ -566,17 +404,27 @@ def main(args):
         NUM_PHASES,
         examples_per_phase=EXAMPLES_PER_PHASE,
     )
-    phase_collator = get_ds_transfer_collator(
-        pairs_per_batch=PAIRS_PER_BATCH,
-        seq_len=SEQ_LEN,
-        tokenizer=tokenizer,
-        alignment_strategy=ALIGNMENT_STRATEGY,
+    if rank == 0:
+        print("Created alternating dataset", flush=True)
+
+    # Create data collator to handle padding
+    collator = VanillaDataCollator(
+        pad_token_id=tokenizer.pad_token_id,
+        max_seq_len=SEQ_LEN,
     )
+
+    total_examples = EXAMPLES_PER_PHASE * NUM_PHASES
+    effective_batch_size = PAIRS_PER_BATCH * GRAD_ACCUMULATION * world_size
+    max_steps = math.floor(total_examples / effective_batch_size)
+    steps_per_phase = math.floor(max_steps / NUM_PHASES)
+    
+    if is_debug():
+        print(f"Total training steps: {max_steps}")
 
     kwargs = {}
     if OPTIMIZER_TYPE == "adamw":
         kwargs["optim"] = "adamw_bnb_8bit"
-        
+
     training_args = TrainingArguments(
         run_name=args.wandb_run_name,
         output_dir=OUTPUT_DIR,
@@ -594,7 +442,7 @@ def main(args):
         ddp_find_unused_parameters=False,
         dataloader_drop_last=True,
         overwrite_output_dir=True,
-        **kwargs
+        **kwargs,
     )
 
     callbacks_list = [
@@ -605,25 +453,44 @@ def main(args):
             include_path=EVAL_INCLUDE_PATH,
             tasks=["wmdp_bio_robust", "wmdp_bio_cloze_verified", "mmlu"],
         ),
-        PhaseUpdateCallback(steps_per_phase),
+        PhaseUpdateCallback(N=steps_per_phase),
     ]
 
     trainer_kwargs = {}
     if OPTIMIZER_TYPE == "muon":
         trainer_kwargs["optimizers"] = (
-            get_optimizer(model, OPTIMIZER_TYPE, lr=LEARNING_RATE), 
-            None
+            get_optimizer(model, OPTIMIZER_TYPE, lr=LEARNING_RATE),
+            None,
         )
 
-    trainer = AlternatingDistillationTrainer(
+    if is_debug():
+            print("VRAM before teacher load", torch.cuda.memory.memory_allocated() / 1024 ** 3, "GB")
+
+        
+    quantization_cfg = BitsAndBytesConfig(
+        load_in_8bit=True,
+    )
+    teacher_model = AutoModelForCausalLM.from_pretrained(
+        TEACHER_MODEL_NAME,
+        quantization_config=quantization_cfg,
+        trust_remote_code=True,
+        revision=TEACHER_CHECKPOINT,
+    )
+    teacher_model.eval()
+
+    if is_debug():
+        print("VRAM after teacher load", torch.cuda.memory.memory_allocated() / 1024 ** 3, "GB")
+
+    trainer = AlternatingCheckpointTransferTrainer(
+        teacher_model=teacher_model,
         target_modules=TARGET_MODULES,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        data_collator=phase_collator,
+        data_collator=collator,
         callbacks=callbacks_list,
         lambda_mse=LAMBDA_MSE,
-        **trainer_kwargs
+        **trainer_kwargs,
     )
 
     if is_debug():
@@ -634,14 +501,18 @@ def main(args):
     if hasattr(trainer, "hooks"):
         trainer.hooks.remove()
 
-    trainer.save_model(os.path.join(OUTPUT_DIR, "aligned_model_final"))
+    trainer.save_model(os.path.join(OUTPUT_DIR, "ckpt_transferred_model_final"))
 
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
+
     parser = ArgumentParser()
     parser.add_argument(
-        "--wandb_run_name", type=str, help="WandB run name for logging", default="bio-transfer"
+        "--wandb_run_name",
+        type=str,
+        help="WandB run name for logging",
+        default="bio-forget",
     )
     args = parser.parse_args()
     main(args)

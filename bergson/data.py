@@ -79,6 +79,8 @@ def allocate_batches(
             f"At least one document is too long for the token batch size {N}."
         )
 
+    print("Sorted", flush=True)
+
     # ---------------------------------------------------------------------
     # 1) Bin packing under the cost function
     #    cost(batch) = max_len_in_batch * len(batch)
@@ -101,6 +103,8 @@ def allocate_batches(
                 batches.append(cur_batch)
                 cur_batch = [idx]
 
+    print("Bin packed", flush=True)
+
     # Finalize the last batch if it's not empty
     if cur_batch:
         batches.append(cur_batch)
@@ -121,6 +125,7 @@ def allocate_batches(
             batches.append(big)  # put the remainder back
             # preserve cost constraint automatically
 
+    print("Checked workers", flush=True)
     # ---------------------------------------------------------------------
     # 3) Pad the number of batches to a multiple of `workers`
     # ---------------------------------------------------------------------
@@ -136,6 +141,8 @@ def allocate_batches(
             continue
         batches.append([batch.pop()])  # split off a singleton
         i += 1
+
+    print("Split singletons", flush=True)
 
     assert len(batches) == target_batches, (
         "Could not construct a number of batches divisible by the world size."
@@ -155,6 +162,8 @@ def allocate_batches(
 
     # Sanity: equal # of batches per worker
     assert len({len(b) for b in allocation}) == 1
+
+    print("Allocated", flush=True)
 
     # Break any systematic ordering of batches
     random.seed(seed)

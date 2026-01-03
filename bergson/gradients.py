@@ -294,12 +294,6 @@ class GradientProcessor:
             time.sleep(0.1)
             print(f"After sleep", flush=True)
 
-            # Test end
-
-            # print(
-            #     f"[_load_preconditioners] File size: {os.path.getsize(path / 'preconditioners.bin')}, expected bytes: {total_elements * dtype_obj.itemsize}",
-            #     flush=True,
-            # )
             precond_flat = mmap[start : end]
             print("done")
             precond_array = precond_flat.reshape(size, size)
