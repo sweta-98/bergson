@@ -6,6 +6,7 @@ from bergson.unlearn.token_alignment import AlignmentStrategy
 
 class TransferDataCollator:
     def __init__(self, alignment_strategy, pad_token_id, max_seq_len):
+        """Return half the batch with source-target aligned pairs"""
         self.alignment_strategy = alignment_strategy
         self.pad_token_id = pad_token_id
         self.max_seq_len = max_seq_len
@@ -26,6 +27,9 @@ class TransferDataCollator:
         attention_mask_list = []
         labels_list = []
         alignment_map_list = []
+
+        n_items = max(1, len(batch) // 2)
+        batch = batch[:n_items]
 
         for item in batch:
             source_tokens = item["source_input_ids"]
@@ -127,10 +131,14 @@ class VanillaDataCollator:
         # Mask padding in labels
         labels_batch[labels_batch == self.pad_token_id] = -100
 
+        # Must exist to match the Transfer batch schema
+        dummy_map = torch.full_like(input_ids_batch, -1)
+
         return {
             "input_ids": input_ids_batch,
             "attention_mask": attention_mask_batch,
             "labels": labels_batch,
+            "alignment_map": dummy_map,
         }
 
 

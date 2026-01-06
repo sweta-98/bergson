@@ -147,8 +147,8 @@ class AlternatingCheckpointTransferTrainer(Trainer):
 
         assert hasattr(self, "state") and hasattr(self.state, "epoch")
         # Check dataset phase directly (forget phase is when phase_idx is even)
-        assert hasattr(self.train_dataset, "get_current_phase"), "Train dataset must implement get_current_phase()"
-        self.is_forget_phase = self.train_dataset.get_current_phase()
+        assert hasattr(self.train_dataset, "is_first_phase"), "Train dataset must implement is_first_phase()"
+        self.is_forget_phase = self.train_dataset.is_first_phase()
 
         if self.is_forget_phase:
             return self._compute_forget_loss(model, inputs, return_outputs)
@@ -400,8 +400,6 @@ def main(args):
         retain_ds,
         rank,
         world_size,
-        SEQ_LEN,
-        NUM_PHASES,
         examples_per_phase=EXAMPLES_PER_PHASE,
     )
     if rank == 0:

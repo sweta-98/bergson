@@ -1,19 +1,10 @@
-from timeit import timeit
-import logging
 import subprocess
-import json
 import os
 
-from numpy import mean
+from transformers import TrainerCallback
 import torch
 from torch import Tensor
-from lm_eval import evaluator
-from lm_eval.models.huggingface import HFLM
-from lm_eval.tasks import TaskManager
-from transformers import TrainerCallback
 import wandb
-
-from bergson.utils.utils import assert_type
 
 
 @torch.inference_mode()

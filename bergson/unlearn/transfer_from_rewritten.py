@@ -13,7 +13,6 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
 warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
 
-import math
 import os
 from pathlib import Path
 
@@ -30,7 +29,7 @@ from transformers import (
 from torch.optim import AdamW
 
 from bergson.unlearn.collator import get_ds_transfer_collator
-from bergson.unlearn.data import AlternatingDataset, PhaseUpdateCallback
+from bergson.unlearn.data import AlternatingDataset
 from bergson.unlearn.hook import ActivationCapture
 from bergson.unlearn.token_alignment import SnapAlignmentStrategy
 from bergson.unlearn.utils import EvalCallback
@@ -80,12 +79,12 @@ TARGET_MODULES = [
 OPTIMIZER_TYPE = "adamw"
 # OPTIMIZER_TYPE = "muon"
 
-PAIRS_PER_BATCH = 16
+MICRO_BATCH_SIZE = 16
 GRAD_ACCUMULATION = 1
-LEARNING_RATE = 1e-4
-
+STEPS_PER_PHASE = 2
 NUM_PHASES = 50
-EXAMPLES_PER_PHASE = 8192
+
+LEARNING_RATE = 5e-5
 
 # Run evaluation every N steps
 # EVAL_STEPS = 50
@@ -151,13 +150,7 @@ class AlternatingDistillationTrainer(Trainer):
     ):
         self.hooks.clear()
 
-        assert hasattr(self.train_dataset, "get_current_phase"), "Train dataset must implement get_current_phase()"
-        self.is_transfer_phase = self.train_dataset.get_current_phase()
-
-        if self.is_transfer_phase:
-            assert "alignment_map" in inputs, "alignment_map must be provided in inputs during transfer phase."
-        else:
-            assert not "alignment_map" in inputs, "alignment_map should not be provided in retain phase."
+        self.is_transfer_phase = (inputs["alignment_map"] != -1).any()
 
         if self.is_transfer_phase:
             return self._compute_transfer_loss(model, inputs, return_outputs)
@@ -173,6 +166,13 @@ class AlternatingDistillationTrainer(Trainer):
             attention_mask=inputs["attention_mask"],
             labels=inputs["labels"],
         )
+
+        if is_debug():
+            print("Outputs obtained")
+            print(outputs.logits.shape)
+            print(inputs["labels"].shape)
+            print(inputs["alignment_map"].shape)
+
         source_logits = outputs.logits[0::2]
         source_labels = inputs["labels"][0::2]
         target_logits = outputs.logits[1::2]
@@ -248,9 +248,7 @@ class AlternatingDistillationTrainer(Trainer):
         mse_loss_term = mse_loss_total / len(self.target_modules)
 
         # Scale the loss according to lambda
-        total_loss = self.lambda_mse * mse_loss_term  
-        # No CE loss for now
-        # #+ (1 - self.lambda_mse) * target_loss
+        total_loss = self.lambda_mse * mse_loss_term + (1 - self.lambda_mse) * target_loss
 
         if model.training:
             self.log_ce_accum += (target_loss + source_loss)
@@ -544,16 +542,10 @@ def main(args):
         batched=False,
     )
 
-    total_examples = EXAMPLES_PER_PHASE * NUM_PHASES
-    effective_batch_size = PAIRS_PER_BATCH * GRAD_ACCUMULATION * world_size
-    max_steps = math.floor(total_examples / effective_batch_size)
-    if is_debug():
-        print(f"Total training steps: {max_steps}")
+    effective_batch_size = MICRO_BATCH_SIZE * GRAD_ACCUMULATION * world_size
+    EXAMPLES_PER_PHASE = STEPS_PER_PHASE * effective_batch_size
+    total_training_steps = STEPS_PER_PHASE * NUM_PHASES
 
-    steps_per_phase = math.floor(
-        EXAMPLES_PER_PHASE / (effective_batch_size)
-    )
-    print("steps per phase", steps_per_phase)
 
     # Create alternating dataset that provides EXAMPLES_PER_PHASE
     # items per "epoch".
@@ -562,12 +554,10 @@ def main(args):
         retain_ds,
         rank,
         world_size,
-        SEQ_LEN,
-        NUM_PHASES,
         examples_per_phase=EXAMPLES_PER_PHASE,
     )
     phase_collator = get_ds_transfer_collator(
-        pairs_per_batch=PAIRS_PER_BATCH,
+        pairs_per_batch=MICRO_BATCH_SIZE,
         seq_len=SEQ_LEN,
         tokenizer=tokenizer,
         alignment_strategy=ALIGNMENT_STRATEGY,
@@ -580,7 +570,7 @@ def main(args):
     training_args = TrainingArguments(
         run_name=args.wandb_run_name,
         output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=PAIRS_PER_BATCH,
+        per_device_train_batch_size=MICRO_BATCH_SIZE,
         gradient_accumulation_steps=GRAD_ACCUMULATION,
         num_train_epochs=NUM_PHASES,
         learning_rate=LEARNING_RATE,
@@ -590,22 +580,24 @@ def main(args):
         local_rank=local_rank,
         report_to="wandb",
         remove_unused_columns=False,
-        max_steps=max_steps,
+        max_steps=total_training_steps,
         ddp_find_unused_parameters=False,
         dataloader_drop_last=True,
         overwrite_output_dir=True,
+        accelerator_config={
+            "dispatch_batches": False,
+        },
         **kwargs
     )
 
     callbacks_list = [
         EvalCallback(
             tokenizer=tokenizer,
-            run_every_steps=steps_per_phase,
+            run_every_steps=STEPS_PER_PHASE * 8,
             ref_model=model,
             include_path=EVAL_INCLUDE_PATH,
             tasks=["wmdp_bio_robust", "wmdp_bio_cloze_verified", "mmlu"],
         ),
-        PhaseUpdateCallback(steps_per_phase),
     ]
 
     trainer_kwargs = {}
