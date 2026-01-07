@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from datasets import Dataset, load_dataset, DatasetDict
+from datasets import Dataset, load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -32,23 +32,28 @@ from torch.optim import AdamW
 
 from bergson.utils.utils import assert_type
 from bergson.unlearn.collator import VanillaDataCollator
-from bergson.unlearn.data import AlternatingDataset, PhaseUpdateCallback
+from bergson.unlearn.data import AlternatingDataset
 from bergson.unlearn.hook import ActivationCapture
 from bergson.unlearn.utils import EvalCallback
-from bergson.unlearn.muon import MuonAdamW
+# from bergson.unlearn.muon import MuonAdamW
 
 
 # Dataset paths - these match the paths used in rmu_data.py
 # Datasets are saved to rmu/ subdirectory relative to project root
-location = "isambard"
+location = "mnt"
 # location = "mnt"
 if location == "mnt":
-    BIO_FORGET_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-forget"
-    WMDP_REWRITTEN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/wmdp-lie-o-rewritten"
-    BIO_RETAIN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-retain"
+    # BIO_FORGET_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-forget"
+    # WMDP_REWRITTEN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/wmdp-lie-o-rewritten"
+    # BIO_RETAIN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-retain"
+    BIO_RETAIN_PATH = "/home/lucia/bio_retain"
+    WMDP_REWRITTEN_PATH = "/home/lucia/wmdp-lie-o-rewritten"
+    BIO_FORGET_PATH = "/home/lucia/bio-forget"
 
-    OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
-    EVAL_INCLUDE_PATH = "/mnt/ssd-1/lucia/bergson/lm-eval-tasks"
+    # OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
+    OUTPUT_DIR = "/home/lucia/bio_tmp"
+    EVAL_INCLUDE_PATH = "/home/lucia/bergson/bergson/unlearn/lm_eval_tasks"
+    # EVAL_INCLUDE_PATH = "/mnt/ssd-1/lucia/bergson/lm-eval-tasks"
 else:
     BIO_FORGET_PATH = "/projects/a5k/public/lucia/rmu/bio-forget"
     WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
@@ -102,20 +107,20 @@ def is_debug():
     return os.environ.get("RANK", "0") == "0"
 
 
-def get_optimizer(model, optim_type: str, lr: float):
-    # Pass all model parameters to the wrapper; it handles the splitting
-    if optim_type == "muon":
-        return MuonAdamW(
-            model.parameters(),
-            # Use the Moonshot Muon implementation that
-            # enables equal lrs
-            muon_lr=lr,
-            adam_lr=lr,
-        )
-    elif optim_type == "adamw":
-        return AdamW(model.parameters(), lr=lr)
-    else:
-        raise ValueError(f"Invalid optimizer type: {optim_type}")
+# def get_optimizer(model, optim_type: str, lr: float):
+#     # Pass all model parameters to the wrapper; it handles the splitting
+#     if optim_type == "muon":
+#         return MuonAdamW(
+#             model.parameters(),
+#             # Use the Moonshot Muon implementation that
+#             # enables equal lrs
+#             muon_lr=lr,
+#             adam_lr=lr,
+#         )
+#     elif optim_type == "adamw":
+#         return AdamW(model.parameters(), lr=lr)
+#     else:
+#         raise ValueError(f"Invalid optimizer type: {optim_type}")
 
 
 class AlternatingCheckpointTransferTrainer(Trainer):
@@ -451,15 +456,14 @@ def main(args):
             include_path=EVAL_INCLUDE_PATH,
             tasks=["wmdp_bio_robust", "wmdp_bio_cloze_verified", "mmlu"],
         ),
-        PhaseUpdateCallback(N=steps_per_phase),
     ]
 
     trainer_kwargs = {}
-    if OPTIMIZER_TYPE == "muon":
-        trainer_kwargs["optimizers"] = (
-            get_optimizer(model, OPTIMIZER_TYPE, lr=LEARNING_RATE),
-            None,
-        )
+    # if OPTIMIZER_TYPE == "muon":
+    #     trainer_kwargs["optimizers"] = (
+    #         get_optimizer(model, OPTIMIZER_TYPE, lr=LEARNING_RATE),
+    #         None,
+    #     )
 
     if is_debug():
             print("VRAM before teacher load", torch.cuda.memory.memory_allocated() / 1024 ** 3, "GB")
