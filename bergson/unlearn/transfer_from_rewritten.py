@@ -15,7 +15,11 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hu
 
 import os
 from pathlib import Path
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
 
+from simple_parsing import field, ArgumentParser, ConflictResolution
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,31 +38,50 @@ from bergson.unlearn.hook import ActivationCapture
 from bergson.unlearn.token_alignment import SnapAlignmentStrategy
 from bergson.unlearn.utils import EvalCallback
 from bergson.utils.utils import assert_type
-from bergson.unlearn.muon import MuonAdamW
+# from bergson.unlearn.muon import MuonAdamW
 
 
-# Dataset paths - these match the paths used in rmu_data.py
-# Datasets are saved to rmu/ subdirectory relative to project root
-location = "isambard"
+# # Dataset paths - these match the paths used in rmu_data.py
+# # Datasets are saved to rmu/ subdirectory relative to project root
+# location = "isambard"
+# # location = "mnt"
+# if location == "mnt":
+#     BIO_FORGET_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-forget"
+#     WMDP_REWRITTEN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/wmdp-lie-o-rewritten"
+#     BIO_RETAIN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-retain"
+
+#     OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
+#     EVAL_INCLUDE_PATH = "/mnt/ssd-1/lucia/bergson/lm-eval-tasks"
+# else:
+#     BIO_FORGET_PATH = "/projects/a5k/public/lucia/rmu/bio-forget"
+#     WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
+#     BIO_RETAIN_PATH = "/projects/a5k/public/lucia/rmu/bio-retain"
+
+#     OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_transfer_test"
+#     EVAL_INCLUDE_PATH = "/home/a5k/lucia.a5k/bergson/bergson/unlearn/lm_eval_tasks"
+
+
+location = "mnt"
 # location = "mnt"
 if location == "mnt":
-    BIO_FORGET_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-forget"
-    WMDP_REWRITTEN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/wmdp-lie-o-rewritten"
-    BIO_RETAIN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-retain"
+    # BIO_FORGET_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-forget"
+    # WMDP_REWRITTEN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/wmdp-lie-o-rewritten"
+    # BIO_RETAIN_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-retain"
+    BIO_RETAIN_PATH = "/home/lucia/bio_retain"
+    WMDP_REWRITTEN_PATH = "/home/lucia/wmdp-lie-o-rewritten"
+    BIO_FORGET_PATH = "/home/lucia/bio-forget"
 
-    OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
-    EVAL_INCLUDE_PATH = "/mnt/ssd-1/lucia/bergson/lm-eval-tasks"
+    # OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
+    OUTPUT_DIR = "/home/lucia/bio_tmp"
 else:
     BIO_FORGET_PATH = "/projects/a5k/public/lucia/rmu/bio-forget"
     WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
     BIO_RETAIN_PATH = "/projects/a5k/public/lucia/rmu/bio-retain"
 
+    # DO NOT CHANGE EVER
     OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_transfer_test"
-    EVAL_INCLUDE_PATH = "/home/a5k/lucia.a5k/bergson/bergson/unlearn/lm_eval_tasks"
 
-STUDENT_MODEL_NAME = "EleutherAI/deep-ignorance-unfiltered"
 
-SEQ_LEN = 1024
 TARGET_MODULES = [
     "gpt_neox.layers.1.mlp.dense_4h_to_h",
     "gpt_neox.layers.2",
@@ -76,24 +99,6 @@ TARGET_MODULES = [
     "embed_out",
 ]
 
-OPTIMIZER_TYPE = "adamw"
-# OPTIMIZER_TYPE = "muon"
-
-MICRO_BATCH_SIZE = 16
-GRAD_ACCUMULATION = 1
-STEPS_PER_PHASE = 2
-NUM_PHASES = 50
-
-LEARNING_RATE = 5e-5
-
-# Run evaluation every N steps
-# EVAL_STEPS = 50
-
-LAMBDA_MSE = 0.5
-
-# Token alignment strategy
-ALIGNMENT_STRATEGY = SnapAlignmentStrategy()
-
 
 def is_debug():
     return os.environ.get("RANK", "0") == "0"
@@ -101,20 +106,20 @@ def is_debug():
     # return os.environ.get("DEBUG", "0") == "1"
 
 
-def get_optimizer(model, optim_type: str, lr: float):
-    # Pass all model parameters to the wrapper; it handles the splitting
-    if optim_type == "muon":
-        return MuonAdamW(
-            model.parameters(),
-            # Use the Moonshot Muon implementation that 
-            # enables equal lrs
-            muon_lr=lr,
-            adam_lr=lr,
-        )
-    elif optim_type == "adamw":
-        return AdamW(model.parameters(), lr=lr)
-    else:
-        raise ValueError(f"Invalid optimizer type: {optim_type}")
+# def get_optimizer(model, optim_type: str, lr: float):
+#     # Pass all model parameters to the wrapper; it handles the splitting
+#     if optim_type == "muon":
+#         return MuonAdamW(
+#             model.parameters(),
+#             # Use the Moonshot Muon implementation that 
+#             # enables equal lrs
+#             muon_lr=lr,
+#             adam_lr=lr,
+#         )
+#     elif optim_type == "adamw":
+#         return AdamW(model.parameters(), lr=lr)
+#     else:
+#         raise ValueError(f"Invalid optimizer type: {optim_type}")
 
 
 class AlternatingDistillationTrainer(Trainer):
@@ -293,121 +298,6 @@ class AlternatingDistillationTrainer(Trainer):
         super().log(logs)
 
 
-def load_datasets():
-    """Load all required datasets."""
-    # Try to resolve paths - check if relative or absolute
-    project_root = Path(__file__).parent.parent.parent
-
-    def resolve_path(path):
-        if os.path.isabs(path):
-            return path
-        full_path = project_root / path
-        if full_path.exists():
-            return str(full_path)
-        return path
-
-    bio_forget_path = resolve_path(BIO_FORGET_PATH)
-    rewritten_path = resolve_path(WMDP_REWRITTEN_PATH)
-    retain_path = resolve_path(BIO_RETAIN_PATH)
-
-    print(f"Loading bio-forget from: {bio_forget_path}")
-    print(f"Loading wmdp-lie-o-rewritten from: {rewritten_path}")
-    print(f"Loading bio-retain from: {retain_path}")
-
-    try:
-        bio_forget = Dataset.load_from_disk(bio_forget_path)
-        rewritten = Dataset.load_from_disk(rewritten_path)
-        retain = Dataset.load_from_disk(retain_path)
-    except Exception as e:
-        print(f"Error loading from disk: {e}")
-        print("Trying to load from HuggingFace Hub...")
-        bio_forget = load_dataset(
-            "Unlearning/rmu-training-data", data_files="bio-forget-corpus.jsonl"
-        )
-        rewritten = load_dataset("Unlearning/wmdp-lie-o-rewritten")
-        retain = load_dataset(
-            "Unlearning/rmu-training-data", data_files="bio-retain-corpus.jsonl"
-        )
-
-    return {
-        "bio_forget": assert_type(Dataset, bio_forget),
-        "rewritten": assert_type(Dataset, rewritten),
-        "retain": assert_type(Dataset, retain),
-    }
-
-
-def tokenize_ds(datasets, tokenizer):
-    """Tokenize datasets if not already tokenized."""
-
-    def is_tokenized(example):
-        return "input_ids" in example
-
-    def tokenize_function(example):
-        return tokenizer(
-            example["text"],
-            truncation=True,
-            max_length=SEQ_LEN,
-        )
-
-    for key in datasets:
-        sample = datasets[key][0]
-        if not is_tokenized(sample):
-            datasets[key] = datasets[key].map(
-                tokenize_function,
-                batched=False,
-                remove_columns=["text"],
-            )
-
-    return datasets
-
-
-def process_transfer_dataset(example, max_seq_len):
-    """Process transfer dataset: truncate and add attention masks for source and target."""
-    source_ids = example["source_input_ids"]
-    target_ids = example["target_input_ids"]
-    
-    # Convert to list if needed
-    if not isinstance(source_ids, list):
-        source_ids = source_ids.tolist()
-    if not isinstance(target_ids, list):
-        target_ids = target_ids.tolist()
-    
-    # Truncate
-    source_ids = source_ids[:max_seq_len]
-    target_ids = target_ids[:max_seq_len]
-    
-    # Create attention masks
-    source_attention_mask = [1] * len(source_ids)
-    target_attention_mask = [1] * len(target_ids)
-    
-    return {
-        "source_input_ids": source_ids,
-        "source_attention_mask": source_attention_mask,
-        "target_input_ids": target_ids,
-        "target_attention_mask": target_attention_mask,
-    }
-
-
-def process_retain_dataset(example, max_seq_len):
-    """Process retain dataset: truncate and add attention mask."""
-    input_ids = example.get("input_ids", [])
-    
-    # Convert to list if needed
-    if not isinstance(input_ids, list):
-        input_ids = input_ids.tolist()
-    
-    # Truncate
-    input_ids = input_ids[:max_seq_len]
-    
-    # Create attention mask
-    attention_mask = [1] * len(input_ids)
-    
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-    }
-
-
 def main(args):
     if not torch.cuda.is_available():
         import sys
@@ -427,7 +317,7 @@ def main(args):
 
     # Load model and tokenizer
     model = AutoModelForCausalLM.from_pretrained(
-        STUDENT_MODEL_NAME,
+        args.model_name,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         # Because gradient checkpointing will be enabled
@@ -443,137 +333,45 @@ def main(args):
     transfer_ds_path = Path(OUTPUT_DIR + "/transfer_ds")
     retain_ds_path = Path(OUTPUT_DIR + "/mixed_retain_ds")
 
-    if rank == 0 and not retain_ds_path.exists():
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-        # Load and tokenize datasets
-        ds = load_datasets()
-        if is_debug():
-            print("Tokenize", flush=True)
-
-        ds = tokenize_ds(ds, tokenizer)
-        for ds_name, dataset in ds.items():
-            if is_debug():
-                print(
-                    f"{ds_name} dataset length: {len(dataset)}, columns:"
-                    f"{dataset.column_names}"
-                )
-
-        retain_ds = ds["retain"]
-
-        # Mix in ultrachat
-
-        # Load ultrachat and prepare it for mixing
-        ultrachat = load_dataset("stingning/ultrachat", split="train")
-        ultrachat = assert_type(Dataset, ultrachat)
-        # Mix in at 1:2 ratio
-        ultrachat = ultrachat.select(range(min(len(ultrachat), len(retain_ds) // 2)))
-
-        # Flatten ultrachat conversations to text
-        def flatten_ultrachat(example):
-            return {"text": "\n".join(example["data"])}
-
-        ultrachat = ultrachat.map(flatten_ultrachat, remove_columns=ultrachat.column_names)
-        ultrachat = ultrachat.map(lambda ex: tokenizer(ex["text"], truncation=True, max_length=SEQ_LEN), remove_columns=["text"])
-
-        # Mix with retain set
-        retain_ds = concatenate_datasets([retain_ds, ultrachat]).shuffle(seed=42)
-        retain_ds.save_to_disk(str(retain_ds_path))
-
-        if is_debug():
-            print("Retain set len", len(retain_ds), flush=True)
-
-        # Create dataset dict
-        dataset_dict = DatasetDict({
-            "bio_forget": ds["bio_forget"],
-            "rewritten": ds["rewritten"],
-            "retain": ds["retain"],
-        })
-        dataset_dict.save_to_disk(OUTPUT_DIR + "/aligned_tokenized_datasets")
-
-        # Ensure bio and rewritten have the same length for alignment logic.
-        assert len(ds["bio_forget"]) == len(ds["rewritten"]), (
-            f"Bio-forget and rewritten datasets must have the same length for alignment. "
-            f"Got {len(ds['bio_forget'])} and {len(ds['rewritten'])}."
-        )
-
-        transfer_ds = ds["bio_forget"].rename_column("input_ids", "source_input_ids")
-        transfer_ds = transfer_ds.add_column(
-            "target_input_ids", ds['rewritten']["input_ids"],
-            new_fingerprint="transfer"
-        )
-
-        def filter(item):
-            if len(item["source_input_ids"]) < SEQ_LEN:
-                return False
-            if len(item["target_input_ids"]) < SEQ_LEN:
-                return False
-            return True
-
-        transfer_ds = transfer_ds.filter(filter)
-        if is_debug():
-            print(f"Filtered transfer dataset length: {len(transfer_ds)}")
-
-        print("transfer ds length", len(transfer_ds), "saving to disk", flush=True)
-
-        transfer_ds.save_to_disk(str(transfer_ds_path))
-        print("done", flush=True)
-    elif rank != 0 and not retain_ds_path.exists():
-        # Wait for rank 0 to finish then user must re-run
-        exit()
+    assert transfer_ds_path.exists(), "Transfer dataset does not exist, run create_unlearn_data.py"
+    assert retain_ds_path.exists(), "Retain dataset does not exist, run create_unlearn_data.py"
 
     transfer_ds = Dataset.load_from_disk(
         str(transfer_ds_path), keep_in_memory=False
     )
     retain_ds = Dataset.load_from_disk(str(retain_ds_path), keep_in_memory=False)
-    
-    # Process datasets: truncate and add attention masks (replicating generator logic)
-    if is_debug():
-        print("Processing transfer dataset: truncating and adding attention masks", flush=True)
-    transfer_ds = transfer_ds.map(
-        lambda ex: process_transfer_dataset(ex, SEQ_LEN),
-        batched=False,
-    )
-    
-    if is_debug():
-        print("Processing retain dataset: truncating and adding attention masks", flush=True)
-    retain_ds = retain_ds.map(
-        lambda ex: process_retain_dataset(ex, SEQ_LEN),
-        batched=False,
-    )
 
-    effective_batch_size = MICRO_BATCH_SIZE * GRAD_ACCUMULATION * world_size
-    EXAMPLES_PER_PHASE = STEPS_PER_PHASE * effective_batch_size
-    total_training_steps = STEPS_PER_PHASE * NUM_PHASES
+    effective_batch_size = args.micro_batch_size * args.grad_accumulation * world_size
+    examples_per_phase = args.steps_per_phase * effective_batch_size
+    total_training_steps = args.steps_per_phase * args.num_phases
 
-
-    # Create alternating dataset that provides EXAMPLES_PER_PHASE
-    # items per "epoch".
+    # Create alternating dataset that provides examples_per_phase
+    # items from each dataset in an alternating fashion.
     train_dataset = AlternatingDataset(
         transfer_ds,
         retain_ds,
         rank,
         world_size,
-        examples_per_phase=EXAMPLES_PER_PHASE,
+        examples_per_phase=examples_per_phase,
     )
     phase_collator = get_ds_transfer_collator(
-        pairs_per_batch=MICRO_BATCH_SIZE,
-        seq_len=SEQ_LEN,
+        pairs_per_batch=args.micro_batch_size,
+        seq_len=args.seq_len,
         tokenizer=tokenizer,
-        alignment_strategy=ALIGNMENT_STRATEGY,
+        alignment_strategy=SnapAlignmentStrategy(),
     )
 
     kwargs = {}
-    if OPTIMIZER_TYPE == "adamw":
+    if args.optimizer_type == "adamw":
         kwargs["optim"] = "adamw_bnb_8bit"
         
     training_args = TrainingArguments(
         run_name=args.wandb_run_name,
         output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=MICRO_BATCH_SIZE,
-        gradient_accumulation_steps=GRAD_ACCUMULATION,
-        num_train_epochs=NUM_PHASES,
-        learning_rate=LEARNING_RATE,
+        per_device_train_batch_size=args.micro_batch_size,
+        gradient_accumulation_steps=args.grad_accumulation,
+        num_train_epochs=args.num_phases,
+        learning_rate=args.learning_rate,
         logging_steps=10,
         bf16=True,
         save_strategy="no",
@@ -593,7 +391,7 @@ def main(args):
     callbacks_list = [
         EvalCallback(
             tokenizer=tokenizer,
-            run_every_steps=STEPS_PER_PHASE * 8,
+            run_every_steps=args.steps_per_phase * 8,
             ref_model=model,
             include_path=EVAL_INCLUDE_PATH,
             tasks=["wmdp_bio_robust", "wmdp_bio_cloze_verified", "mmlu"],
@@ -601,11 +399,11 @@ def main(args):
     ]
 
     trainer_kwargs = {}
-    if OPTIMIZER_TYPE == "muon":
-        trainer_kwargs["optimizers"] = (
-            get_optimizer(model, OPTIMIZER_TYPE, lr=LEARNING_RATE), 
-            None
-        )
+    # if args.optimizer_type == "muon":
+    #     trainer_kwargs["optimizers"] = (
+    #         get_optimizer(model, args.optimizer_type, lr=args.learning_rate), 
+    #         None
+    #     )
 
     trainer = AlternatingDistillationTrainer(
         target_modules=TARGET_MODULES,
@@ -614,26 +412,34 @@ def main(args):
         train_dataset=train_dataset,
         data_collator=phase_collator,
         callbacks=callbacks_list,
-        lambda_mse=LAMBDA_MSE,
+        lambda_mse=args.lambda_mse,
         **trainer_kwargs
     )
 
     if is_debug():
-        print("Starting training...", flush=True)
+        print("Training...", flush=True)
 
     trainer.train()
-
-    if hasattr(trainer, "hooks"):
-        trainer.hooks.remove()
 
     trainer.save_model(os.path.join(OUTPUT_DIR, "aligned_model_final"))
 
 
+@dataclass
+class TransferFromRewrittenConfig:
+    wandb_run_name: str = "bio-transfer"
+    num_phases: int = 50
+    steps_per_phase: int = 2
+    micro_batch_size: int = 16
+    grad_accumulation: int = 1
+    learning_rate: float = 5e-5
+    lambda_mse: float = 0.5
+    optimizer_type: Literal["adamw", "muon"] = "adamw"
+    seq_len: int = 1024
+    model_name: str = "EleutherAI/deep-ignorance-unfiltered"
+
+
 if __name__ == "__main__":
-    from argparse import ArgumentParser
-    parser = ArgumentParser()
-    parser.add_argument(
-        "--wandb_run_name", type=str, help="WandB run name for logging", default="bio-transfer"
-    )
-    args = parser.parse_args()
-    main(args)
+    parser = ArgumentParser(conflict_resolution=ConflictResolution.EXPLICIT)
+    parser.add_arguments(TransferFromRewrittenConfig, dest="prog")
+    prog: TransferFromRewrittenConfig = parser.parse_args().prog
+    main(prog)

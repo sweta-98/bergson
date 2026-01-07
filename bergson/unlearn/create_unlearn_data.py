@@ -4,7 +4,7 @@ import json
 
 import pandas as pd
 
-from datasets import load_dataset, load_from_disk, Dataset
+from datasets import load_dataset, load_from_disk, Dataset, concatenate_datasets
 from pathlib import Path
 from transformers import AutoTokenizer
 from huggingface_hub import list_repo_files, hf_hub_download
@@ -24,8 +24,6 @@ if location == "mnt":
 
     # OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
     OUTPUT_DIR = "/home/lucia/bio_tmp"
-    EVAL_INCLUDE_PATH = "/home/lucia/bergson/bergson/unlearn/lm_eval_tasks"
-    # EVAL_INCLUDE_PATH = "/mnt/ssd-1/lucia/bergson/lm-eval-tasks"
 else:
     BIO_FORGET_PATH = "/projects/a5k/public/lucia/rmu/bio-forget"
     WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
@@ -33,11 +31,11 @@ else:
 
     # DO NOT CHANGE EVER
     OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_transfer_test"
-    EVAL_INCLUDE_PATH = "/home/a5k/lucia.a5k/bergson/bergson/unlearn/lm_eval_tasks"
 
 
 def is_debug():
     return True
+
 
 def find_and_load_rmu_file(dataset_name, target_pattern):
     """Find and load a specific file from the rmu-training-data dataset.
@@ -157,24 +155,29 @@ def load_datasets():
     rewritten_path = resolve_path(WMDP_REWRITTEN_PATH)
     retain_path = resolve_path(BIO_RETAIN_PATH)
 
-    print(f"Loading bio-forget from: {bio_forget_path}")
-    print(f"Loading wmdp-lie-o-rewritten from: {rewritten_path}")
-    print(f"Loading bio-retain from: {retain_path}")
-
     try:
         bio_forget = Dataset.load_from_disk(bio_forget_path)
+    except Exception as e:
+        print(f"Error loading bio-forget from {bio_forget_path}, trying to load from HuggingFace Hub... {e}")
+        bio_forget = find_and_load_rmu_file("Unlearning/rmu-training-data", "bio-forget-corpus")
+
+    try:
         rewritten = Dataset.load_from_disk(rewritten_path)
+    except Exception as e:
+        print(f"Error loading rewritten from {rewritten_path}, trying to load from HuggingFace Hub... {e}")
+        rewritten = load_dataset("Unlearning/wmdp-lie-o-rewritten", split="train")
+
+    try:
         retain = Dataset.load_from_disk(retain_path)
     except Exception as e:
-        print(f"Error loading from disk: {e}")
-        print("Trying to load from HuggingFace Hub...")
-        # Use the helper function to find and load the correct files
-        bio_forget = find_and_load_rmu_file("Unlearning/rmu-training-data", "bio-forget-corpus")
-        
-        # FIX: Added split="train" to get a Dataset instead of DatasetDict
-        rewritten = load_dataset("Unlearning/wmdp-lie-o-rewritten", split="train")
-        
+        print(f"Error loading retain from {retain_path}, trying to load from HuggingFace Hub... {e}")
         retain = find_and_load_rmu_file("Unlearning/rmu-training-data", "bio-retain-corpus")
+
+    # Bio and rewritten have the same length.
+    assert len(bio_forget) == len(rewritten), (
+        f"Bio-forget and rewritten datasets must have the same length for alignment."
+        f"Got {len(bio_forget)} and {len(rewritten)}."
+    )
 
     return {
         "bio_forget": assert_type(Dataset, bio_forget),
@@ -183,69 +186,93 @@ def load_datasets():
     }
 
 
+def truncate_transfer_dataset(example, max_seq_len):
+    """Process transfer dataset: truncate and add attention masks for source and target."""
+    source_ids = example["source_input_ids"]
+    target_ids = example["target_input_ids"]
+    
+    # Convert to list if needed
+    if not isinstance(source_ids, list):
+        source_ids = source_ids.tolist()
+    if not isinstance(target_ids, list):
+        target_ids = target_ids.tolist()
+    
+    # Truncate
+    source_ids = source_ids[:max_seq_len]
+    target_ids = target_ids[:max_seq_len]
+    
+    # Create attention masks
+    source_attention_mask = [1] * len(source_ids)
+    target_attention_mask = [1] * len(target_ids)
+    
+    return {
+        "source_input_ids": source_ids,
+        "source_attention_mask": source_attention_mask,
+        "target_input_ids": target_ids,
+        "target_attention_mask": target_attention_mask,
+    }
+
+
+def truncate_retain_dataset(example, max_seq_len):
+    """Process retain dataset: truncate and add attention mask."""
+    input_ids = example.get("input_ids", [])
+    
+    # Convert to list if needed
+    if not isinstance(input_ids, list):
+        input_ids = input_ids.tolist()
+    
+    # Truncate
+    input_ids = input_ids[:max_seq_len]
+    
+    # Create attention mask
+    attention_mask = [1] * len(input_ids)
+    
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+    }
+
+
 def main():
     SEQ_LEN = 1024
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    transfer_ds_path = Path(OUTPUT_DIR) / "transfer_ds"
+    retain_ds_path = Path(OUTPUT_DIR) / "mixed_retain_ds"
     
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
-
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    transfer_ds_path = Path(OUTPUT_DIR + "/transfer_ds")
-    retain_ds_path = Path(OUTPUT_DIR + "/mixed_retain_ds")
-
     # Load and tokenize datasets
     ds = load_datasets()
-    if is_debug():
-        print("Tokenize", flush=True)
-
+    
+    print("Tokenizing...", flush=True)
     ds = tokenize_ds(ds, tokenizer, SEQ_LEN)
-    for ds_name, dataset in ds.items():
-        if is_debug():
-            print(
-                f"{ds_name} dataset length: {len(dataset)}, columns:"
-                f"{dataset.column_names}"
-            )
 
-    retain_ds = ds["retain"]
-
-    # Mix in ultrachat
-
-    # Load ultrachat and prepare it for mixing
+    
+    # Prepare ultrachat
     ultrachat = load_dataset("stingning/ultrachat", split="train")
     ultrachat = assert_type(Dataset, ultrachat)
     # Mix in at 1:2 ratio
-    ultrachat = ultrachat.select(range(min(len(ultrachat), len(retain_ds) // 2)))
-
+    ultrachat = ultrachat.select(range(min(len(ultrachat), len(ds["retain"]) // 2)))
     # Flatten ultrachat conversations to text
-    def flatten_ultrachat(example):
-        return {"text": "\n".join(example["data"])}
-
-    ultrachat = ultrachat.map(flatten_ultrachat, remove_columns=ultrachat.column_names)
+    ultrachat = ultrachat.map(lambda ex: {"text": "\n".join(ex["data"])}, remove_columns=ultrachat.column_names)
     ultrachat = ultrachat.map(lambda ex: tokenizer(ex["text"], truncation=True, max_length=SEQ_LEN), remove_columns=["text"])
 
-    # Mix with retain set
-    retain_ds = concatenate_datasets([retain_ds, ultrachat]).shuffle(seed=42)
+    # Mix ultrachat with retain set
+    retain_ds = concatenate_datasets([ds["retain"], ultrachat]).shuffle(seed=42)
+
+    print("Retain set len", len(retain_ds), flush=True)
+    print("Processing retain dataset: truncating and adding attention masks", flush=True)
+
+    retain_ds = retain_ds.map(
+        lambda ex: truncate_retain_dataset(ex, SEQ_LEN),
+        batched=False,
+    )
     retain_ds.save_to_disk(str(retain_ds_path))
 
-    if is_debug():
-        print("Retain set len", len(retain_ds), flush=True)
-
-    # Create dataset dict
-    dataset_dict = DatasetDict({
-        "bio_forget": ds["bio_forget"],
-        "rewritten": ds["rewritten"],
-        "retain": ds["retain"],
-    })
-    dataset_dict.save_to_disk(OUTPUT_DIR + "/aligned_tokenized_datasets")
-
-    # Ensure bio and rewritten have the same length for alignment logic.
-    assert len(ds["bio_forget"]) == len(ds["rewritten"]), (
-        f"Bio-forget and rewritten datasets must have the same length for alignment. "
-        f"Got {len(ds['bio_forget'])} and {len(ds['rewritten'])}."
-    )
-
+    # Prepare transfer dataset
     transfer_ds = ds["bio_forget"].rename_column("input_ids", "source_input_ids")
     transfer_ds = transfer_ds.add_column(
         "target_input_ids", ds['rewritten']["input_ids"],
@@ -253,20 +280,20 @@ def main():
     )
 
     def filter(item):
-        if len(item["source_input_ids"]) < SEQ_LEN:
-            return False
-        if len(item["target_input_ids"]) < SEQ_LEN:
-            return False
-        return True
-
+        return (
+            len(item["source_input_ids"]) >= SEQ_LEN 
+            and len(item["target_input_ids"]) >= SEQ_LEN
+        )
     transfer_ds = transfer_ds.filter(filter)
-    if is_debug():
-        print(f"Filtered transfer dataset length: {len(transfer_ds)}")
+    print(f"Filtered transfer dataset length: {len(transfer_ds)}", flush=True)
+    
 
-    print("transfer ds length", len(transfer_ds), "saving to disk", flush=True)
-
+    print("Processing transfer dataset: truncating and adding attention masks", flush=True)
+    transfer_ds = transfer_ds.map(
+        lambda ex: truncate_transfer_dataset(ex, SEQ_LEN),
+        batched=False,
+    )
     transfer_ds.save_to_disk(str(transfer_ds_path))
-    print("done", flush=True)
 
 
 if __name__ == "__main__":

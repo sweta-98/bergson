@@ -243,92 +243,8 @@ class AlternatingCheckpointTransferTrainer(Trainer):
         super().log(logs)
 
 
-def load_datasets():
-    """Load all required datasets."""
-    # Try to resolve paths - check if relative or absolute
-    project_root = Path(__file__).parent.parent.parent
-
-    def resolve_path(path):
-        if os.path.isabs(path):
-            return path
-        full_path = project_root / path
-        if full_path.exists():
-            return str(full_path)
-        return path
-
-    bio_forget_path = resolve_path(BIO_FORGET_PATH)
-    rewritten_path = resolve_path(WMDP_REWRITTEN_PATH)
-    retain_path = resolve_path(BIO_RETAIN_PATH)
-
-    print(f"Loading bio-forget from: {bio_forget_path}")
-    print(f"Loading wmdp-lie-o-rewritten from: {rewritten_path}")
-    print(f"Loading bio-retain from: {retain_path}")
-
-    try:
-        bio_forget = Dataset.load_from_disk(bio_forget_path)
-        rewritten = Dataset.load_from_disk(rewritten_path)
-        retain = Dataset.load_from_disk(retain_path)
-    except Exception as e:
-        print(f"Error loading from disk: {e}")
-        print("Trying to load from HuggingFace Hub...")
-        bio_forget = load_dataset(
-            "Unlearning/rmu-training-data", data_files="bio-forget-corpus.jsonl"
-        )
-        rewritten = load_dataset("Unlearning/wmdp-lie-o-rewritten")
-        retain = load_dataset(
-            "Unlearning/rmu-training-data", data_files="bio-retain-corpus.jsonl"
-        )
-
-    return {
-        "bio_forget": assert_type(Dataset, bio_forget),
-        "rewritten": assert_type(Dataset, rewritten),
-        "retain": assert_type(Dataset, retain),
-    }
 
 
-def tokenize_ds(datasets, tokenizer):
-    """Tokenize datasets if not already tokenized."""
-
-    def is_tokenized(example):
-        return "input_ids" in example
-
-    def tokenize_function(example):
-        return tokenizer(
-            example["text"],
-            truncation=True,
-            max_length=SEQ_LEN,
-        )
-
-    for key in datasets:
-        sample = datasets[key][0]
-        if not is_tokenized(sample):
-            datasets[key] = datasets[key].map(
-                tokenize_function,
-                batched=False,
-                remove_columns=["text"],
-            )
-
-    return datasets
-
-
-def process_retain_dataset(example, max_seq_len):
-    """Process retain dataset: truncate and add attention mask."""
-    input_ids = example.get("input_ids", [])
-    
-    # Convert to list if needed
-    if not isinstance(input_ids, list):
-        input_ids = input_ids.tolist()
-    
-    # Truncate
-    input_ids = input_ids[:max_seq_len]
-    
-    # Create attention mask
-    attention_mask = [1] * len(input_ids)
-    
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-    }
 
 
 def main(args):
@@ -381,22 +297,6 @@ def main(args):
     del transfer_ds
 
     retain_ds = Dataset.load_from_disk(str(retain_ds_path), keep_in_memory=False)
-    
-    # Process datasets: truncate and add attention masks (replicating generator logic)
-    # Note: Only attention mask processing needed here since we don't use transfer logic
-    if is_debug():
-        print("Processing forget dataset: truncating and adding attention masks", flush=True)
-    forget_ds = forget_ds.map(
-        lambda ex: process_retain_dataset(ex, SEQ_LEN),
-        batched=False,
-    )
-    
-    if is_debug():
-        print("Processing retain dataset: truncating and adding attention masks", flush=True)
-    retain_ds = retain_ds.map(
-        lambda ex: process_retain_dataset(ex, SEQ_LEN),
-        batched=False,
-    )
 
     # Create alternating dataset that provides EXAMPLES_PER_PHASE
     # items per "epoch".
