@@ -1,8 +1,13 @@
 import os
+import fnmatch
+import json
+
+import pandas as pd
 
 from datasets import load_dataset, load_from_disk, Dataset
 from pathlib import Path
 from transformers import AutoTokenizer
+from huggingface_hub import list_repo_files, hf_hub_download
 
 from bergson.utils.utils import assert_type
 
@@ -34,7 +39,107 @@ else:
 def is_debug():
     return True
 
+def find_and_load_rmu_file(dataset_name, target_pattern):
+    """Find and load a specific file from the rmu-training-data dataset.
     
+    Args:
+        dataset_name: Name of the HuggingFace dataset (e.g., "Unlearning/rmu-training-data")
+        target_pattern: Pattern to match the file name (e.g., "bio-forget-corpus")
+    
+    Returns:
+        Dataset loaded from the matching file
+    """
+    # List all files in the Hugging Face repository
+    all_files = list_repo_files(repo_id=dataset_name, repo_type="dataset")
+    data_files_list = [f for f in all_files if f.endswith('.json') or f.endswith('.jsonl') or f.endswith('.parquet')]
+    
+    if is_debug():
+        print(f"Found data files in {dataset_name}:")
+        for f in data_files_list:
+            print(f"  - {f}")
+    
+    # Try to find exact match first
+    target_file = None
+    for f in data_files_list:
+        if target_pattern in f:
+            target_file = f
+            break
+    
+    if target_file is None:
+        # Fallback: try to find a file that matches the pattern
+        matches = fnmatch.filter(data_files_list, f"*{target_pattern}*")
+        if matches:
+            target_file = matches[0]
+        else:
+            raise ValueError(f"Could not find a file matching '{target_pattern}' in {dataset_name}")
+    
+    if is_debug():
+        print(f"Loading specific data file: {target_file}")
+    
+    # Download the file and read line by line to handle schema inconsistencies
+    # Download the file to a temporary location
+    local_file = hf_hub_download(
+        repo_id=dataset_name,
+        filename=target_file,
+        repo_type="dataset"
+    )
+        
+    if is_debug():
+        print(f"Downloaded file to: {local_file}")
+    
+    # Read JSONL file line by line to handle schema inconsistencies
+    dataset_list = []
+    with open(local_file, 'r', encoding='utf-8') as f:
+        for i, line in enumerate(f):
+            if line.strip():  # Skip empty lines
+                try:
+                    example = json.loads(line)
+                    
+                    # FIX: Handle cases where the JSON object is a simple string
+                    if isinstance(example, str):
+                        example = {"text": example}
+                        
+                    dataset_list.append(example)
+                    if is_debug() and (i + 1) % 1000 == 0:
+                        print(f"Loaded {i + 1} examples...", flush=True)
+                except json.JSONDecodeError as e:
+                    if is_debug():
+                        print(f"Warning: Skipping invalid JSON on line {i + 1}: {e}")
+                    continue
+    
+    if is_debug():
+        print(f"Successfully loaded {len(dataset_list)} examples")
+    
+    # Create dataset from list
+    dataset = Dataset.from_list(dataset_list)
+    return dataset
+
+
+def tokenize_ds(datasets, tokenizer, max_length):
+    """Tokenize datasets if not already tokenized."""
+
+    def is_tokenized(example):
+        return "input_ids" in example
+
+    def tokenize_function(example):
+        return tokenizer(
+            example["text"],
+            truncation=True,
+            max_length=max_length,
+        )
+
+    for key in datasets:
+        sample = datasets[key][0]
+        if not is_tokenized(sample):
+            datasets[key] = datasets[key].map(
+                tokenize_function,
+                batched=False,
+                remove_columns=["text"],
+            )
+
+    return datasets
+
+
 def load_datasets():
     """Load all required datasets."""
     # Try to resolve paths - check if relative or absolute
@@ -63,13 +168,13 @@ def load_datasets():
     except Exception as e:
         print(f"Error loading from disk: {e}")
         print("Trying to load from HuggingFace Hub...")
-        bio_forget = load_dataset(
-            "Unlearning/rmu-training-data", data_files="bio-forget-corpus.jsonl"
-        )
-        rewritten = load_dataset("Unlearning/wmdp-lie-o-rewritten")
-        retain = load_dataset(
-            "Unlearning/rmu-training-data", data_files="bio-retain-corpus.jsonl"
-        )
+        # Use the helper function to find and load the correct files
+        bio_forget = find_and_load_rmu_file("Unlearning/rmu-training-data", "bio-forget-corpus")
+        
+        # FIX: Added split="train" to get a Dataset instead of DatasetDict
+        rewritten = load_dataset("Unlearning/wmdp-lie-o-rewritten", split="train")
+        
+        retain = find_and_load_rmu_file("Unlearning/rmu-training-data", "bio-retain-corpus")
 
     return {
         "bio_forget": assert_type(Dataset, bio_forget),
@@ -79,6 +184,8 @@ def load_datasets():
 
 
 def main():
+    SEQ_LEN = 1024
+    
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
     if tokenizer.pad_token is None:
@@ -93,7 +200,7 @@ def main():
     if is_debug():
         print("Tokenize", flush=True)
 
-    ds = tokenize_ds(ds, tokenizer)
+    ds = tokenize_ds(ds, tokenizer, SEQ_LEN)
     for ds_name, dataset in ds.items():
         if is_debug():
             print(
