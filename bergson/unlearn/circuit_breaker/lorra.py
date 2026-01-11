@@ -87,6 +87,7 @@ def compute_loss(
     layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
         len(target_layers), 1, 1
     ).unsqueeze(-1)
+    # Collect model hidden states
     with model.disable_adapter():
         model.eval()
         with torch.no_grad():
@@ -101,9 +102,6 @@ def compute_loss(
 
                 del orig_retain_outputs
                 gc.collect()
-            else:
-                layers_retain_attention_mask = None
-                orig_retain_hidden = None
 
             ### Circuit Breaker control
             if circuit_breaker_coeff > 0:
@@ -114,8 +112,6 @@ def compute_loss(
 
                 del circuit_breaker_outputs
                 gc.collect()
-            else:
-                circuit_breaker_hidden = None
 
             ### Val
             if log_now:
@@ -184,7 +180,6 @@ def compute_loss(
             print(
                 f"cb_cos_sim: {(orig_cosine.sum() / layers_circuit_breaker_attention_mask.sum()).item():.4f}"
             )
-
     # Val
     if log_now:
         with torch.no_grad():
