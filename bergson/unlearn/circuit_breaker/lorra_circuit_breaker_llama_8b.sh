@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Set your HuggingFace token here (get it from https://huggingface.co/settings/tokens)
+# export HF_TOKEN=your_token_here
+
+export WANDB_MODE=offline
+export MASTER_PORT=$((29000 + RANDOM % 1000))
+export CUBLAS_WORKSPACE_CONFIG=:16:8
+export CUDA_HOME=/home/luciarosequirke/bergson/.fake_cuda
+export PATH=$CUDA_HOME/bin:$PATH
+export DS_SKIP_CUDA_CHECK=1
+export DS_BUILD_OPS=0
+export DS_BUILD_FUSED_ADAM=0
+export DS_BUILD_CPU_ADAM=0
+export DS_BUILD_UTILS=0
+
+### Llama-3-8B Config ###
+model_name_or_path=meta-llama/Meta-Llama-3-8B-Instruct
+lorra_alpha=10
+layers="10,20"
+transform_layers="-1"
+
+output_dir="./out/Llama-3-8b_CB"
+
+echo "model_name_or_path=$model_name_or_path"
+echo "output_dir=$output_dir"
+
+accelerate launch --config_file bergson/unlearn/circuit_breaker/configs/accelerate_zero1.yml \
+    --num_processes 1 --main_process_port $MASTER_PORT \
+    bergson/unlearn/circuit_breaker/lorra.py \
+    --model_name_or_path $model_name_or_path \
+    --target_layers $layers \
+    --transform_layers $transform_layers \
+    --lorra_alpha $lorra_alpha \
+    --lora_r 16 \
+    --lora_alpha 16 \
+    --lora_dropout 0.05 \
+    --output_dir  $output_dir \
+    --overwrite_output_dir \
+    --max_steps 20 \
+    --bf16 True \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 8 \
+    --gradient_accumulation_steps 4 \
+    --use_refusal_retain \
+    --do_eval \
+    --eval_steps 1000  \
+    --save_total_limit 0 \
+    --learning_rate 1e-4 \
+    --weight_decay 0. \
+    --lr_scheduler_type "constant" \
+    --logging_steps 10 \
+    --tf32 True \
+    --model_max_length 8192 \
+    --q_lora False \
+    --gradient_checkpointing True \
+    --report_to none \
+    --log_every 1
