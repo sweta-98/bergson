@@ -34,40 +34,43 @@ def run_local_evaluation(model, tokenizer, output_dir, step="final", tasks=["wmd
         # Save model and tokenizer for evaluation
         model.save_pretrained(checkpoint_path)
         tokenizer.save_pretrained(checkpoint_path)
+        # model_to_save = model.module if hasattr(model, 'module') else model
+        # model_to_save.save_pretrained(checkpoint_path)
 
-        results_path = f"{output_dir}/eval_results_{step}.json"
-
-        # Run evaluation for each task separately to handle potential issues
-        all_results = {}
+        # Save truncated base model weights (required because we deleted layers)
+        # if hasattr(model, "get_base_model"):
+            # model.get_base_model().save_pretrained(checkpoint_path)
+        # else:
+            # Fallback if get_base_model() isn't available
+            # model.base_model.save_pretrained(checkpoint_path)
 
         for task in tasks:
             task_results_path = f"{output_dir}/eval_results_{step}_{task}.json"
+            batch_size = "auto:2"
+            cmd = [
+                "python", "-m", "lm_eval",
+                "--model", "hf",
+                "--model_args", f"pretrained={checkpoint_path},peft={checkpoint_path},trust_remote_code=True",
+                "--tasks", task,
+                "--batch_size", batch_size,
+                "--output_path", task_results_path,
+                "--include_path", "/home/luciarosequirke/bergson/bergson/unlearn/lm_eval_tasks"
+            ]
 
-            # Try different batch sizes if needed
-            for batch_size in ["auto:2", "1", "auto:1"]:
-                cmd = [
-                    "python", "-m", "lm_eval",
-                    "--model", "hf",
-                    "--model_args", f"pretrained={checkpoint_path},dtype=float32",
-                    "--tasks", task,
-                    "--batch_size", batch_size,
-                    "--output_path", task_results_path,
-                ]
+            print(f"Running evaluation for {task} at step {step} (batch_size={batch_size})")
 
-                print(f"Running evaluation for {task} at step {step} (batch_size={batch_size})")
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd="/home/luciarosequirke/bergson")
 
-                result = subprocess.run(cmd, capture_output=True, text=True, cwd="/home/luciarosequirke/bergson")
-
-                if result.returncode == 0:
-                    print(f"✅ {task} evaluation completed successfully")
-                    # Try to extract key metrics from stdout
-                    if "Results" in result.stdout or task in result.stdout.lower():
-                        print(f"Preview: {result.stdout[-200:]}")
-                    break
-                else:
-                    print(f"❌ {task} failed with batch_size={batch_size}")
-                    if batch_size == "auto:1":  # Last attempt failed
-                        print(f"Final error for {task}: {result.stderr[-300:]}")
+            if result.returncode == 0:
+                print(f"✅ {task} evaluation completed successfully")
+                # Try to extract key metrics from stdout
+                if "Results" in result.stdout or task in result.stdout.lower():
+                    print(f"Preview: {result.stdout[-200:]}")
+                break
+            else:
+                print(f"❌ {task} failed with batch_size={batch_size}")
+                print(f"Final error for {task}: {result.stderr}")
+                exit(1)
 
         print(f"Evaluation round completed for step {step}")
 
@@ -403,6 +406,15 @@ def train():
     if drop_layers_after:
         config.num_hidden_layers = drop_layers_after + 1
 
+    print("config.architectures", config.architectures)
+    if "GPTNeoXForCausalLM" in config.architectures:
+        from run_local_evaluation_gpt_neox import run_local_evaluation as local_eval_fn_gpt_neox
+        local_eval_fn = local_eval_fn_gpt_neox
+        print("Using GPT-NeoX local evaluation function")
+    else:
+        local_eval_fn = run_local_evaluation
+        print("Using default local evaluation function")
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_name_or_path,
         cache_dir=training_args.cache_dir,
@@ -416,10 +428,21 @@ def train():
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,
         trust_remote_code=True,
-        # config=config,
-        # cache_dir=training_args.cache_dir,
-        # device_map=device_map,
+        config=config,
+        cache_dir=training_args.cache_dir,
+        device_map=device_map,
     )
+    if drop_layers_after and "GPTNeoXForCausalLM" in config.architectures:
+        print("Truncating GPT-NeoX layers")
+        # Ensure config is updated
+        model.config.num_hidden_layers = drop_layers_after + 1
+        
+        # Slice the actual PyTorch module list
+        # For GPT-NeoX, layers are usually in model.gpt_neox.layers
+        if hasattr(model, "gpt_neox") and hasattr(model.gpt_neox, "layers"):
+            print(f"Truncating GPT-NeoX layers from {len(model.gpt_neox.layers)} to {drop_layers_after + 1}")
+            model.gpt_neox.layers = model.gpt_neox.layers[:drop_layers_after + 1]
+
     save_model_function = partial(
         save_model_function,
         model_name_or_path=model_name_or_path,
@@ -466,7 +489,7 @@ def train():
             print("\n" + "="*50)
             print("RUNNING INITIAL EVALUATION")
             print("="*50)
-            run_local_evaluation(self.model, tokenizer, self.args.output_dir, step="initial")
+            local_eval_fn(self.model, tokenizer, self.args.output_dir, step="initial")
 
             # Run actual training
             train_result = super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
@@ -475,7 +498,7 @@ def train():
             print("\n" + "="*50)
             print("RUNNING FINAL EVALUATION")
             print("="*50)
-            run_local_evaluation(self.model, tokenizer, self.args.output_dir, step="final")
+            local_eval_fn(self.model, tokenizer, self.args.output_dir, step="final")
 
             return train_result
 

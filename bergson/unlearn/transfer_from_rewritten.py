@@ -70,6 +70,7 @@ if location == "mnt":
     BIO_RETAIN_PATH = "/home/lucia/bio_retain"
     WMDP_REWRITTEN_PATH = "/home/lucia/wmdp-lie-o-rewritten"
     BIO_FORGET_PATH = "/home/lucia/bio-forget"
+    EVAL_INCLUDE_PATH = "/home/lucia/bergson/bergson/unlearn/lm_eval_tasks"
 
     # OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
     OUTPUT_DIR = "/home/lucia/bio_tmp"
@@ -77,6 +78,7 @@ else:
     BIO_FORGET_PATH = "/projects/a5k/public/lucia/rmu/bio-forget"
     WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
     BIO_RETAIN_PATH = "/projects/a5k/public/lucia/rmu/bio-retain"
+    EVAL_INCLUDE_PATH = "/home/a5k/lucia.a5k/bergson/bergson/unlearn/lm_eval_tasks"
 
     # DO NOT CHANGE EVER
     OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_transfer_test"
