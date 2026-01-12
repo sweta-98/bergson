@@ -34,6 +34,9 @@ dev = [
     "sphinx-rtd-theme",
     "nbsphinx",
 ]
+unlearn = [
+    "lm-eval",
+]
 example = [
     "trl",
 ]

@@ -52,6 +52,16 @@ class CircuitBreakerDataset(Dataset):
             user_tag = "[INST] "
             assistant_tag = " [/INST]"
             sep_token = " "
+        elif "deep-ignorance" in self.model_name_or_path:
+            print("USING DEEP IGNORANCE (GPTNeoX) TEMPLATE")
+            # Set a simple chat template for GPTNeoX
+            tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}Human: {{ message['content'] }}\n\nAssistant: {% elif message['role'] == 'assistant' %}{{ message['content'] }}{% endif %}{% endfor %}"
+            # Simple user/assistant format for GPTNeoX
+            user_tag = "Human: "
+            assistant_tag = "\n\nAssistant: "
+            sep_token = "\n\n"
+            switch_select = [0, 1]
+            use_refusal_retain = True
         else:
             raise NotImplementedError(f"Config {self.model_name_or_path} not found")
 

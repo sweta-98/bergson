@@ -24,6 +24,6 @@ Mark tests requiring GPUs with `@pytest.mark.skipif(not torch.cuda.is_available(
 
 ### Environment Setup
 
-If you use need to use a venv, create and/or activate it with `python3 -m venv .venv && source .venv/bin/activate && pip install pytest`.
+If you use need to use a venv, create and/or activate it with `python3 -m venv .venv && source .venv/bin/activate`.
 
 You can pull secrets from .env.

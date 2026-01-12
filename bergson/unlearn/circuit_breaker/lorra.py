@@ -83,6 +83,10 @@ def compute_loss(
         f"retain_coeff: {retain_coeff:.4f} || circuit_breaker_coeff: {circuit_breaker_coeff:.4f}"
     )
 
+    # ===== Initialize loss components =====
+    retain_loss = torch.tensor(0.0, device=model.device)
+    circuit_breaker_loss = torch.tensor(0.0, device=model.device)
+
     # ===== loss components =====
     layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
         len(target_layers), 1, 1

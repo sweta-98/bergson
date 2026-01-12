@@ -1,6 +1,8 @@
 import atexit
 import gc
 import logging
+import subprocess
+import os
 from functools import partial
 
 import deepspeed
@@ -21,6 +23,58 @@ from peft import LoraConfig, get_peft_model
 from torch.nn.functional import cosine_similarity
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Trainer
 from utils import save_model_and_tokenizer
+
+
+def run_local_evaluation(model, tokenizer, output_dir, step="final", tasks=["wmdp_bio_robust", "mmlu_stem", "wmdp_bio_cloze_verified"]):
+    """Run local evaluation using lm_eval with proper custom WMDP subsets"""
+    try:
+        checkpoint_path = f"{output_dir}/eval_checkpoint_{step}"
+        os.makedirs(checkpoint_path, exist_ok=True)
+
+        # Save model and tokenizer for evaluation
+        model.save_pretrained(checkpoint_path)
+        tokenizer.save_pretrained(checkpoint_path)
+
+        results_path = f"{output_dir}/eval_results_{step}.json"
+
+        # Run evaluation for each task separately to handle potential issues
+        all_results = {}
+
+        for task in tasks:
+            task_results_path = f"{output_dir}/eval_results_{step}_{task}.json"
+
+            # Try different batch sizes if needed
+            for batch_size in ["auto:2", "1", "auto:1"]:
+                cmd = [
+                    "python", "-m", "lm_eval",
+                    "--model", "hf",
+                    "--model_args", f"pretrained={checkpoint_path},dtype=float32",
+                    "--tasks", task,
+                    "--batch_size", batch_size,
+                    "--output_path", task_results_path,
+                ]
+
+                print(f"Running evaluation for {task} at step {step} (batch_size={batch_size})")
+
+                result = subprocess.run(cmd, capture_output=True, text=True, cwd="/home/luciarosequirke/bergson")
+
+                if result.returncode == 0:
+                    print(f"✅ {task} evaluation completed successfully")
+                    # Try to extract key metrics from stdout
+                    if "Results" in result.stdout or task in result.stdout.lower():
+                        print(f"Preview: {result.stdout[-200:]}")
+                    break
+                else:
+                    print(f"❌ {task} failed with batch_size={batch_size}")
+                    if batch_size == "auto:1":  # Last attempt failed
+                        print(f"Final error for {task}: {result.stderr[-300:]}")
+
+        print(f"Evaluation round completed for step {step}")
+
+    except Exception as e:
+        print(f"Exception during evaluation at step {step}: {e}")
+
+    return checkpoint_path
 
 def compute_loss(
     self,
@@ -81,7 +135,9 @@ def compute_loss(
         len(target_layers), 1, 1
     ).unsqueeze(-1)
     # Collect model hidden states
-    with model.disable_adapter():
+    # Handle DataParallel wrapper
+    base_model = model.module if hasattr(model, 'module') else model
+    with base_model.disable_adapter():
         model.eval()
         with torch.no_grad():
             ### Retain control
@@ -152,9 +208,15 @@ def compute_loss(
         inner_product = (
             normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
         ) * layers_circuit_breaker_attention_mask
+
+        # Scale-aware loss: normalize by representation magnitude
+        magnitude_scale = torch.norm(lora_circuit_breaker_hidden.mean(dim=1), dim=-1).mean()
+        scale_factor = torch.clamp(magnitude_scale / 100.0, 0.1, 10.0)  # Adaptive scaling
+
         circuit_breaker_loss = (
             torch.relu(inner_product.sum(dim=-1)).sum()
             / layers_circuit_breaker_attention_mask.sum()
+            / scale_factor
         )
 
         if log_now:
@@ -351,12 +413,12 @@ def train():
     tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
     extra_save_kargs = dict(tokenizer=tokenizer)
     save_model_function = save_model_and_tokenizer
-
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,
-        config=config,
-        cache_dir=training_args.cache_dir,
-        device_map=device_map,
+        trust_remote_code=True,
+        # config=config,
+        # cache_dir=training_args.cache_dir,
+        # device_map=device_map,
     )
     save_model_function = partial(
         save_model_function,
@@ -372,7 +434,9 @@ def train():
     print("model", model)
 
     if training_args.deepspeed is not None and training_args.local_rank == 0:
-        model.print_trainable_parameters()
+        # Handle DataParallel wrapper
+        base_model = model.module if hasattr(model, 'module') else model
+        base_model.print_trainable_parameters()
 
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()
@@ -396,6 +460,24 @@ def train():
 
         def get_training_progress(self):
             return self.current_training_step / 300
+
+        def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None, **kwargs):
+            # Run evaluation before training
+            print("\n" + "="*50)
+            print("RUNNING INITIAL EVALUATION")
+            print("="*50)
+            run_local_evaluation(self.model, tokenizer, self.args.output_dir, step="initial")
+
+            # Run actual training
+            train_result = super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
+
+            # Run evaluation after training
+            print("\n" + "="*50)
+            print("RUNNING FINAL EVALUATION")
+            print("="*50)
+            run_local_evaluation(self.model, tokenizer, self.args.output_dir, step="final")
+
+            return train_result
 
         def compute_loss(
             self, model, inputs, return_outputs=False, num_items_in_batch=None

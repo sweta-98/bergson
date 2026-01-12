@@ -18,10 +18,19 @@ def save_model_and_tokenizer(
         anchor_model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path, torch_dtype=merged_model.dtype, device_map="auto"
         )
-        merged_model.model.layers = (
-            merged_model.model.layers
-            + anchor_model.model.layers[drop_layers_after + 1 :]
-        )
+        # Handle different model architectures
+        if hasattr(merged_model, 'model') and hasattr(merged_model.model, 'layers'):
+            # Llama-style models
+            merged_model.model.layers = (
+                merged_model.model.layers
+                + anchor_model.model.layers[drop_layers_after + 1 :]
+            )
+        elif hasattr(merged_model, 'gpt_neox') and hasattr(merged_model.gpt_neox, 'layers'):
+            # GPTNeoX-style models
+            merged_model.gpt_neox.layers = (
+                merged_model.gpt_neox.layers
+                + anchor_model.gpt_neox.layers[drop_layers_after + 1 :]
+            )
         merged_model.config = anchor_model.config
 
     merged_model.save_pretrained(output_dir)
