@@ -284,14 +284,12 @@ class MultiNodeGradientCollector(HookCollectorBase):
             dist.reduce(self.per_doc_losses, dst=0)
 
         if self.processor.preconditioners:
-            print("Processing", flush=True)
             self.processor.process_preconditioners(
                 len(self.data),
                 self.rank,
             )
-            print("Saving", flush=True)
-            self.processor.save(self.cfg.partial_run_path, self.rank)
-            print("Saved processor", flush=True)
+
+        self.processor.save(self.cfg.partial_run_path, self.rank)
 
         # Flush and reduce builder if it exists
         if self.builder is not None:

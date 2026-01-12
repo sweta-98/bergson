@@ -6,13 +6,10 @@
 export WANDB_MODE=offline
 export MASTER_PORT=$((29000 + RANDOM % 1000))
 export CUBLAS_WORKSPACE_CONFIG=:16:8
-export CUDA_HOME=/home/luciarosequirke/bergson/.fake_cuda
-export PATH=$CUDA_HOME/bin:$PATH
-export DS_SKIP_CUDA_CHECK=1
-export DS_BUILD_OPS=0
-export DS_BUILD_FUSED_ADAM=0
-export DS_BUILD_CPU_ADAM=0
-export DS_BUILD_UTILS=0
+
+# Circuit breaker specific CUDA workaround - only for this script
+CIRCUIT_BREAKER_CUDA_HOME=/home/luciarosequirke/bergson/.fake_cuda
+CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 
 ### Llama-3-8B Config ###
 model_name_or_path=meta-llama/Meta-Llama-3-8B-Instruct
@@ -25,6 +22,14 @@ output_dir="./out/Llama-3-8b_CB"
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
 
+# Run with localized CUDA environment
+CUDA_HOME=$CIRCUIT_BREAKER_CUDA_HOME \
+PATH=$CIRCUIT_BREAKER_PATH \
+DS_SKIP_CUDA_CHECK=1 \
+DS_BUILD_OPS=0 \
+DS_BUILD_FUSED_ADAM=0 \
+DS_BUILD_CPU_ADAM=0 \
+DS_BUILD_UTILS=0 \
 accelerate launch --config_file bergson/unlearn/circuit_breaker/configs/accelerate_zero1.yml \
     --num_processes 1 --main_process_port $MASTER_PORT \
     bergson/unlearn/circuit_breaker/lorra.py \
