@@ -32,6 +32,7 @@ from bergson.hessians.collector import (
 )
 from bergson.hessians.logger import get_logger
 from bergson.hessians.sharded_computation import ShardedMul
+from bergson.utils import get_device
 
 
 class EkfacComputer:
@@ -92,6 +93,7 @@ class EkfacComputer:
     def compute_covariance(self):
         cov_collector = CovarianceCollector(
             self.model.base_model,
+            target_modules=self.target_modules,
             dtype=self.dtype,
             shard_computer=self.shard_computer,
             rank=self.rank,
@@ -106,7 +108,7 @@ class EkfacComputer:
         """This is Eq. 18 from above reference."""
         total_processed = torch.load(
             os.path.join(self.path, "total_processed_covariances.pt"),
-            map_location=f"cuda:{self.rank}",
+            map_location=torch.device(get_device(self.rank)),
         )
 
         random.seed(0)
@@ -224,13 +226,14 @@ class EkfacComputer:
                 self.batches, disable=self.rank != 0, desc=f"Computing {desc}"
             ):
                 batch = self.data[sl]
-                x, y = pad_and_tensor(
+                x, y, valid_masks = pad_and_tensor(
                     batch["input_ids"],  # type: ignore
                     labels=batch.get("labels"),  # type: ignore
                     device=self.model.device,
                 )
 
-                total_processed += x.numel()
+                total_processed += valid_masks.sum()
+                collector.set_valid_masks(valid_masks)
 
                 with (
                     collector,
@@ -256,19 +259,19 @@ class EkfacComputer:
                                 probs,
                                 num_samples=1,
                             ).flatten()
-
                             del probs
 
+                        flat_mask = valid_masks[:, :-1].flatten()
                         losses = F.cross_entropy(
-                            logits,
-                            sampled_labels,
+                            logits[flat_mask],
+                            sampled_labels[flat_mask],
                             reduction="none",
-                        ).reshape_as(y[:, 1:])
+                        )
 
-                    losses = losses.sum(1)
-                    losses.mean().backward()
+                    losses.sum().backward()
                     self.model.zero_grad()
-                    torch.cuda.synchronize()
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
 
                 if self.cfg.profile:
                     assert isinstance(prof, profile), "Profiler is not set up correctly"

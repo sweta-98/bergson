@@ -40,7 +40,7 @@ from transformers import (
 
 from bergson.data import DataConfig, IndexConfig, Precision, pad_and_tensor, tokenize
 from bergson.hessians.utils import TensorDict
-from bergson.utils import assert_type
+from bergson.utils import assert_type, get_device
 
 Batches = list[list[list[int]]]
 
@@ -148,66 +148,99 @@ def allocate_batches_test(
 
 
 # %%
-def parse_config() -> tuple[Precision, Optional[str]]:
+def parse_config() -> tuple[Precision, str, str, int, bool]:
     """Parse command-line arguments or return defaults."""
-    precision: Precision
-    output_dir: Optional[str]
+    parser = argparse.ArgumentParser(
+        description="Compute EKFAC ground truth for testing"
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="fp32",
+        choices=["fp32", "fp16", "bf16", "int4", "int8"],
+        help="Model precision (default: fp32)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=str,
+        default=os.path.join(
+            os.getcwd(), "test_files", "pile_100_examples", "ground_truth"
+        ),
+        help="Output directory for ground truth results (default: test_files/pile_100_examples/ground_truth)",
+    )
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default="EleutherAI/Pythia-14m",
+        help="Model name to use (default: EleutherAI/Pythia-14m)",
+    )
+    parser.add_argument(
+        "--world-size",
+        type=int,
+        default=1,
+        help="Number of workers for simulated distributed computation (default: 1)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing ground truth data and config",
+    )
 
+    # For interactive mode (Jupyter/IPython) or no args, use defaults
     if len(sys.argv) > 1 and not hasattr(builtins, "__IPYTHON__"):
-        parser = argparse.ArgumentParser(
-            description="Compute EKFAC ground truth for testing"
-        )
-        parser.add_argument(
-            "--precision",
-            type=str,
-            default="fp32",
-            choices=["fp32", "fp16", "bf16", "int4", "int8"],
-            help="Model precision (default: fp32)",
-        )
-        parser.add_argument(
-            "-o",
-            "--output-dir",
-            type=str,
-            default=None,
-            help="Output directory for ground truth results (default: test_files/pile_100_examples/ground_truth)",
-        )
         args = parser.parse_args()
-        precision = args.precision
-        output_dir = args.output_dir
     else:
-        # Defaults for interactive execution or running without arguments
-        precision = "fp32"
-        output_dir = None
+        args = parser.parse_args([])
 
     # Set random seeds for reproducibility
     set_all_seeds(42)
 
-    return precision, output_dir
+    return (
+        args.precision,
+        args.output_dir,
+        args.model_name,
+        args.world_size,
+        args.overwrite,
+    )
 
 
 if __name__ == "__main__" or TYPE_CHECKING:
-    precision, output_dir = parse_config()
+    precision, test_path, model_name, world_size_arg, overwrite_arg = parse_config()
 
 
 # %%
 def setup_paths_and_config(
-    precision: Precision, output_dir: Optional[str] = None
-) -> tuple[IndexConfig, str, int, torch.device, Any, torch.dtype]:
+    precision: Precision,
+    test_path: str,
+    model_name: str,
+    world_size: int,
+    overwrite: bool = False,
+) -> tuple[IndexConfig, int, torch.device, Any, torch.dtype]:
     """Setup paths and configuration object."""
+    os.makedirs(test_path, exist_ok=True)
+
     current_path = os.getcwd()
     parent_path = os.path.join(current_path, "test_files", "pile_100_examples")
-    if output_dir is not None:
-        test_path = output_dir
-    else:
-        test_path = os.path.join(parent_path, "ground_truth")
-    os.makedirs(test_path, exist_ok=True)
 
     # Configuration
     cfg = IndexConfig(run_path="")
-    cfg.model = "EleutherAI/Pythia-14m"
+    cfg.model = model_name
     cfg.precision = precision
     cfg.fsdp = False
     cfg.data = DataConfig(dataset=os.path.join(parent_path, "data"))
+
+    # model_max_length is limited in some models like `roneneldan/TinyStories-1M`
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model)
+    if (
+        hasattr(tokenizer, "model_max_length")
+        and tokenizer.model_max_length < cfg.token_batch_size
+    ):
+        print(
+            f"Warning: Got --token-batch-size {cfg.token_batch_size} but {model_name} only supports up to {tokenizer.model_max_length}"
+        )
+        cfg.token_batch_size = tokenizer.model_max_length
 
     data_str = cfg.data.dataset
 
@@ -220,13 +253,42 @@ def setup_paths_and_config(
         subset.save_to_disk(data_str)
         print(f"Generated pile-100 in {data_str}")
 
-    # Save config
-    with open(os.path.join(test_path, "index_config.json"), "w") as f:
-        json.dump(asdict(cfg), f, indent=4)
+    config_path = os.path.join(test_path, "index_config.json")
+    if os.path.exists(config_path):
+        if not overwrite:
+            # Load existing config and compare
+            with open(config_path, "r") as f:
+                existing_cfg_dict = json.load(f)
+
+            new_cfg_dict = asdict(cfg)
+
+            if existing_cfg_dict != new_cfg_dict:
+                # Show differences for debugging
+                diffs = [
+                    f"  {k}: {existing_cfg_dict[k]} != {new_cfg_dict[k]}"
+                    for k in new_cfg_dict
+                    if k in existing_cfg_dict
+                    and existing_cfg_dict[k] != new_cfg_dict[k]
+                ]
+                raise RuntimeError(
+                    f"Existing config at {config_path} differs from requested config:\n"
+                    + "\n".join(diffs)
+                    + "\n\nUse --overwrite to replace the existing config."
+                )
+
+            print(f"Using existing config from {config_path}")
+        else:
+            print(f"Overwriting existing config at {config_path}")
+            with open(config_path, "w") as f:
+                json.dump(asdict(cfg), f, indent=4)
+    else:
+        # Save new config
+        with open(config_path, "w") as f:
+            json.dump(asdict(cfg), f, indent=4)
 
     # Setup
-    workers = 8
-    device = torch.device("cuda:0")
+    workers = world_size
+    device = torch.device(get_device(0))
     target_modules = None
 
     # Determine dtype
@@ -238,16 +300,20 @@ def setup_paths_and_config(
         case "fp32":
             dtype = torch.float32
         case "int4" | "int8":
-            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            dtype = (
+                torch.bfloat16
+                if (torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+                else torch.float16
+            )
         case other:
             raise ValueError(f"Unsupported precision: {other}")
 
-    return cfg, test_path, workers, device, target_modules, dtype
+    return cfg, workers, device, target_modules, dtype
 
 
 if __name__ == "__main__" or TYPE_CHECKING:
-    cfg, test_path, workers, device, target_modules, dtype = setup_paths_and_config(
-        precision, output_dir
+    cfg, workers, device, target_modules, dtype = setup_paths_and_config(
+        precision, test_path, model_name, world_size_arg, overwrite_arg
     )
 
 
@@ -261,7 +327,7 @@ def load_model_step(cfg: IndexConfig, dtype: torch.dtype) -> PreTrainedModel:
     print(f"Loading model {cfg.model}...")
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model,
-        device_map="cuda",
+        device_map="cuda" if torch.cuda.is_available() else "cpu",
         quantization_config=(
             BitsAndBytesConfig(
                 load_in_4bit=cfg.precision == "int4",
@@ -369,13 +435,14 @@ def compute_covariance(
 
     for sl in tqdm(batches, desc=f"Rank {rank} covariances"):
         batch = data[sl]
-        x, y = pad_and_tensor(
+        x, y, valid_masks = pad_and_tensor(
             batch["input_ids"],
             labels=batch.get("labels"),
             device=device,
         )
 
-        total_processed += x.numel()
+        total_processed += valid_masks.sum()
+        collector.set_valid_masks(valid_masks)
 
         with collector:
             logits = model(x).logits
@@ -385,12 +452,11 @@ def compute_covariance(
                 reduction="none",
             ).reshape_as(y[:, 1:])
 
-            losses = losses.sum(1)
-            losses.mean().backward()
+            losses.sum().backward()
             loss_list.append(losses.detach().cpu())
             model.zero_grad()
 
-    return {"losses": loss_list, "total_processed_rank": total_processed}
+    return {"losses": loss_list, "total_processed_rank": total_processed.item()}
 
 
 # %%
@@ -504,7 +570,8 @@ def combine_covariances_step(
         print(f"Global processed {total_processed_global} tokens.")
 
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return total_processed_global
 
@@ -570,7 +637,8 @@ def compute_eigenvectors_step(
     )
 
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return eigenvectors_test_path
 
@@ -611,13 +679,14 @@ def compute_eigenvalue_correction_amortized(
 
     for sl in tqdm(batches, desc=f"Rank {rank} eigenvalue corrections"):
         batch = data[sl]
-        x, y = pad_and_tensor(
+        x, y, valid_masks = pad_and_tensor(
             batch["input_ids"],
             labels=batch.get("labels"),
             device=device,
         )
 
-        total_processed += x.numel()
+        total_processed += valid_masks.sum()
+        collector.set_valid_masks(valid_masks)
 
         with collector:
             logits = model(x).logits
@@ -627,11 +696,10 @@ def compute_eigenvalue_correction_amortized(
                 reduction="none",
             ).reshape_as(y[:, 1:])
 
-            losses = losses.sum(1)
-            losses.mean().backward()
+            losses.sum().backward()
             model.zero_grad()
 
-    return {"total_processed_rank": total_processed}
+    return {"total_processed_rank": total_processed.item()}
 
 
 # %%

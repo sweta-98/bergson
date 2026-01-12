@@ -1,42 +1,30 @@
 import os
-from typing import Literal
 
-import torch
+import pytest
 from safetensors.torch import load_file
 
 from bergson.hessians.utils import TensorDict
+from tests.ekfac_tests.test_utils import load_sharded_covariances
 
 
+@pytest.mark.parametrize("covariance_type", ["activation", "gradient"])
 def test_covariances(
-    ground_truth_path,
-    run_path,
-    covariance_type: Literal["activation", "gradient"] = "activation",
-):
+    ekfac_results_path: str,
+    ground_truth_covariances_path: str,
+    covariance_type: str,
+) -> None:
+    """Test covariances against ground truth."""
+    print(f"\nTesting {covariance_type} covariances...")
+
     covariances_ground_truth_path = os.path.join(
-        ground_truth_path, f"covariances/{covariance_type}_covariance.safetensors"
+        ground_truth_covariances_path, f"{covariance_type}_covariance.safetensors"
     )
     covariances_run_path = os.path.join(
-        run_path, f"{covariance_type}_covariance_sharded"
+        ekfac_results_path, f"{covariance_type}_covariance_sharded"
     )
 
-    # load ground_truth
     ground_truth_covariances = TensorDict(load_file(covariances_ground_truth_path))
-
-    world_size = len(os.listdir(covariances_run_path))  # number of shards
-    # load run covariances shards and concatenate them
-
-    run_covariances_shards = [
-        os.path.join(covariances_run_path, f"shard_{rank}.safetensors")
-        for rank in range(world_size)
-    ]
-    run_covariances_list = [(load_file(shard)) for shard in run_covariances_shards]
-    run_covariances = {}
-    for k, v in run_covariances_list[0].items():
-        run_covariances[k] = torch.cat(
-            [shard[k] for shard in run_covariances_list], dim=0
-        )
-
-    run_covariances = TensorDict(run_covariances)
+    run_covariances = TensorDict(load_sharded_covariances(covariances_run_path))
 
     diff = (
         ground_truth_covariances.sub(run_covariances)
@@ -52,15 +40,20 @@ def test_covariances(
 
     if all(equal_dict.values()):
         print(f"{covariance_type} covariances match")
-
     else:
         max_diff = diff.max()
-        # print keys for which the covariances do not match
-        print(f"{covariance_type} covariances do not match!")
+        # Collect error details for assertion message
+        error_details = []
         for k, v in equal_dict.items():
             if not v:
-                print(
-                    f"Covariance {k} does not match with max relative difference "
-                    f"{(100 * max_diff[k]):.3f} % and mean {100 * diff[k].mean()} % !",
+                error_details.append(
+                    f"  {k}: max_rel_diff={(100 * max_diff[k]):.3f}%, "
+                    f"mean={(100 * diff[k].mean()):.3f}%"
                 )
+
+        error_msg = f"{covariance_type} covariances do not match!\n" + "\n".join(
+            error_details
+        )
+        assert False, error_msg
+
     print("-*" * 50)
