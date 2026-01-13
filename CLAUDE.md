@@ -24,6 +24,8 @@ Run bash commands in the dedicated tmux pane named "claude" if it is available.
 
 Don't keep default run path values inside low level code - if a module calls another module, the higher level module should always pass through inject a base path.
 
+Don't save data to a directory that is not in the gitignore - especially the data/ directory.
+
 ### Tests
 
 Mark tests requiring GPUs with `@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")`.
