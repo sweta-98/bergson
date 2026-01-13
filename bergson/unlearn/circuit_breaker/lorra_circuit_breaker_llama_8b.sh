@@ -7,7 +7,8 @@ export WANDB_MODE=offline
 export MASTER_PORT=$((29000 + RANDOM % 1000))
 export CUBLAS_WORKSPACE_CONFIG=:16:8
 
-# Circuit breaker specific CUDA workaround - only for this script
+# Set directory for fake NVCC script to provide
+# compilation information for deepspeed.
 CIRCUIT_BREAKER_CUDA_HOME=/home/luciarosequirke/bergson/.fake_cuda
 CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 
@@ -21,6 +22,9 @@ output_dir="./out/Llama-3-8b_CB"
 
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
+
+# # Create output directory if it doesn't exist
+mkdir -p $output_dir
 
 # Run with localized CUDA environment
 CUDA_HOME=$CIRCUIT_BREAKER_CUDA_HOME \
@@ -42,7 +46,7 @@ accelerate launch --config_file bergson/unlearn/circuit_breaker/configs/accelera
     --lora_dropout 0.05 \
     --output_dir  $output_dir \
     --overwrite_output_dir \
-    --max_steps 20 \
+    --max_steps 150 \
     --bf16 True \
     --per_device_train_batch_size 4 \
     --per_device_eval_batch_size 8 \
