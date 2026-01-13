@@ -304,15 +304,8 @@ def train():
     print(training_args)
 
     device_map = "auto"
-    if (
-        len(training_args.fsdp) > 0
-        or training_args.deepspeed is not None
-        or deepspeed.is_deepspeed_zero3_enabled()
-    ):
-        logging.warning(
-            "FSDP and DeepSpeed are both currently incompatible with device_map='auto'."
-        )
-        device_map = None
+    if len(training_args.fsdp) > 0 or deepspeed.is_deepspeed_zero3_enabled():
+        logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
 
     model_name_or_path = model_args.model_name_or_path
     target_layers = lorra_args.target_layers
@@ -403,14 +396,12 @@ def train():
         def get_training_progress(self):
             return self.current_training_step / 300
 
-        def compute_loss(
-            self, model, inputs, return_outputs=False, num_items_in_batch=None
-        ):
+        def compute_loss(self, model, inputs, return_outputs=False):
             return compute_loss(
                 self,
                 model,
                 inputs,
-                num_items_in_batch=num_items_in_batch,
+                None,
                 target_layers=lorra_target_layers,
                 alpha=lorra_args.lorra_alpha,
                 return_outputs=return_outputs,
