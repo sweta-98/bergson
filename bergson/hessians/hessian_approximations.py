@@ -20,6 +20,7 @@ from bergson.hessians.eigenvectors import LambdaCollector, compute_eigendecompos
 from bergson.hessians.kfac import CovarianceCollector
 from bergson.hessians.tkfac import TraceCovarianceCollector
 from bergson.utils.utils import (
+    convert_precision_to_torch,
     setup_reproducibility,
     validate_batch_size,
 )
@@ -81,7 +82,7 @@ def hessian_worker(
     rank: int,
     local_rank: int,
     world_size: int,
-    cfg: IndexConfig,
+    index_cfg: IndexConfig,
     hessian_cfg: HessianConfig,
     ds: Dataset,
 ):
@@ -135,35 +136,37 @@ def hessian_worker(
             world_size=world_size,
         )
 
-    model, target_modules = setup_model_and_peft(cfg)
+    model, target_modules = setup_model_and_peft(index_cfg)
 
-    attention_cfgs = {module: cfg.attention for module in cfg.split_attention_modules}
+    attention_cfgs = {
+        module: index_cfg.attention for module in index_cfg.split_attention_modules
+    }
 
     kwargs = {
         "model": model,
         "data": ds,
-        "cfg": cfg,
+        "cfg": index_cfg,
         "hessian_cfg": hessian_cfg,
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
     }
 
-    batches = allocate_batches(ds["length"], cfg.token_batch_size)
+    batches = allocate_batches(ds["length"], index_cfg.token_batch_size)
     kwargs["batches"] = batches
     collect_hessians(**kwargs)
 
     total_processed = torch.load(
-        f"{cfg.partial_run_path}/total_processed.pt",
+        f"{index_cfg.partial_run_path}/total_processed.pt",
         map_location="cpu",
         weights_only=False,
     )
 
     compute_eigendecomposition(
-        os.path.join(cfg.partial_run_path, "activation_sharded"),
+        os.path.join(index_cfg.partial_run_path, "activation_sharded"),
         total_processed=total_processed,
     )
     compute_eigendecomposition(
-        os.path.join(cfg.partial_run_path, "gradient_sharded"),
+        os.path.join(index_cfg.partial_run_path, "gradient_sharded"),
         total_processed=total_processed,
     )
 
@@ -174,7 +177,7 @@ def hessian_worker(
 def collect_hessians(
     model: PreTrainedModel,
     data: Dataset,
-    cfg: IndexConfig,
+    index_cfg: IndexConfig,
     *,
     batches: list[list[int]] | None = None,
     target_modules: set[str] | None = None,
@@ -190,14 +193,14 @@ def collect_hessians(
     hessian_dtype = (
         model.dtype
         if hessian_cfg.hessian_dtype == "auto"
-        else hessian_cfg.hessian_dtype
+        else convert_precision_to_torch(hessian_cfg.hessian_dtype)
     )
 
     collector_args = {
         "model": model.base_model,  # type: ignore
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs or {},
-        "path": str(cfg.partial_run_path),
+        "path": str(index_cfg.partial_run_path),
     }
     desc = f"Approximating Hessians with {hessian_cfg.method}"
     if ev_correction:
@@ -207,16 +210,16 @@ def collect_hessians(
         collector_args["dtype"] = hessian_dtype
         collector = HESSIAN_APPROXIMATIONS[hessian_cfg.method](**collector_args)
 
-    validate_batch_size(model, cfg.token_batch_size, collector)
+    validate_batch_size(model, index_cfg.token_batch_size, collector)
 
     computer = CollectorComputer(
         model=model,  # type: ignore
         data=data,
         collector=collector,
         batches=batches,
-        cfg=cfg,
+        cfg=index_cfg,
     )
 
-    computer.forward_backward = fwd_bwd_hessian_factory(hessian_cfg)
+    computer.forward_backward = fwd_bwd_hessian_factory(index_cfg, hessian_cfg)
 
     computer.run_with_collector_hooks(desc=desc)

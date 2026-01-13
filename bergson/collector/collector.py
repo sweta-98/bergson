@@ -610,13 +610,18 @@ def fwd_bwd_factory(cfg: IndexConfig) -> Callable:
     return fwd_bwd
 
 
-def fwd_bwd_hessian_factory(cfg: HessianConfig) -> Callable:
+def fwd_bwd_hessian_factory(
+    index_cfg: IndexConfig, hessian_cfg: HessianConfig
+) -> Callable:
     def fwd_bwd_hessian(model, x: Tensor, y: Tensor, batch: dict):
         logits = model(x).logits[:, :-1]
         masks = y[:, 1:] != -100
-        denoms = masks.sum(dim=1, dtype=model.dtype)
-
-        if not cfg.use_dataset_labels:
+        denoms = (
+            masks.sum(dim=1, dtype=model.dtype)
+            if index_cfg.loss_reduction == "mean"
+            else 1.0
+        )
+        if not hessian_cfg.use_dataset_labels:
             losses = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)),
                 y[:, 1:].flatten(),
@@ -636,6 +641,7 @@ def fwd_bwd_hessian_factory(cfg: HessianConfig) -> Callable:
                 sampled_tokens.flatten(),
                 reduction="none",
             ).reshape_as(y[:, 1:])
+            losses = losses.sum(1) / denoms
 
         losses.sum().backward()
         model.zero_grad()

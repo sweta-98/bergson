@@ -307,7 +307,6 @@ def compute_eigendecomposition(
     )
 
     gc.collect()
-    torch.cuda.empty_cache()
 
 
 def _merge_and_shard_eigenvectors(
@@ -365,6 +364,5 @@ def _merge_and_shard_eigenvectors(
 
         del tensor
         gc.collect()
-        torch.cuda.empty_cache()
 
     return result_dict
