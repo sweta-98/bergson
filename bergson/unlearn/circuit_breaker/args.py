@@ -61,18 +61,19 @@ class LoraArguments:
     lora_dropout: float = 0.05
     lora_target_modules: Union[List[str], str] = field(
         default_factory=lambda: [
-            "query_key_value",  # GPT-NeoX: fused Q,K,V projection (replaces q_proj, k_proj, v_proj)
-            "dense",           # GPT-NeoX: attention output projection (replaces o_proj)
-            "dense_h_to_4h",   # GPT-NeoX: MLP up projection (replaces gate_proj, up_proj)
-            "dense_4h_to_h",   # GPT-NeoX: MLP down projection (replaces down_proj)
-            # "q_proj",
-            # "k_proj",
-            # "v_proj",
-            # "o_proj",
-            # "gate_proj",
-            # "up_proj",
-            # "down_proj",
-        ]
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+        metadata={
+            "help": "Target modules for LoRA. Common options:\n"
+            "Llama/Mistral: q_proj k_proj v_proj o_proj gate_proj up_proj down_proj\n"
+            "GPT-NeoX: query_key_value dense dense_h_to_4h dense_4h_to_h"
+        }
     )
     lora_weight_path: str = ""
     lora_bias: str = "none"

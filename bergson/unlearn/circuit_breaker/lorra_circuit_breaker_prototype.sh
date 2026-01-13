@@ -49,6 +49,7 @@ python bergson/unlearn/circuit_breaker/lorra_prototype.py \
     --lora_r 8 \
     --lora_alpha 8 \
     --lora_dropout 0.05 \
+    --lora_target_modules query_key_value dense dense_h_to_4h dense_4h_to_h \
     --output_dir  $output_dir \
     --overwrite_output_dir \
     --max_steps 150 \

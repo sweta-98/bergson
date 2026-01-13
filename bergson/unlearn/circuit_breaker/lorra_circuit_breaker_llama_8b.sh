@@ -44,6 +44,7 @@ accelerate launch --config_file bergson/unlearn/circuit_breaker/configs/accelera
     --lora_r 16 \
     --lora_alpha 16 \
     --lora_dropout 0.05 \
+    --lora_target_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
     --output_dir  $output_dir \
     --overwrite_output_dir \
     --max_steps 150 \
