@@ -28,9 +28,24 @@ Don't keep default run path values inside low level code - if a module calls ano
 
 Don't save data to a directory that is not in the gitignore - especially the data/ directory.
 
-### Tests
+When you follow project conventions don't leave a comment saying (following project conventions) or similar drivel. In particular, don't centre yourself or your decisions in the codebase in any way, and only leave comments that are necessary for other users.
+
+### Tests & Evals
 
 Mark tests requiring GPUs with `@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")`.
+
+To run the custom WMDP bio subset evals the path must be included. Here's a programmatic example, although this can also be done from the command line etc.:
+
+```
+# Setup Tasks
+include_path = "/path/to/bergson/bergson/unlearn/lm_eval_tasks"
+tm = TaskManager(verbosity="INFO", include_path=include_path)
+results = simple_evaluate(
+    model=lm,
+    tasks=["wmdp_bio_robust"],
+    task_manager=tm,
+)
+```
 
 ### Environment Setup
 

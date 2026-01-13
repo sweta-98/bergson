@@ -13,12 +13,12 @@ CIRCUIT_BREAKER_CUDA_HOME=/home/luciarosequirke/bergson/.fake_cuda
 CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 
 ### Matches Llama-3-8B Config ###
-model_name_or_path=EleutherAI/deep-ignorance-e2e-strong-filter
+model_name_or_path=EleutherAI/deep-ignorance-unfiltered
 lorra_alpha=10 # Same as llama, mistral was 5
-layers="10,20"  # Standard circuit breaker target layers
+layers="10,20" # 2,4,
 transform_layers="-1"
 
-output_dir="./out/DeepIgnorance_CB_paper"
+output_dir="./out/DeepIgnorance_CB"
 
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
@@ -28,7 +28,7 @@ mkdir -p $output_dir
 
 # Print the command that will be executed
 echo "Executing command:"
-echo "python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \\"
+echo "python bergson/unlearn/circuit_breaker/lorra_deep.py \\"
 
 # Run with localized CUDA environment and paper hyperparameters
 # same lr as llama

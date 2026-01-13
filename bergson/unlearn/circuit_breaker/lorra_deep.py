@@ -12,14 +12,12 @@ from args import (
     ModelArguments,
     TrainingArguments,
 )
-
 from cb_train_dataset import CircuitBreakerDataset
 from deepspeed import zero
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 from peft import LoraConfig, get_peft_model
 from torch.nn.functional import cosine_similarity
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Trainer
-from transformers.integrations import deepspeed
 from utils import save_model_and_tokenizer
 
 
@@ -87,7 +85,7 @@ def compute_loss(
     # base_model = model.module if hasattr(model, 'module') else model
 
     with model.disable_adapter():
-    # with base_model.disable_adapter():
+        # with base_model.disable_adapter():
         model.eval()
         with torch.no_grad():
             ### Retain control
@@ -188,7 +186,7 @@ def compute_loss(
             )
     else:
         circuit_breaker_loss = 0
-      
+
     # Val
     if log_now:
         with torch.no_grad():
@@ -262,20 +260,29 @@ def get_model_generation(inputs, model, tokenizer, prefill=""):
 
     with torch.no_grad():
         # Ensure we clear any stale cache and handle device properly
-        if hasattr(model, 'module'):
+        if hasattr(model, "module"):
             generation_model = model.module
         else:
             generation_model = model
 
         try:
-            outputs = generation_model.generate(
-                **encoded_inputs.to(generation_model.device if hasattr(generation_model, 'device') else next(generation_model.parameters()).device),
-                max_new_tokens=256,
-                do_sample=True,
-                temperature=0.7,
-                pad_token_id=tokenizer.eos_token_id,
-                use_cache=True,
-            ).detach().cpu()
+            outputs = (
+                generation_model.generate(
+                    **encoded_inputs.to(
+                        generation_model.device
+                        if hasattr(generation_model, "device")
+                        else next(generation_model.parameters()).device
+                    ),
+                    max_new_tokens=256,
+                    do_sample=True,
+                    temperature=0.7,
+                    pad_token_id=tokenizer.eos_token_id,
+                    use_cache=True,
+                    head_mask=None,
+                )
+                .detach()
+                .cpu()
+            )
 
             sanity_generation = tokenizer.decode(
                 outputs[0], skip_special_tokens=True
@@ -331,7 +338,7 @@ def train():
     # if len(training_args.fsdp) > 0 or is_zero3:
     #     logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
     device_map = "auto"
-    if len(training_args.fsdp) > 0: # or deepspeed.is_deepspeed_zero3_enabled():
+    if len(training_args.fsdp) > 0:  # or deepspeed.is_deepspeed_zero3_enabled():
         logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
 
     model_name_or_path = model_args.model_name_or_path
@@ -386,7 +393,7 @@ def train():
     tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
     extra_save_kargs = dict(tokenizer=tokenizer)
     save_model_function = save_model_and_tokenizer
-    
+
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,
         trust_remote_code=True,
@@ -403,15 +410,25 @@ def train():
         # Slice the actual PyTorch module list
         # For GPT-NeoX, layers are usually in model.gpt_neox.layers
         if hasattr(model, "gpt_neox") and hasattr(model.gpt_neox, "layers"):
-            print(f"Truncating GPT-NeoX layers from {len(model.gpt_neox.layers)} to {drop_layers_after + 1}")
-            model.gpt_neox.layers = model.gpt_neox.layers[:drop_layers_after + 1]
+            print(
+                f"Truncating GPT-NeoX layers from {len(model.gpt_neox.layers)} to {drop_layers_after + 1}"
+            )
+            model.gpt_neox.layers = model.gpt_neox.layers[: drop_layers_after + 1]
             # Clear cache and force config update for generation
-            model._modules_to_not_convert = getattr(model, '_modules_to_not_convert', set())
+            model._modules_to_not_convert = getattr(
+                model, "_modules_to_not_convert", set()
+            )
 
         # Also update the head_mask handling in config for generation
-        if hasattr(model.config, 'num_attention_heads') and hasattr(model.config, 'num_hidden_layers'):
+        if hasattr(model.config, "num_attention_heads") and hasattr(
+            model.config, "num_hidden_layers"
+        ):
             # Ensure generation uses correct number of layers
-            model.config._name_or_path = model.config._name_or_path if hasattr(model.config, '_name_or_path') else model_name_or_path
+            model.config._name_or_path = (
+                model.config._name_or_path
+                if hasattr(model.config, "_name_or_path")
+                else model_name_or_path
+            )
 
     save_model_function = partial(
         save_model_function,
@@ -430,7 +447,6 @@ def train():
         model.print_trainable_parameters()
     #     # Handle DataParallel wrapper
     #     base_model = model.module if hasattr(model, 'module') else model
-            
 
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()
@@ -455,9 +471,17 @@ def train():
         def get_training_progress(self):
             return self.current_training_step / 300
 
-        def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None, **kwargs):
+        def train(
+            self,
+            resume_from_checkpoint=None,
+            trial=None,
+            ignore_keys_for_eval=None,
+            **kwargs,
+        ):
             # Run actual training
-            train_result = super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
+            train_result = super().train(
+                resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs
+            )
 
             return train_result
 

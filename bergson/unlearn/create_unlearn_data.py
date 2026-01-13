@@ -12,7 +12,7 @@ from huggingface_hub import list_repo_files, hf_hub_download
 from bergson.utils.utils import assert_type
 
 
-location = "mnt"
+location = "google"
 # location = "mnt"
 if location == "mnt":
     # BIO_FORGET_PATH = "/mnt/ssd-1/lucia/bergson/rmu/bio-forget"
@@ -24,6 +24,11 @@ if location == "mnt":
 
     # OUTPUT_DIR = "/mnt/ssd-1/lucia/bergson/runs/bio_transfer"
     OUTPUT_DIR = "/home/lucia/bio_tmp"
+elif location == "google":
+    BIO_FORGET_PATH = "/home/luciarosequirke/bio-forget"
+    WMDP_REWRITTEN_PATH = "/home/luciarosequirke/wmdp-lie-o-rewritten"
+    BIO_RETAIN_PATH = "/home/luciarosequirke/bio_retain"
+    OUTPUT_DIR = "/home/luciarosequirke/bio_tmp"
 else:
     BIO_FORGET_PATH = "/projects/a5k/public/lucia/rmu/bio-forget"
     WMDP_REWRITTEN_PATH = "/projects/a5k/public/lucia/rmu/wmdp-lie-o-rewritten"
@@ -31,7 +36,6 @@ else:
 
     # DO NOT CHANGE EVER
     OUTPUT_DIR = "/projects/a5k/public/lucia/runs/bio_transfer_test"
-
 
 def is_debug():
     return True
@@ -246,9 +250,14 @@ def main():
         
     # Load and tokenize datasets
     ds = load_datasets()
+
+    ds["bio_forget"].save_to_disk(str(Path(OUTPUT_DIR) / "bio_forget_ds"))
+    exit()
     
     print("Tokenizing...", flush=True)
     ds = tokenize_ds(ds, tokenizer, SEQ_LEN)
+
+    
 
     
     # Prepare ultrachat

@@ -32,6 +32,11 @@ def save_model_and_tokenizer(
                 + anchor_model.gpt_neox.layers[drop_layers_after + 1 :]
             )
         merged_model.config = anchor_model.config
+        # Update config to reflect the actual number of layers after restoration
+        if hasattr(merged_model, 'gpt_neox') and hasattr(merged_model.gpt_neox, 'layers'):
+            merged_model.config.num_hidden_layers = len(merged_model.gpt_neox.layers)
+        elif hasattr(merged_model, 'model') and hasattr(merged_model.model, 'layers'):
+            merged_model.config.num_hidden_layers = len(merged_model.model.layers)
 
     merged_model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)

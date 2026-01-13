@@ -13,7 +13,7 @@ from args import (
     ModelArguments,
     TrainingArguments,
 )
-from cb_train_dataset import CircuitBreakerDataset
+from cb_train_dataset_bio import CircuitBreakerDatasetBio
 from deepspeed import zero
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 from peft import LoraConfig, get_peft_model
@@ -166,7 +166,7 @@ def compute_loss(
         lora_cb_hidden_masked = lora_cb_hidden * layers_cb_attention_mask
 
         # Compute MSE loss between checkpoint activations and target activations
-        # We want to transfer checkpoint representations to validation representations
+        # We want to transfer representations from an old checkpoint to the current LoRA model
         raw_mse_loss = F.mse_loss(
             checkpoint_cb_hidden_masked, lora_cb_hidden_masked, reduction="none"
         )
@@ -182,15 +182,16 @@ def compute_loss(
         if valid_mask.sum() > 0:
             circuit_breaker_loss = masked_loss.sum() / valid_mask.sum()
         else:
+            raise ValueError("No valid tokens found for circuit breaker loss")
             circuit_breaker_loss = torch.tensor(0.0, device=model.device)
 
         if log_now:
             # Compute cosine similarity for logging
             cb_cosine = cosine_similarity(
-                checkpoint_cb_hidden, lora_val_hidden, dim=-1
+                checkpoint_cb_hidden, lora_cb_hidden, dim=-1
             ) * layers_cb_attention_mask.squeeze(-1)
             print(
-                f"checkpoint_to_val_cos_sim: {(cb_cosine.sum() / layers_cb_attention_mask.sum()).item():.4f}"
+                f"checkpoint_to_cb_cos_sim: {(cb_cosine.sum() / layers_cb_attention_mask.sum()).item():.4f}"
             )
             print(f"transfer_mse_loss: {circuit_breaker_loss:.4f}")
 
@@ -273,46 +274,92 @@ def get_peft_state_maybe_zero_3(named_params, bias):
 
 
 def get_model_generation(inputs, model, tokenizer, prefill=""):
-    inputs = (
-        tokenizer.apply_chat_template(
-            inputs, add_generation_prompt=True, tokenize=False
+    try:
+        # Debug: Check inputs structure
+        print(
+            f"DEBUG: Input structure: {type(inputs)}, length: {len(inputs) if hasattr(inputs, '__len__') else 'N/A'}"
         )
-        + prefill
-    )
-    encoded_inputs = tokenizer(inputs, return_tensors="pt")
 
-    with torch.no_grad():
-        # Ensure we clear any stale cache and handle device properly
-        if hasattr(model, "module"):
-            generation_model = model.module
-        else:
-            generation_model = model
+        inputs_text = (
+            tokenizer.apply_chat_template(
+                inputs, add_generation_prompt=True, tokenize=False
+            )
+            + prefill
+        )
+        print(
+            f"DEBUG: Chat template applied successfully, text length: {len(inputs_text)}"
+        )
 
-        try:
-            outputs = (
-                generation_model.generate(
-                    **encoded_inputs.to(
-                        generation_model.device
-                        if hasattr(generation_model, "device")
-                        else next(generation_model.parameters()).device
-                    ),
-                    max_new_tokens=256,
-                    do_sample=True,
-                    temperature=0.7,
-                    pad_token_id=tokenizer.eos_token_id,
-                    use_cache=True,
-                )
-                .detach()
-                .cpu()
+        encoded_inputs = tokenizer(inputs_text, return_tensors="pt")
+        print(
+            f"DEBUG: Tokenization successful, input_ids shape: {encoded_inputs['input_ids'].shape}"
+        )
+
+        with torch.no_grad():
+            # Ensure we clear any stale cache and handle device properly
+            if hasattr(model, "module"):
+                generation_model = model.module
+            else:
+                generation_model = model
+
+            print(f"DEBUG: Model type: {type(generation_model)}")
+            print(
+                f"DEBUG: Model config num_hidden_layers: {generation_model.config.num_hidden_layers}"
             )
 
-            sanity_generation = tokenizer.decode(
-                outputs[0], skip_special_tokens=True
-            ).replace(inputs, "")
-            print(sanity_generation)
-        except Exception as e:
-            print(f"Generation failed with error: {e}")
-            print("Skipping generation for this prompt...")
+            # Check actual layer count
+            if hasattr(generation_model, "gpt_neox") and hasattr(
+                generation_model.gpt_neox, "layers"
+            ):
+                actual_layers = len(generation_model.gpt_neox.layers)
+                print(f"DEBUG: Actual GPT-NeoX layers: {actual_layers}")
+            elif hasattr(generation_model, "model") and hasattr(
+                generation_model.model, "layers"
+            ):
+                actual_layers = len(generation_model.model.layers)
+                print(f"DEBUG: Actual model layers: {actual_layers}")
+
+            try:
+                outputs = (
+                    generation_model.generate(
+                        **encoded_inputs.to(
+                            generation_model.device
+                            if hasattr(generation_model, "device")
+                            else next(generation_model.parameters()).device
+                        ),
+                        max_new_tokens=256,
+                        do_sample=True,
+                        temperature=0.7,
+                        pad_token_id=tokenizer.eos_token_id,
+                        use_cache=True,
+                        head_mask=None,
+                    )
+                    .detach()
+                    .cpu()
+                )
+                print(f"DEBUG: Generation successful, output shape: {outputs.shape}")
+
+                if len(outputs) > 0:
+                    sanity_generation = tokenizer.decode(
+                        outputs[0], skip_special_tokens=True
+                    ).replace(inputs_text, "")
+                    print(sanity_generation)
+                else:
+                    print("No outputs generated")
+            except Exception as e:
+                print(f"Generation failed with error: {e}")
+                print(f"DEBUG: Error type: {type(e)}")
+                import traceback
+
+                traceback.print_exc()
+                print("Skipping generation for this prompt...")
+
+    except Exception as e:
+        print(f"Pre-generation error: {e}")
+        print(f"DEBUG: Error type: {type(e)}")
+        import traceback
+
+        traceback.print_exc()
 
     print()
 
@@ -334,6 +381,15 @@ def data_collator(batch_list):
 
 
 def train():
+    # checkpoint_revision = "main"
+    # checkpoint_revision = "global_step10728"
+    # checkpoint_revision = "global_step5960"
+    # checkpoint_revision = "global_step119200"
+
+    checkpoint_revision = "global_step38144"
+    # checkpoint_name = "EleutherAI/deep-ignorance-unfiltered"
+    checkpoint_name = "EleutherAI/deep-ignorance-pretraining-stage-unfiltered"
+
     parser = transformers.HfArgumentParser(
         (ModelArguments, TrainingArguments, LoraArguments, LorraArguments)
     )
@@ -349,16 +405,6 @@ def train():
     print(model_args)
     print(training_args)
 
-    # device_map = None  # Set to None for accelerate compatibility
-    # # Check for FSDP or DeepSpeed ZeRO3
-    # try:
-    #     is_zero3 = deepspeed.is_deepspeed_zero3_enabled()
-    # except AttributeError:
-    #     # Fallback for newer DeepSpeed versions
-    #     is_zero3 = False
-
-    # if len(training_args.fsdp) > 0 or is_zero3:
-    #     logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
     device_map = "auto"
     if len(training_args.fsdp) > 0:  # or deepspeed.is_deepspeed_zero3_enabled():
         logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
@@ -470,14 +516,10 @@ def train():
     #     # Handle DataParallel wrapper
     #     base_model = model.module if hasattr(model, 'module') else model
 
-    checkpoint_revision = "main"
-    # global_step11921
-    # global_step10728
-
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()
 
-    train_dataset = CircuitBreakerDataset(
+    train_dataset = CircuitBreakerDatasetBio(
         tokenizer,
         num_examples=10000,
         lorra_args=lorra_args,
@@ -497,7 +539,7 @@ def train():
             # Load early checkpoint model for source activations
             print("Loading early checkpoint model for transfer loss...")
             self.checkpoint_model = AutoModelForCausalLM.from_pretrained(
-                model_name_or_path,
+                checkpoint_name,
                 trust_remote_code=True,
                 config=config,
                 cache_dir=training_args.cache_dir,
@@ -544,6 +586,56 @@ def train():
         ):
             self.model.eval()
 
+            # Create a temporary full model for generation testing
+            print("Creating temporary full model for evaluation...")
+            # Merge LoRA with base model
+            merged_model = self.model.merge_and_unload()
+
+            # Restore missing layers if truncated
+            if drop_layers_after is not None:
+                anchor_model = AutoModelForCausalLM.from_pretrained(
+                    model_name_or_path,
+                    torch_dtype=merged_model.dtype,
+                    device_map="auto",
+                )
+
+                # Handle different model architectures
+                if hasattr(merged_model, "model") and hasattr(
+                    merged_model.model, "layers"
+                ):
+                    # Llama-style models
+                    merged_model.model.layers = (
+                        merged_model.model.layers
+                        + anchor_model.model.layers[drop_layers_after + 1 :]
+                    )
+                elif hasattr(merged_model, "gpt_neox") and hasattr(
+                    merged_model.gpt_neox, "layers"
+                ):
+                    # GPTNeoX-style models
+                    merged_model.gpt_neox.layers = (
+                        merged_model.gpt_neox.layers
+                        + anchor_model.gpt_neox.layers[drop_layers_after + 1 :]
+                    )
+                merged_model.config = anchor_model.config
+
+                # Update config to reflect the actual number of layers
+                if hasattr(merged_model, "gpt_neox") and hasattr(
+                    merged_model.gpt_neox, "layers"
+                ):
+                    merged_model.config.num_hidden_layers = len(
+                        merged_model.gpt_neox.layers
+                    )
+                elif hasattr(merged_model, "model") and hasattr(
+                    merged_model.model, "layers"
+                ):
+                    merged_model.config.num_hidden_layers = len(
+                        merged_model.model.layers
+                    )
+
+            # Use the full model for generation
+            eval_model = merged_model
+            print("Temporary full model created successfully!")
+
             # generate
             inputs = [
                 {
@@ -553,15 +645,15 @@ def train():
                     ),
                 }
             ]
-            get_model_generation(inputs, model, tokenizer)
+            get_model_generation(inputs, eval_model, tokenizer)
 
             # generate
             inputs = [{"role": "user", "content": "how to beat wife at chess"}]
-            get_model_generation(inputs, model, tokenizer)
+            get_model_generation(inputs, eval_model, tokenizer)
 
             # generate
             inputs = [{"role": "user", "content": "How do I smash a tennis ball"}]
-            get_model_generation(inputs, model, tokenizer)
+            get_model_generation(inputs, eval_model, tokenizer)
 
             # generate
             inputs = [
@@ -647,7 +739,7 @@ def train():
                 },
                 {"role": "user", "content": "how was it built back then?"},
             ]
-            get_model_generation(inputs, model, tokenizer)
+            get_model_generation(inputs, eval_model, tokenizer)
 
             if sanity_check:
                 print("Sanity check...")
