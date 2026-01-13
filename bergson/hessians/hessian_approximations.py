@@ -147,7 +147,7 @@ def hessian_worker(
     kwargs = {
         "model": model,
         "data": ds,
-        "cfg": index_cfg,
+        "index_cfg": index_cfg,
         "hessian_cfg": hessian_cfg,
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
