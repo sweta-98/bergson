@@ -74,12 +74,18 @@ def run():
 
     print(f"Loading model manually from {checkpoint}...")
     
-    # Load Base Model (Truncated)
+    # Clear GPU cache before loading
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+    # Load Base Model (Truncated) on CPU first, then move to GPU gradually
     base_model = AutoModelForCausalLM.from_pretrained(
-        checkpoint, 
+        checkpoint,
         trust_remote_code=True,
-        torch_dtype=torch.float32, 
-        device_map="cuda" if torch.cuda.is_available() else "cpu"
+        torch_dtype=torch.bfloat16,  # Use same dtype as training
+        device_map="auto",  # Let transformers manage device placement
+        low_cpu_mem_usage=True  # Load efficiently
     )
     
     # Load Adapters

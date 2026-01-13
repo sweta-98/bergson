@@ -12,6 +12,8 @@ Use dataclasses for config, and use simple_parsing to parse the CLI configs data
 
 Never save logs, scripts, and other random development into the root of a project. Create an appropriate directory such as runs/ or scripts/ and add it to the .gitignore.
 
+torch.cuda.empty_cache() doesn't do what you hope it will do - don't use it.
+
 # Development
 
 You can call CLI commands without prefixing `python -m`, like `bergson build`.

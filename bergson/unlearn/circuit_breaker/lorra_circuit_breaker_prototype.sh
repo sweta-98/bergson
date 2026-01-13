@@ -35,6 +35,7 @@ echo "python bergson/unlearn/circuit_breaker/lorra_prototype.py \\"
 # same lr as llama
 CUDA_HOME=$CIRCUIT_BREAKER_CUDA_HOME \
 PATH=$CIRCUIT_BREAKER_PATH \
+PYTORCH_ALLOC_CONF=expandable_segments:True \
 DS_SKIP_CUDA_CHECK=1 \
 DS_BUILD_OPS=0 \
 DS_BUILD_FUSED_ADAM=0 \
@@ -52,9 +53,9 @@ python bergson/unlearn/circuit_breaker/lorra_prototype.py \
     --overwrite_output_dir \
     --max_steps 150 \
     --bf16 True \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
-    --gradient_accumulation_steps 2 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --gradient_accumulation_steps 8 \
     --use_refusal_retain \
     --do_eval \
     --eval_steps 500 \

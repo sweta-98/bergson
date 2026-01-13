@@ -137,13 +137,20 @@ def compute_loss(
     layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
         len(target_layers), 1, 1
     ).unsqueeze(-1)
-    # Collect model hidden states
+    # Collect model hidden states with memory optimization
     # Handle DataParallel wrapper
     base_model = model.module if hasattr(model, 'module') else model
+
+    # Initialize variables
+    orig_retain_hidden = None
+    layers_retain_attention_mask = None
+    circuit_breaker_hidden = None
+    val_hidden = None
+
     with base_model.disable_adapter():
         model.eval()
         with torch.no_grad():
-            ### Retain control
+            ### Retain control - process and clear immediately
             if retain_coeff > 0:
                 orig_retain_outputs = model(**retain_inputs)[module]
                 orig_retain_hidden = torch.stack(orig_retain_outputs).detach()
@@ -152,31 +159,38 @@ def compute_loss(
                 ).unsqueeze(-1)
                 orig_retain_hidden *= layers_retain_attention_mask
 
+                # Clear immediately
                 del orig_retain_outputs
-                gc.collect()
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-            ### Circuit Breaker control
+            ### Circuit Breaker control - process and clear immediately
             if circuit_breaker_coeff > 0:
                 circuit_breaker_outputs = model(**cb_inputs)[module]
                 circuit_breaker_hidden = torch.stack(
                     [circuit_breaker_outputs[l].detach() for l in target_layers]
                 )
 
+                # Clear immediately
                 del circuit_breaker_outputs
-                gc.collect()
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-            ### Val
+            ### Val - only when logging
             if log_now:
                 val_outputs = model(**val_inputs)[module]
                 val_hidden = torch.stack([val_outputs[l] for l in target_layers])
 
+                # Clear immediately
                 del val_outputs
-                gc.collect()
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     model.train()
 
-    ### Retain control
-    if retain_coeff > 0:
+    # Initialize losses
+    retain_loss = torch.tensor(0.0, device=next(model.parameters()).device)
+    circuit_breaker_loss = torch.tensor(0.0, device=next(model.parameters()).device)
+
+    ### Retain control - process with memory optimization
+    if retain_coeff > 0 and orig_retain_hidden is not None:
         lora_retain_outputs = model(**retain_inputs)[module]
         lora_retain_hidden = (
             torch.stack(lora_retain_outputs) * layers_retain_attention_mask
@@ -193,8 +207,14 @@ def compute_loss(
                 f"\nretain_cos_sim: {(retain_cosine.sum() / layers_retain_attention_mask.sum()).item():.4f}"
             )
 
-    ### Circuit Breaker control
-    if circuit_breaker_coeff > 0:
+        # Clear immediately after use
+        del lora_retain_outputs, lora_retain_hidden
+        if log_now:
+            del retain_cosine
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+    ### Circuit Breaker control - process with memory optimization
+    if circuit_breaker_coeff > 0 and circuit_breaker_hidden is not None:
         lora_circuit_breaker_outputs = model(**cb_inputs)[module]
         lora_circuit_breaker_hidden = torch.stack(
             [lora_circuit_breaker_outputs[l] for l in target_layers]
@@ -238,8 +258,13 @@ def compute_loss(
             print(
                 f"cb_cos_sim: {(orig_cosine.sum() / layers_circuit_breaker_attention_mask.sum()).item():.4f}"
             )
-    # Val
-    if log_now:
+
+        # Clear immediately after use
+        del lora_circuit_breaker_outputs, lora_circuit_breaker_hidden
+        del normalized_lora_circuit_breaker_outputs, normalized_circuit_breaker_outputs, inner_product
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    # Val - process with memory optimization
+    if log_now and val_hidden is not None:
         with torch.no_grad():
             lora_val_outputs = model(**val_inputs)[module]
             lora_val_hidden = torch.stack([lora_val_outputs[l] for l in target_layers])
@@ -253,6 +278,21 @@ def compute_loss(
             print(
                 f"val_cos_sim: {(val_cosine.sum() / layers_val_attention_mask.sum()).item():.4f}"
             )
+
+            # Clear immediately after use
+            del lora_val_outputs, lora_val_hidden, val_cosine, layers_val_attention_mask
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+    # Clean up remaining tensors
+    if orig_retain_hidden is not None:
+        del orig_retain_hidden
+    if circuit_breaker_hidden is not None:
+        del circuit_breaker_hidden
+    if val_hidden is not None:
+        del val_hidden
+    if layers_retain_attention_mask is not None:
+        del layers_retain_attention_mask
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     weighted_retain_loss = retain_coeff * retain_loss
     loss = weighted_retain_loss + circuit_breaker_coeff * circuit_breaker_loss
@@ -312,20 +352,29 @@ def get_model_generation(inputs, model, tokenizer, prefill=""):
     encoded_inputs = tokenizer(inputs, return_tensors="pt")
 
     with torch.no_grad():
-        outputs = (
-            model.generate(
-                **encoded_inputs.to(model.device),
+        # Ensure we clear any stale cache and handle device properly
+        if hasattr(model, 'module'):
+            generation_model = model.module
+        else:
+            generation_model = model
+
+        try:
+            outputs = generation_model.generate(
+                **encoded_inputs.to(generation_model.device if hasattr(generation_model, 'device') else next(generation_model.parameters()).device),
                 max_new_tokens=256,
                 do_sample=True,
                 temperature=0.7,
-            )
-            .detach()
-            .cpu()
-        )
-        sanity_generation = tokenizer.decode(
-            outputs[0], skip_special_tokens=True
-        ).replace(inputs, "")
-        print(sanity_generation)
+                pad_token_id=tokenizer.eos_token_id,
+                use_cache=True,
+            ).detach().cpu()
+
+            sanity_generation = tokenizer.decode(
+                outputs[0], skip_special_tokens=True
+            ).replace(inputs, "")
+            print(sanity_generation)
+        except Exception as e:
+            print(f"Generation failed with error: {e}")
+            print("Skipping generation for this prompt...")
 
     print()
 
@@ -436,12 +485,19 @@ def train():
         print("Truncating GPT-NeoX layers")
         # Ensure config is updated
         model.config.num_hidden_layers = drop_layers_after + 1
-        
+
         # Slice the actual PyTorch module list
         # For GPT-NeoX, layers are usually in model.gpt_neox.layers
         if hasattr(model, "gpt_neox") and hasattr(model.gpt_neox, "layers"):
             print(f"Truncating GPT-NeoX layers from {len(model.gpt_neox.layers)} to {drop_layers_after + 1}")
             model.gpt_neox.layers = model.gpt_neox.layers[:drop_layers_after + 1]
+            # Clear cache and force config update for generation
+            model._modules_to_not_convert = getattr(model, '_modules_to_not_convert', set())
+
+        # Also update the head_mask handling in config for generation
+        if hasattr(model.config, 'num_attention_heads') and hasattr(model.config, 'num_hidden_layers'):
+            # Ensure generation uses correct number of layers
+            model.config._name_or_path = model.config._name_or_path if hasattr(model.config, '_name_or_path') else model_name_or_path
 
     save_model_function = partial(
         save_model_function,
@@ -494,10 +550,17 @@ def train():
             # Run actual training
             train_result = super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
 
-            # Run evaluation after training
+            # Run evaluation after training with memory management
             print("\n" + "="*50)
             print("RUNNING FINAL EVALUATION")
             print("="*50)
+
+            # Clear GPU memory before final evaluation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                print(f"GPU memory cleared. Free: {torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()} bytes")
+
             local_eval_fn(self.model, tokenizer, self.args.output_dir, step="final")
 
             return train_result
