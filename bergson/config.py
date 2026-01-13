@@ -302,7 +302,7 @@ class ReduceConfig:
 class HessianConfig:
     """Config for reducing the gradients."""
 
-    method: Literal["kfac", "tkfac"] = "kfac"
+    method: Literal["kfac", "tkfac", "shampoo"] = "kfac"
     """Method for approximating the Hessian."""
 
     ev_correction: bool = False

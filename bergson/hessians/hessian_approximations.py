@@ -18,6 +18,7 @@ from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
 from bergson.hessians.eigenvectors import LambdaCollector, compute_eigendecomposition
 from bergson.hessians.kfac import CovarianceCollector
+from bergson.hessians.shampoo import ShampooCollector
 from bergson.hessians.tkfac import TraceCovarianceCollector
 from bergson.utils.utils import (
     convert_precision_to_torch,
@@ -32,6 +33,7 @@ from bergson.utils.worker_utils import (
 HESSIAN_APPROXIMATIONS = {
     "kfac": CovarianceCollector,
     "tkfac": TraceCovarianceCollector,
+    "shampoo": ShampooCollector,
 }
 
 

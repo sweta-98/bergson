@@ -13,14 +13,14 @@ from bergson.utils.utils import assert_type
 
 
 @dataclass(kw_only=True)
-class TraceCovarianceCollector(HookCollectorBase):
+class ShampooCollector(HookCollectorBase):
     """
     Collects activation and gradient covariances for TKFAC.
 
     Computes:
-        A_tcov = sum over batches of (X^T @ X)  for activations * trace(S_cov)
-        S_tcov = sum over batches of (G^T @ G)  for gradients * trace(A_cov)
-        trace= sum over batches of trace(X^T @ X) * trace(G^T @ G)
+        A_shampoo = sum over batches of Grad @ Grad.T  for activations
+        S_shampoo = sum over batches of Grad.T @ Grad for gradients * trace(A_cov)
+
 
     where X is input activations [N*S, I] and G is output gradients [N*S, O].
     """
@@ -30,14 +30,13 @@ class TraceCovarianceCollector(HookCollectorBase):
 
     def setup(self) -> None:
         """Initialize covariance storage dictionaries."""
-        self.A_tcov_dict = {}
-        self.S_tcov_dict = {}
-        self.trace_dict = {}
+        self.A_shampoo_dict = {}
+        self.S_shampoo_dict = {}
         self.shard_computer = ShardedMul()
         # Initialize sharded covariance matrices for ALL modules in target_info
         self.shard_computer._init_covariance_dict(
-            activation_covariance_dict=self.A_tcov_dict,
-            gradient_covariance_dict=self.S_tcov_dict,
+            activation_covariance_dict=self.A_shampoo_dict,
+            gradient_covariance_dict=self.S_shampoo_dict,
             dtype=self.dtype,
             target_info=self.target_info,
         )
@@ -56,8 +55,8 @@ class TraceCovarianceCollector(HookCollectorBase):
     def backward_hook(self, module: nn.Module, g: Tensor) -> None:
         """Compute gradient covariance: G^T @ G."""
         name = assert_type(str, module._name)
-        S_tcov_po = self.S_tcov_dict[name]
-        A_tcov_ki = self.A_tcov_dict[name]
+        S_shampoo_po = self.S_shampoo_dict[name]
+        A_shampoo_ki = self.A_shampoo_dict[name]
 
         # Reshape to [N*S, O]
         g_bo = g.reshape(-1, g.shape[-1])
@@ -65,16 +64,9 @@ class TraceCovarianceCollector(HookCollectorBase):
         del module._inputs
         assert isinstance(a_bi, Tensor)
 
-        # Compute local covariances
-        local_update_oo = g_bo.mT @ g_bo
-        local_update_ii = a_bi.mT @ a_bi
-
-        # Compute traces
-        trace_oo = (local_update_oo.diagonal()).sum()
-        trace_ii = (local_update_ii.diagonal()).sum()
-
-        local_update_oo = local_update_oo * trace_ii
-        local_update_ii = local_update_ii * trace_oo
+        grad_oi = torch.einsum("bi,bo->oi", a_bi, g_bo)
+        local_update_ii = torch.einsum("oi,oj->ij", grad_oi, grad_oi)
+        local_update_oo = torch.einsum("oi,pi->op", grad_oi, grad_oi)
 
         # All-reduce across ranks
         if dist.is_initialized():
@@ -82,17 +74,17 @@ class TraceCovarianceCollector(HookCollectorBase):
             dist.all_reduce(local_update_ii, op=dist.ReduceOp.SUM)
 
         # Extract our shard
-        start_row_grad = self.rank * S_tcov_po.shape[0]
-        end_row_grad = (self.rank + 1) * S_tcov_po.shape[0]
+        start_row_grad = self.rank * S_shampoo_po.shape[0]
+        end_row_grad = (self.rank + 1) * S_shampoo_po.shape[0]
         update_slice_po = local_update_oo[start_row_grad:end_row_grad, :]
 
-        start_row_act = self.rank * A_tcov_ki.shape[0]
-        end_row_act = (self.rank + 1) * A_tcov_ki.shape[0]
+        start_row_act = self.rank * A_shampoo_ki.shape[0]
+        end_row_act = (self.rank + 1) * A_shampoo_ki.shape[0]
         update_slice_ki = local_update_ii[start_row_act:end_row_act, :]
 
         # Accumulate
-        S_tcov_po.add_(update_slice_po)
-        A_tcov_ki.add_(update_slice_ki)
+        S_shampoo_po.add_(update_slice_po)
+        A_shampoo_ki.add_(update_slice_ki)
 
     def process_batch(self, indices: list[int], **kwargs) -> None:
         """No per-batch processing needed for covariance collection."""
@@ -111,11 +103,10 @@ class TraceCovarianceCollector(HookCollectorBase):
         )
         # Save sharded covariance matrices
         save_file(
-            self.A_tcov_dict,
+            self.A_shampoo_dict,
             os.path.join(activation_path, f"shard_{self.rank}.safetensors"),
         )
         save_file(
-            self.S_tcov_dict,
+            self.S_shampoo_dict,
             os.path.join(gradient_path, f"shard_{self.rank}.safetensors"),
         )
-        # TODO: Multiply by trace and save trace_dict
