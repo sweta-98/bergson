@@ -23,7 +23,7 @@ output_dir="./out/Llama-3-8b_CB"
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
 
-# # Create output directory if it doesn't exist
+# Create output directory if it doesn't exist
 mkdir -p $output_dir
 
 CUDA_HOME=$CIRCUIT_BREAKER_CUDA_HOME \
@@ -46,9 +46,9 @@ python bergson/unlearn/circuit_breaker/lorra.py \
     --overwrite_output_dir \
     --max_steps 150 \
     --bf16 True \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 8 \
-    --gradient_accumulation_steps 4 \
+    --per_device_train_batch_size 16 \
+    --per_device_eval_batch_size 32 \
+    --gradient_accumulation_steps 1 \
     --use_refusal_retain \
     --do_eval \
     --eval_steps 1000  \

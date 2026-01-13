@@ -1,11 +1,8 @@
 import atexit
 import gc
 import logging
-import subprocess
-import os
 from functools import partial
 
-import deepspeed
 import numpy as np
 import torch
 import transformers
@@ -22,62 +19,9 @@ from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 from peft import LoraConfig, get_peft_model
 from torch.nn.functional import cosine_similarity
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Trainer
+from transformers.integrations import deepspeed
 from utils import save_model_and_tokenizer
 
-
-def run_local_evaluation(model, tokenizer, output_dir, step="final", tasks=["wmdp_bio_robust", "mmlu_stem", "wmdp_bio_cloze_verified"]):
-    """Run local evaluation using lm_eval with proper custom WMDP subsets"""
-    try:
-        checkpoint_path = f"{output_dir}/eval_checkpoint_{step}"
-        os.makedirs(checkpoint_path, exist_ok=True)
-
-        # Save model and tokenizer for evaluation
-        model.save_pretrained(checkpoint_path)
-        tokenizer.save_pretrained(checkpoint_path)
-        # model_to_save = model.module if hasattr(model, 'module') else model
-        # model_to_save.save_pretrained(checkpoint_path)
-
-        # Save truncated base model weights (required because we deleted layers)
-        # if hasattr(model, "get_base_model"):
-            # model.get_base_model().save_pretrained(checkpoint_path)
-        # else:
-            # Fallback if get_base_model() isn't available
-            # model.base_model.save_pretrained(checkpoint_path)
-
-        for task in tasks:
-            task_results_path = f"{output_dir}/eval_results_{step}_{task}.json"
-            batch_size = "auto:2"
-            cmd = [
-                "python", "-m", "lm_eval",
-                "--model", "hf",
-                "--model_args", f"pretrained={checkpoint_path},peft={checkpoint_path},trust_remote_code=True",
-                "--tasks", task,
-                "--batch_size", batch_size,
-                "--output_path", task_results_path,
-                "--include_path", "/home/luciarosequirke/bergson/bergson/unlearn/lm_eval_tasks"
-            ]
-
-            print(f"Running evaluation for {task} at step {step} (batch_size={batch_size})")
-
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd="/home/luciarosequirke/bergson")
-
-            if result.returncode == 0:
-                print(f"✅ {task} evaluation completed successfully")
-                # Try to extract key metrics from stdout
-                if "Results" in result.stdout or task in result.stdout.lower():
-                    print(f"Preview: {result.stdout[-200:]}")
-                break
-            else:
-                print(f"❌ {task} failed with batch_size={batch_size}")
-                print(f"Final error for {task}: {result.stderr}")
-                exit(1)
-
-        print(f"Evaluation round completed for step {step}")
-
-    except Exception as e:
-        print(f"Exception during evaluation at step {step}: {e}")
-
-    return checkpoint_path
 
 def compute_loss(
     self,
@@ -85,6 +29,7 @@ def compute_loss(
     inputs,
     target_layers,
     alpha,
+    num_items_in_batch=None,
     return_outputs=False,
     tokenizer=None,
     **kwargs,
@@ -137,20 +82,15 @@ def compute_loss(
     layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
         len(target_layers), 1, 1
     ).unsqueeze(-1)
-    # Collect model hidden states with memory optimization
-    # Handle DataParallel wrapper
-    base_model = model.module if hasattr(model, 'module') else model
+    # # Collect model hidden states with memory optimization
+    # # Handle DataParallel wrapper
+    # base_model = model.module if hasattr(model, 'module') else model
 
-    # Initialize variables
-    orig_retain_hidden = None
-    layers_retain_attention_mask = None
-    circuit_breaker_hidden = None
-    val_hidden = None
-
-    with base_model.disable_adapter():
+    with model.disable_adapter():
+    # with base_model.disable_adapter():
         model.eval()
         with torch.no_grad():
-            ### Retain control - process and clear immediately
+            ### Retain control
             if retain_coeff > 0:
                 orig_retain_outputs = model(**retain_inputs)[module]
                 orig_retain_hidden = torch.stack(orig_retain_outputs).detach()
@@ -159,20 +99,18 @@ def compute_loss(
                 ).unsqueeze(-1)
                 orig_retain_hidden *= layers_retain_attention_mask
 
-                # Clear immediately
                 del orig_retain_outputs
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                gc.collect()
 
-            ### Circuit Breaker control - process and clear immediately
+            ### Circuit Breaker control
             if circuit_breaker_coeff > 0:
                 circuit_breaker_outputs = model(**cb_inputs)[module]
                 circuit_breaker_hidden = torch.stack(
                     [circuit_breaker_outputs[l].detach() for l in target_layers]
                 )
 
-                # Clear immediately
                 del circuit_breaker_outputs
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                gc.collect()
 
             ### Val - only when logging
             if log_now:
@@ -185,11 +123,7 @@ def compute_loss(
 
     model.train()
 
-    # Initialize losses
-    retain_loss = torch.tensor(0.0, device=next(model.parameters()).device)
-    circuit_breaker_loss = torch.tensor(0.0, device=next(model.parameters()).device)
-
-    ### Retain control - process with memory optimization
+    ### Retain control
     if retain_coeff > 0 and orig_retain_hidden is not None:
         lora_retain_outputs = model(**retain_inputs)[module]
         lora_retain_hidden = (
@@ -207,14 +141,8 @@ def compute_loss(
                 f"\nretain_cos_sim: {(retain_cosine.sum() / layers_retain_attention_mask.sum()).item():.4f}"
             )
 
-        # Clear immediately after use
-        del lora_retain_outputs, lora_retain_hidden
-        if log_now:
-            del retain_cosine
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-    ### Circuit Breaker control - process with memory optimization
-    if circuit_breaker_coeff > 0 and circuit_breaker_hidden is not None:
+    ### Circuit Breaker control
+    if circuit_breaker_coeff > 0:
         lora_circuit_breaker_outputs = model(**cb_inputs)[module]
         lora_circuit_breaker_hidden = torch.stack(
             [lora_circuit_breaker_outputs[l] for l in target_layers]
@@ -232,25 +160,25 @@ def compute_loss(
             normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
         ) * layers_circuit_breaker_attention_mask
 
-        # Scale-aware loss: normalize by representation magnitude
-        magnitude_scale = torch.norm(lora_circuit_breaker_hidden.mean(dim=1), dim=-1).mean()
-        scale_factor = torch.clamp(magnitude_scale / 100.0, 0.1, 10.0)  # Adaptive scaling
+        # Compute mean activation norm for scaling
+        updated_activations_norm = torch.mean(
+            lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+        )
+        orig_activations_norm = torch.mean(
+            circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+        )
+        # Use the mean of both norms for scaling
+        mean_activation_norm = (updated_activations_norm + orig_activations_norm) / 2
 
         circuit_breaker_loss = (
             torch.relu(inner_product.sum(dim=-1)).sum()
             / layers_circuit_breaker_attention_mask.sum()
-            / scale_factor
-        )
+        ) / mean_activation_norm
 
         if log_now:
-            updated_activations_norm = torch.mean(
-                lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-            )
-            orig_activations_norm = torch.mean(
-                circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-            )
             print("\nupdated_cb_activations_norm:", updated_activations_norm.item())
             print("orig_cb_activations_norm:", orig_activations_norm.item())
+            print("mean_activation_norm (loss scaling):", mean_activation_norm.item())
 
             orig_cosine = cosine_similarity(
                 circuit_breaker_hidden, lora_circuit_breaker_hidden, dim=-1
@@ -258,13 +186,11 @@ def compute_loss(
             print(
                 f"cb_cos_sim: {(orig_cosine.sum() / layers_circuit_breaker_attention_mask.sum()).item():.4f}"
             )
-
-        # Clear immediately after use
-        del lora_circuit_breaker_outputs, lora_circuit_breaker_hidden
-        del normalized_lora_circuit_breaker_outputs, normalized_circuit_breaker_outputs, inner_product
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    # Val - process with memory optimization
-    if log_now and val_hidden is not None:
+    else:
+        circuit_breaker_loss = 0
+      
+    # Val
+    if log_now:
         with torch.no_grad():
             lora_val_outputs = model(**val_inputs)[module]
             lora_val_hidden = torch.stack([lora_val_outputs[l] for l in target_layers])
@@ -279,27 +205,10 @@ def compute_loss(
                 f"val_cos_sim: {(val_cosine.sum() / layers_val_attention_mask.sum()).item():.4f}"
             )
 
-            # Clear immediately after use
-            del lora_val_outputs, lora_val_hidden, val_cosine, layers_val_attention_mask
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-    # Clean up remaining tensors
-    if orig_retain_hidden is not None:
-        del orig_retain_hidden
-    if circuit_breaker_hidden is not None:
-        del circuit_breaker_hidden
-    if val_hidden is not None:
-        del val_hidden
-    if layers_retain_attention_mask is not None:
-        del layers_retain_attention_mask
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-    weighted_retain_loss = retain_coeff * retain_loss
-    loss = weighted_retain_loss + circuit_breaker_coeff * circuit_breaker_loss
+    loss = retain_coeff * retain_loss + circuit_breaker_coeff * circuit_breaker_loss
 
     print(
-        f"\nretain_loss: {retain_loss:.4f} \n"
-        f"circuit_breaker_loss: {circuit_breaker_loss:.4f}"
+        f"\nretain_loss: {retain_loss:.4f} \ncircuit_breaker_loss: {circuit_breaker_loss:.4f}"
     )
     print("=" * 50)
 
@@ -411,15 +320,18 @@ def train():
     print(model_args)
     print(training_args)
 
-    device_map = None  # Set to None for accelerate compatibility
-    # Check for FSDP or DeepSpeed ZeRO3
-    try:
-        is_zero3 = deepspeed.is_deepspeed_zero3_enabled()
-    except AttributeError:
-        # Fallback for newer DeepSpeed versions
-        is_zero3 = False
+    # device_map = None  # Set to None for accelerate compatibility
+    # # Check for FSDP or DeepSpeed ZeRO3
+    # try:
+    #     is_zero3 = deepspeed.is_deepspeed_zero3_enabled()
+    # except AttributeError:
+    #     # Fallback for newer DeepSpeed versions
+    #     is_zero3 = False
 
-    if len(training_args.fsdp) > 0 or is_zero3:
+    # if len(training_args.fsdp) > 0 or is_zero3:
+    #     logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
+    device_map = "auto"
+    if len(training_args.fsdp) > 0: # or deepspeed.is_deepspeed_zero3_enabled():
         logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
 
     model_name_or_path = model_args.model_name_or_path
@@ -456,13 +368,13 @@ def train():
         config.num_hidden_layers = drop_layers_after + 1
 
     print("config.architectures", config.architectures)
-    if "GPTNeoXForCausalLM" in config.architectures:
-        from run_local_evaluation_gpt_neox import run_local_evaluation as local_eval_fn_gpt_neox
-        local_eval_fn = local_eval_fn_gpt_neox
-        print("Using GPT-NeoX local evaluation function")
-    else:
-        local_eval_fn = run_local_evaluation
-        print("Using default local evaluation function")
+    # if "GPTNeoXForCausalLM" in config.architectures:
+    #     from run_local_evaluation_gpt_neox import run_local_evaluation as local_eval_fn_gpt_neox
+    #     local_eval_fn = local_eval_fn_gpt_neox
+    #     print("Using GPT-NeoX local evaluation function")
+    # else:
+    #     local_eval_fn = run_local_evaluation
+    #     print("Using default local evaluation function")
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_name_or_path,
@@ -474,6 +386,7 @@ def train():
     tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
     extra_save_kargs = dict(tokenizer=tokenizer)
     save_model_function = save_model_and_tokenizer
+    
     model = AutoModelForCausalLM.from_pretrained(
         model_name_or_path,
         trust_remote_code=True,
@@ -481,6 +394,7 @@ def train():
         cache_dir=training_args.cache_dir,
         device_map=device_map,
     )
+
     if drop_layers_after and "GPTNeoXForCausalLM" in config.architectures:
         print("Truncating GPT-NeoX layers")
         # Ensure config is updated
@@ -513,9 +427,10 @@ def train():
     print("model", model)
 
     if training_args.deepspeed is not None and training_args.local_rank == 0:
-        # Handle DataParallel wrapper
-        base_model = model.module if hasattr(model, 'module') else model
-        base_model.print_trainable_parameters()
+        model.print_trainable_parameters()
+    #     # Handle DataParallel wrapper
+    #     base_model = model.module if hasattr(model, 'module') else model
+            
 
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()
@@ -541,27 +456,8 @@ def train():
             return self.current_training_step / 300
 
         def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None, **kwargs):
-            # Run evaluation before training
-            print("\n" + "="*50)
-            print("RUNNING INITIAL EVALUATION")
-            print("="*50)
-            local_eval_fn(self.model, tokenizer, self.args.output_dir, step="initial")
-
             # Run actual training
             train_result = super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
-
-            # Run evaluation after training with memory management
-            print("\n" + "="*50)
-            print("RUNNING FINAL EVALUATION")
-            print("="*50)
-
-            # Clear GPU memory before final evaluation
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                print(f"GPU memory cleared. Free: {torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()} bytes")
-
-            local_eval_fn(self.model, tokenizer, self.args.output_dir, step="final")
 
             return train_result
 
