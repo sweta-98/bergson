@@ -26,7 +26,6 @@ echo "output_dir=$output_dir"
 # # Create output directory if it doesn't exist
 mkdir -p $output_dir
 
-# Run with localized CUDA environment
 CUDA_HOME=$CIRCUIT_BREAKER_CUDA_HOME \
 PATH=$CIRCUIT_BREAKER_PATH \
 DS_SKIP_CUDA_CHECK=1 \
@@ -34,9 +33,7 @@ DS_BUILD_OPS=0 \
 DS_BUILD_FUSED_ADAM=0 \
 DS_BUILD_CPU_ADAM=0 \
 DS_BUILD_UTILS=0 \
-accelerate launch --config_file bergson/unlearn/circuit_breaker/configs/accelerate_zero1.yml \
-    --num_processes 1 --main_process_port $MASTER_PORT \
-    bergson/unlearn/circuit_breaker/lorra.py \
+python bergson/unlearn/circuit_breaker/lorra.py \
     --model_name_or_path $model_name_or_path \
     --target_layers $layers \
     --transform_layers $transform_layers \

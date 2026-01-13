@@ -36,6 +36,7 @@ dev = [
 ]
 unlearn = [
     "lm-eval",
+    "deepspeed",
 ]
 example = [
     "trl",

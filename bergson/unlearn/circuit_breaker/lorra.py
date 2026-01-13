@@ -309,13 +309,14 @@ def train():
         def get_training_progress(self):
             return self.current_training_step / 300
 
-        def compute_loss(self, model, inputs, return_outputs=False):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
             return compute_loss(
-                self, 
-                model, 
+                self,
+                model,
                 inputs,
-                target_layers=lorra_target_layers, 
-                alpha=lorra_args.lorra_alpha, 
+                num_items_in_batch=num_items_in_batch,
+                target_layers=lorra_target_layers,
+                alpha=lorra_args.lorra_alpha,
                 return_outputs=return_outputs,
                 tokenizer=tokenizer
             )
