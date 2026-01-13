@@ -51,7 +51,7 @@ class CovarianceCollector(HookCollectorBase):
         # a: [N, S, I], valid_masks: [N, S] -> select valid positions
         a_bi = a[mask]  # [num_valid, I]
         # Compute local covariance
-        local_update_ii = (a_bi.mT @ a_bi).squeeze()
+        local_update_ii = a_bi.mT @ a_bi
 
         # All-reduce across ranks
         if dist.is_initialized():
