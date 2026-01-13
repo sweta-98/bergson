@@ -223,10 +223,11 @@ def train():
     print(training_args)
 
     device_map = "auto"
-    if len(training_args.fsdp) > 0 or deepspeed.is_deepspeed_zero3_enabled():
+    if len(training_args.fsdp) > 0 or training_args.deepspeed is not None or deepspeed.is_deepspeed_zero3_enabled():
         logging.warning(
-            "FSDP and ZeRO3 are both currently incompatible with QLoRA."
+            "FSDP and DeepSpeed are both currently incompatible with device_map='auto'."
         )
+        device_map = None
 
     model_name_or_path = model_args.model_name_or_path
     target_layers = lorra_args.target_layers

@@ -1,6 +1,6 @@
 compute_environment: LOCAL_MACHINE
 deepspeed_config:
-  # gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 4
   offload_optimizer_device: none
   offload_param_device: none
   zero3_init_flag: false
@@ -14,7 +14,7 @@ main_training_function: main
 megatron_lm_config: {}
 mixed_precision: bf16
 num_machines: 1
-num_processes: 8
+num_processes: 1
 main_process_port: 29550
 rdzv_backend: static
 same_network: true

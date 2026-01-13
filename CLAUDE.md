@@ -1,4 +1,4 @@
-Always test your changes by running the appropriate script or CLI command.
+Always test your changes by running the appropriate script or CLI command. Never complete a task without testing your changes until the script or CLI command runs without issues for 3 minutes+ (at minimum). If you find an error unrelated to your task, at minimum quote the exact error back to me when you have completed your task and offer to investigate and fix it.
 
 ## Project Structure and Conventions
 
@@ -19,6 +19,10 @@ torch.cuda.empty_cache() doesn't do what you hope it will do - don't use it.
 You can call CLI commands without prefixing `python -m`, like `bergson build`.
 
 Use `pre-commit run --all-files` if you forget to install pre-commit and it doesn't run in the hook.
+
+Run bash commands in the dedicated tmux pane named "claude" if it is available.
+
+Don't keep default run path values inside low level code - if a module calls another module, the higher level module should always pass through inject a base path.
 
 ### Tests
 
