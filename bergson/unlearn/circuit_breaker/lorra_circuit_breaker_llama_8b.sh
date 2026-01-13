@@ -62,4 +62,7 @@ python bergson/unlearn/circuit_breaker/lorra.py \
     --q_lora False \
     --gradient_checkpointing True \
     --report_to none \
-    --log_every 1
+    --log_every 1 \
+    --coeff_schedule linear_converge \
+    --sc_loss_type orig_act_dotprod \
+    --sc_train_seq_type all_text

@@ -33,9 +33,9 @@ def compute_loss(
     self,
     model,
     inputs,
-    num_items_in_batch,
     target_layers,
     alpha,
+    num_items_in_batch=None,
     return_outputs=False,
     tokenizer=None,
     **kwargs,
@@ -180,6 +180,8 @@ def compute_loss(
             print(
                 f"cb_cos_sim: {(orig_cosine.sum() / layers_circuit_breaker_attention_mask.sum()).item():.4f}"
             )
+    else:
+        circuit_breaker_loss = 0
 
     # Val
     if log_now:
@@ -396,14 +398,14 @@ def train():
         def get_training_progress(self):
             return self.current_training_step / 300
 
-        def compute_loss(self, model, inputs, return_outputs=False):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
             return compute_loss(
                 self,
                 model,
                 inputs,
-                None,
                 target_layers=lorra_target_layers,
                 alpha=lorra_args.lorra_alpha,
+                num_items_in_batch=num_items_in_batch,
                 return_outputs=return_outputs,
                 tokenizer=tokenizer,
             )

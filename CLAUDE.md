@@ -14,6 +14,8 @@ Never save logs, scripts, and other random development into the root of a projec
 
 torch.cuda.empty_cache() doesn't do what you hope it will do - don't use it.
 
+Put imports at the top of the file unless you have a good reason to do otherwise.
+
 # Development
 
 You can call CLI commands without prefixing `python -m`, like `bergson build`.
