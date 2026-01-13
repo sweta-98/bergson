@@ -52,7 +52,7 @@ class CircuitBreakerDataset(Dataset):
             user_tag = "[INST] "
             assistant_tag = " [/INST]"
             sep_token = " "
-        elif "eleutherai/deep-ignorance-unfiltered" in self.model_name_or_path:
+        elif "eleutherai" in self.model_name_or_path:
             print("USING DEEP IGNORANCE (GPTNeoX) TEMPLATE")
             # Set a simple chat template for GPTNeoX
             tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}Human: {{ message['content'] }}\n\nAssistant: {% elif message['role'] == 'assistant' %}{{ message['content'] }}{% endif %}{% endfor %}"
