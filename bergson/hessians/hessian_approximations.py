@@ -18,6 +18,7 @@ from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
 from bergson.hessians.eigenvectors import LambdaCollector, compute_eigendecomposition
 from bergson.hessians.kfac import CovarianceCollector
+from bergson.hessians.tkfac import TraceCovarianceCollector
 from bergson.utils.utils import (
     setup_reproducibility,
     validate_batch_size,
@@ -27,7 +28,10 @@ from bergson.utils.worker_utils import (
     setup_model_and_peft,
 )
 
-HESSIAN_APPROXIMATIONS = {"kfac": CovarianceCollector}
+HESSIAN_APPROXIMATIONS = {
+    "kfac": CovarianceCollector,
+    "tkfac": TraceCovarianceCollector,
+}
 
 
 def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig):

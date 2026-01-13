@@ -114,10 +114,11 @@ def validate_batch_size(
             loss.backward()
             model.zero_grad()
     except Exception as e:
-        raise ValueError(
-            f"Token batch size {token_batch_size} is too large for the device. "
-            f"Try reducing the batch size or use --fsdp to shard the model."
-        ) from e
+        if "CUDA out of memory" in str(e):
+            raise ValueError(
+                f"Token batch size {token_batch_size} is too large for the device. "
+                f"Try reducing the batch size or use --fsdp to shard the model."
+            ) from e
 
 
 DTYPE_BY_PRIORITY = {
