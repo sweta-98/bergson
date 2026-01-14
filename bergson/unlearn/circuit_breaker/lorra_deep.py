@@ -141,34 +141,36 @@ def compute_loss(
             [lora_circuit_breaker_outputs[l] for l in target_layers]
         )
 
-        normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (
-            torch.norm(
-                lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float
-            )
-        )
-        normalized_circuit_breaker_outputs = circuit_breaker_hidden / (
-            torch.norm(circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float)
-        )
+        # normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (
+        #     torch.norm(
+        #         lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float
+        #     )
+        # )
+        # normalized_circuit_breaker_outputs = circuit_breaker_hidden / (
+        #     torch.norm(circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float)
+        # )
+
+        # Use raw inner product instead of normalized cosine similarity.
+        # Normalized cos_sim has vanishing gradients when vectors are nearly aligned
+        # because d(cos_sim)/d(x) = (y_norm - cos_sim * x_norm) / ||x|| -> 0 as x -> y.
+        # Raw inner product has gradient = circuit_breaker_hidden, which is non-zero.
+        hidden_dim = lora_circuit_breaker_hidden.shape[-1]
+        mask = layers_circuit_breaker_attention_mask.squeeze(-1)
         inner_product = (
-            normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
-        ) * layers_circuit_breaker_attention_mask
+            (lora_circuit_breaker_hidden * circuit_breaker_hidden).sum(dim=-1) / hidden_dim
+        ) * mask
 
-        # Compute mean activation norm for scaling
-        updated_activations_norm = torch.mean(
-            lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-        )
-        orig_activations_norm = torch.mean(
-            circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-        )
-        # Use the mean of both norms for scaling
-        mean_activation_norm = (updated_activations_norm + orig_activations_norm) / 2
-
-        circuit_breaker_loss = (
-            torch.relu(inner_product.sum(dim=-1)).sum()
-            / layers_circuit_breaker_attention_mask.sum()
-        ) / mean_activation_norm
+        circuit_breaker_loss = torch.relu(inner_product).sum() / mask.sum()
 
         if log_now:
+            # Compute mean activation norm for scaling
+            updated_activations_norm = torch.mean(
+                lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+            )
+            orig_activations_norm = torch.mean(
+                circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+            )
+
             print("\nupdated_cb_activations_norm:", updated_activations_norm.item())
             print("orig_cb_activations_norm:", orig_activations_norm.item())
 
