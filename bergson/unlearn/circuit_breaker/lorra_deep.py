@@ -80,12 +80,7 @@ def compute_loss(
     layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
         len(target_layers), 1, 1
     ).unsqueeze(-1)
-    # # Collect model hidden states with memory optimization
-    # # Handle DataParallel wrapper
-    # base_model = model.module if hasattr(model, 'module') else model
-
     with model.disable_adapter():
-        # with base_model.disable_adapter():
         model.eval()
         with torch.no_grad():
             ### Retain control
@@ -117,7 +112,7 @@ def compute_loss(
 
                 # Clear immediately
                 del val_outputs
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                gc.collect()
 
     model.train()
 
@@ -158,25 +153,21 @@ def compute_loss(
             normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
         ) * layers_circuit_breaker_attention_mask
 
-        # Compute mean activation norm for scaling
-        updated_activations_norm = torch.mean(
-            lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-        )
-        orig_activations_norm = torch.mean(
-            circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-        )
-        # Use the mean of both norms for scaling
-        mean_activation_norm = (updated_activations_norm + orig_activations_norm) / 2
-
+        # Loss is already scale-invariant since inner_product uses normalized vectors
         circuit_breaker_loss = (
             torch.relu(inner_product.sum(dim=-1)).sum()
             / layers_circuit_breaker_attention_mask.sum()
-        ) / mean_activation_norm
+        )
 
         if log_now:
+            updated_activations_norm = torch.mean(
+                lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+            )
+            orig_activations_norm = torch.mean(
+                circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+            )
             print("\nupdated_cb_activations_norm:", updated_activations_norm.item())
             print("orig_cb_activations_norm:", orig_activations_norm.item())
-            print("mean_activation_norm (loss scaling):", mean_activation_norm.item())
 
             orig_cosine = cosine_similarity(
                 circuit_breaker_hidden, lora_circuit_breaker_hidden, dim=-1

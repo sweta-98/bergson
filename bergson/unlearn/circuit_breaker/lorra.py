@@ -153,6 +153,7 @@ def compute_loss(
         inner_product = (
             normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
         ) * layers_circuit_breaker_attention_mask
+        
         circuit_breaker_loss = (
             torch.relu(inner_product.sum(dim=-1)).sum()
             / layers_circuit_breaker_attention_mask.sum()
