@@ -11,3 +11,5 @@ python scripts/eval_wmdp_robust.py --model_path EleutherAI/deep-ignorance-unfilt
 python scripts/eval_mmlu_stem.py --model_path EleutherAI/deep-ignorance-unfiltered --batch_size 8
 python scripts/eval_mmlu_stem.py --model_path ./out/DeepIgnorance_CB --batch_size 8
 
+python scripts/eval_mmlu_stem.py --model_path ./out/DeepIgnorance_checkpoint --batch_size 8
+python scripts/eval_wmdp_robust.py --model_path ./out/DeepIgnorance_checkpoint --batch_size 8

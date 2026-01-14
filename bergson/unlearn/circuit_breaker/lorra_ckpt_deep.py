@@ -78,7 +78,8 @@ def compute_loss(
     )
 
     # ===== loss components =====
-    layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
+    # Precompute attention masks for target layers to avoid redundant computation
+    layers_cb_attention_mask = circuit_breaker_attention_mask.repeat(
         len(target_layers), 1, 1
     ).unsqueeze(-1)
     with model.disable_adapter():
@@ -147,17 +148,37 @@ def compute_loss(
         lora_cb_outputs = model(**cb_inputs)[module]
         lora_cb_hidden = torch.stack([lora_cb_outputs[l] for l in target_layers])
 
-        # Apply attention masks
-        layers_cb_attention_mask = circuit_breaker_attention_mask.repeat(
-            len(target_layers), 1, 1
-        ).unsqueeze(-1)
-        checkpoint_cb_hidden_masked = checkpoint_cb_hidden * layers_cb_attention_mask
+        # Clean up intermediate outputs to save memory
+        del checkpoint_cb_outputs, lora_cb_outputs
+        gc.collect()
 
-        # Create attention mask for target (validation data)
-        layers_cb_attention_mask = circuit_breaker_attention_mask.repeat(
-            len(target_layers), 1, 1
-        ).unsqueeze(-1)
-        lora_cb_hidden_masked = lora_cb_hidden * layers_cb_attention_mask
+        # Apply attention masks (using pre-computed mask)
+        # Add explicit shape checking to debug scaling issues
+        if log_now:
+            print(f"DEBUG: checkpoint_cb_hidden shape: {checkpoint_cb_hidden.shape}")
+            print(f"DEBUG: lora_cb_hidden shape: {lora_cb_hidden.shape}")
+            print(f"DEBUG: layers_cb_attention_mask shape: {layers_cb_attention_mask.shape}")
+
+        try:
+            # Process tensors separately to reduce peak memory usage
+            checkpoint_cb_hidden_masked = checkpoint_cb_hidden * layers_cb_attention_mask
+            del checkpoint_cb_hidden  # Free memory immediately
+            gc.collect()
+
+            lora_cb_hidden_masked = lora_cb_hidden * layers_cb_attention_mask
+            del lora_cb_hidden  # Free memory immediately
+            gc.collect()
+        except RuntimeError as e:
+            print(f"ERROR: Tensor operation failed: {e}")
+            print(f"checkpoint_cb_hidden shape: {checkpoint_cb_hidden.shape}")
+            print(f"lora_cb_hidden shape: {lora_cb_hidden.shape}")
+            print(f"layers_cb_attention_mask shape: {layers_cb_attention_mask.shape}")
+
+            # Check available GPU memory
+            if torch.cuda.is_available():
+                print(f"GPU memory allocated: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+                print(f"GPU memory reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+            raise
 
         # Compute MSE loss between checkpoint activations and target activations
         # We want to transfer representations from an old checkpoint to the current LoRA model
@@ -167,54 +188,66 @@ def compute_loss(
 
         # Average over hidden dimension first to keep loss magnitude interpretable
         mse_per_token = raw_mse_loss.mean(dim=-1)
+        del raw_mse_loss  # Free immediately after use
+        gc.collect()
 
         # Apply attention mask to ignore padded tokens
         valid_mask = layers_cb_attention_mask.squeeze(-1)
         masked_loss = mse_per_token * valid_mask
+        del mse_per_token  # Free immediately after use
+        gc.collect()
 
         # Average over valid tokens and layers
         assert valid_mask.sum() > 0
         circuit_breaker_loss = masked_loss.sum() / valid_mask.sum()
 
-        if log_now:
-            # Compute cosine similarity for logging
-            cb_cosine = cosine_similarity(
-                checkpoint_cb_hidden, lora_cb_hidden, dim=-1
-            ) * layers_cb_attention_mask.squeeze(-1)
-            print(
-                f"checkpoint_to_cb_cos_sim: {(cb_cosine.sum() / layers_cb_attention_mask.sum()).item():.4f}"
-            )
-            print(f"transfer_mse_loss: {circuit_breaker_loss:.4f}")
+        # Clean up remaining large tensors to free memory when scaling up layers
+        del (
+            checkpoint_cb_hidden_masked,
+            lora_cb_hidden_masked,
+            masked_loss,
+            valid_mask,
+        )
+        gc.collect()
 
-        del checkpoint_cb_outputs, checkpoint_cb_hidden
+        # if log_now:
+        #     # Compute cosine similarity for logging
+        #     cb_cosine = cosine_similarity(
+        #         checkpoint_cb_hidden, lora_cb_hidden, dim=-1
+        #     ) * layers_cb_attention_mask.squeeze(-1)
+        #     print(
+        #         f"checkpoint_to_cb_cos_sim: {(cb_cosine.sum() / layers_cb_attention_mask.sum()).item():.4f}"
+        #     )
+        #     print(f"transfer_mse_loss: {circuit_breaker_loss:.4f}")
+
     else:
         circuit_breaker_loss = 0
 
     # Val
-    if log_now:
-        with torch.no_grad():
-            # Get validation hidden states from original model (for comparison)
-            with model.disable_adapter():
-                val_outputs = model(**val_inputs)[module]
-                val_hidden = torch.stack([val_outputs[l] for l in target_layers])
+    # if log_now:
+    #     with torch.no_grad():
+    #         # Get validation hidden states from original model (for comparison)
+    #         with model.disable_adapter():
+    #             val_outputs = model(**val_inputs)[module]
+    #             val_hidden = torch.stack([val_outputs[l] for l in target_layers])
 
-            # Get validation hidden states from LoRA model
-            lora_val_outputs_log = model(**val_inputs)[module]
-            lora_val_hidden_log = torch.stack(
-                [lora_val_outputs_log[l] for l in target_layers]
-            )
-            layers_val_attention_mask = val_attention_mask.repeat(
-                len(target_layers), 1, 1
-            ).unsqueeze(-1)
+    #         # Get validation hidden states from LoRA model
+    #         lora_val_outputs_log = model(**val_inputs)[module]
+    #         lora_val_hidden_log = torch.stack(
+    #             [lora_val_outputs_log[l] for l in target_layers]
+    #         )
+    #         layers_val_attention_mask = val_attention_mask.repeat(
+    #             len(target_layers), 1, 1
+    #         ).unsqueeze(-1)
 
-            val_cosine = cosine_similarity(
-                val_hidden, lora_val_hidden_log, dim=-1
-            ) * layers_val_attention_mask.squeeze(-1)
-            print(
-                f"val_cos_sim: {(val_cosine.sum() / layers_val_attention_mask.sum()).item():.4f}"
-            )
+    #         val_cosine = cosine_similarity(
+    #             val_hidden, lora_val_hidden_log, dim=-1
+    #         ) * layers_val_attention_mask.squeeze(-1)
+    #         print(
+    #             f"val_cos_sim: {(val_cosine.sum() / layers_val_attention_mask.sum()).item():.4f}"
+    #         )
 
-            del val_outputs, val_hidden, lora_val_outputs_log, lora_val_hidden_log
+    #         del val_outputs, val_hidden, lora_val_outputs_log, lora_val_hidden_log
 
     loss = retain_coeff * retain_loss + circuit_breaker_coeff * circuit_breaker_loss
 

@@ -15,7 +15,8 @@ CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 ### Matches Llama-3-8B Config ###
 model_name_or_path=EleutherAI/deep-ignorance-unfiltered
 lorra_alpha=100 # Higher alpha to increase CB loss weight (MSE has smaller gradients)
-layers="10,20" # Fewer layers like working script
+# layers="2,4,6,8,10,12,14,16,18,20" 
+layers="2,3,4,5,6,7,8,9,10,11,12,14,16,18,20"  #15,13,
 transform_layers="-1"
 
 output_dir="./out/DeepIgnorance_checkpoint"
