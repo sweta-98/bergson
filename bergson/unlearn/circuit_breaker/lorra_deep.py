@@ -32,167 +32,167 @@ def compute_loss(
     tokenizer=None,
     **kwargs,
 ):
-
     self.current_training_step += 1
     log_now = self.current_training_step % 10 == 0
 
-    # === retain ===
+    # === Unpack Inputs ===
     retain_input_ids = inputs.get("input_ids")
     retain_attention_mask = inputs.get("attention_mask")
-    # ==== cb ====
     circuit_breaker_input_ids = inputs.get("input_ids_circuit_breaker")
     circuit_breaker_attention_mask = inputs.get("attention_mask_circuit_breaker")
-    # ==== val ====
     val_input_ids = inputs.get("input_ids_val")
     val_attention_mask = inputs.get("attention_mask_val")
 
-    # ==== Forward Inputs ====
     module = "hidden_states"
-    retain_inputs = dict(
-        input_ids=retain_input_ids,
-        attention_mask=retain_attention_mask,
-        output_hidden_states=True,
-    )
-    cb_inputs = dict(
-        input_ids=circuit_breaker_input_ids,
-        attention_mask=circuit_breaker_attention_mask,
-        output_hidden_states=True,
-    )
-    val_inputs = dict(
-        input_ids=val_input_ids,
-        attention_mask=val_attention_mask,
-        output_hidden_states=True,
-    )
 
-    # ===== Step Coeff ====
+    # ===== Coefficients =====
     progress = self.get_training_progress()
     scheduled_coeff = progress
-    print(f"\nPROGRESS: {progress:.4f}", "=" * 50)
-    retain_coeff, circuit_breaker_coeff = alpha * scheduled_coeff, alpha * (
-        1 - scheduled_coeff
-    )
+    retain_coeff = alpha * scheduled_coeff
+    circuit_breaker_coeff = alpha * (1 - scheduled_coeff)
 
-    print(
-        f"retain_coeff: {retain_coeff:.4f} || circuit_breaker_coeff: {circuit_breaker_coeff:.4f}"
-    )
+    if log_now:
+        print(f"\nPROGRESS: {progress:.4f}", "=" * 50)
+        print(f"retain_coeff: {retain_coeff:.4f} || circuit_breaker_coeff: {circuit_breaker_coeff:.4f}")
 
-    # ===== loss components =====
-    layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
-        len(target_layers), 1, 1
-    ).unsqueeze(-1)
-    with model.disable_adapter():
-        model.eval()
-        with torch.no_grad():
-            ### Retain control
-            if retain_coeff > 0:
-                orig_retain_outputs = model(**retain_inputs)[module]
-                orig_retain_hidden = torch.stack(orig_retain_outputs).detach()
-                layers_retain_attention_mask = retain_attention_mask.repeat(
-                    len(orig_retain_outputs), 1, 1
-                ).unsqueeze(-1)
-                orig_retain_hidden *= layers_retain_attention_mask
+    # ========================================================================
+    # 1. RETAIN CONTROL
+    # ========================================================================
+    retain_loss = torch.tensor(0.0, device=model.device)
+    
+    # Logging accumulators
+    retain_cos_sum = 0.0
+    retain_mask_sum = 0.0
 
-                del orig_retain_outputs
-                gc.collect()
+    if retain_coeff > 0:
+        retain_inputs = dict(
+            input_ids=retain_input_ids,
+            attention_mask=retain_attention_mask,
+            output_hidden_states=True,
+        )
+        
+        # 1a. Get Original Outputs (Frozen)
+        with model.disable_adapter(), torch.no_grad():
+            orig_retain_outputs = model(**retain_inputs)[module]
 
-            ### Circuit Breaker control
-            if circuit_breaker_coeff > 0:
-                circuit_breaker_outputs = model(**cb_inputs)[module]
-                circuit_breaker_hidden = torch.stack(
-                    [circuit_breaker_outputs[l].detach() for l in target_layers]
-                )
-
-                del circuit_breaker_outputs
-                gc.collect()
-
-            ### Val - only when logging
-            if log_now:
-                val_outputs = model(**val_inputs)[module]
-                val_hidden = torch.stack([val_outputs[l] for l in target_layers])
-
-                # Clear immediately
-                del val_outputs
-                gc.collect()
-
-    model.train()
-
-    ### Retain control
-    if retain_coeff > 0 and orig_retain_hidden is not None:
+        # 1b. Get LoRA Outputs (Trainable)
         lora_retain_outputs = model(**retain_inputs)[module]
-        lora_retain_hidden = (
-            torch.stack(lora_retain_outputs) * layers_retain_attention_mask
-        )
-        retain_loss = torch.norm(
-            lora_retain_hidden - orig_retain_hidden, dim=-1, p=2, dtype=torch.float
-        ).nanmean()
 
-        if log_now:
-            retain_cosine = cosine_similarity(
-                lora_retain_hidden, orig_retain_hidden, dim=-1
-            ) * layers_retain_attention_mask.squeeze(-1)
-            print(
-                f"\nretain_cos_sim: {(retain_cosine.sum() / layers_retain_attention_mask.sum()).item():.4f}"
-            )
+        # 1c. Iterative Processing
+        retain_loss_accumulator = 0
+        valid_layers_count = 0
+        
+        # Mask shape: [Batch, Seq, 1] - broadcastable to [Batch, Seq, Hidden]
+        mask_expanded = retain_attention_mask.unsqueeze(-1)
+        mask_sum_float = mask_expanded.sum().item()
 
-    ### Circuit Breaker control
+        # Assuming we iterate over all layers returned
+        for orig_layer, lora_layer in zip(orig_retain_outputs, lora_retain_outputs):
+            
+            # --- Loss Calculation ---
+            diff = (lora_layer - orig_layer) * mask_expanded
+            layer_loss = torch.norm(diff, dim=-1, p=2, dtype=torch.float).nanmean()
+            retain_loss_accumulator += layer_loss
+            valid_layers_count += 1
+
+            # --- Logging (Iterative Cosine) ---
+            if log_now:
+                with torch.no_grad():
+                    # Calculate cosine for this layer
+                    layer_cos = torch.nn.functional.cosine_similarity(lora_layer, orig_layer, dim=-1)
+                    # Apply mask and sum
+                    retain_cos_sum += (layer_cos * retain_attention_mask).sum().item()
+                    retain_mask_sum += mask_sum_float
+
+            # Memory Cleanup
+            del diff, layer_loss
+        
+        retain_loss = retain_loss_accumulator / valid_layers_count
+
+        # Finalize Logging
+        if log_now and retain_mask_sum > 0:
+            print(f"retain_cos_sim: {(retain_cos_sum / retain_mask_sum):.4f}")
+
+        # Big Cleanup
+        del orig_retain_outputs, lora_retain_outputs
+        gc.collect()
+
+    # ========================================================================
+    # 2. CIRCUIT BREAKER CONTROL
+    # ========================================================================
+    circuit_breaker_loss = torch.tensor(0.0, device=model.device)
+    
+    # Logging accumulators
+    cb_cos_sum = 0.0
+    cb_mask_sum = 0.0
+    cb_lora_norm_sum = 0.0
+    cb_orig_norm_sum = 0.0
+    cb_layer_count = 0
+
     if circuit_breaker_coeff > 0:
-        lora_circuit_breaker_outputs = model(**cb_inputs)[module]
-        lora_circuit_breaker_hidden = torch.stack(
-            [lora_circuit_breaker_outputs[l] for l in target_layers]
+        cb_inputs = dict(
+            input_ids=circuit_breaker_input_ids,
+            attention_mask=circuit_breaker_attention_mask,
+            output_hidden_states=True,
         )
 
-        normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (
-            torch.norm(
-                lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float
-            )
-        )
-        normalized_circuit_breaker_outputs = circuit_breaker_hidden / (
-            torch.norm(circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float)
-        )
-        inner_product = (
-            normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
-        ) * layers_circuit_breaker_attention_mask
-        
-        circuit_breaker_loss = (
-            torch.relu(inner_product.sum(dim=-1)).sum()
-            / layers_circuit_breaker_attention_mask.sum()
-        )
+        # 2a. Checkpoint Outputs
+        with torch.no_grad():
+            checkpoint_cb_outputs = self.checkpoint_model(**cb_inputs)[module]
 
-        # normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (
-        #     torch.norm(
-        #         lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float
-        #     )
-        # )
-        # normalized_circuit_breaker_outputs = circuit_breaker_hidden / (
-        #     torch.norm(circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float)
-        # )
+        # 2b. LoRA Outputs
+        lora_cb_outputs = model(**cb_inputs)[module]
 
-        # Use raw inner product instead of normalized cosine similarity.
-        # Normalized cos_sim has vanishing gradients when vectors are nearly aligned
-        # because d(cos_sim)/d(x) = (y_norm - cos_sim * x_norm) / ||x|| -> 0 as x -> y.
-        # Raw inner product has gradient = circuit_breaker_hidden, which is non-zero.
-        # hidden_dim = lora_circuit_breaker_hidden.shape[-1]
-        # mask = layers_circuit_breaker_attention_mask.squeeze(-1)
-        # inner_product = (
-        #     (lora_circuit_breaker_hidden * circuit_breaker_hidden).sum(dim=-1) / hidden_dim
-        # ) * mask
-        
+        # 2c. Iterative Processing
+        cb_loss_accumulator = 0
+        mask_expanded = circuit_breaker_attention_mask.unsqueeze(-1)
+        mask_sum_float = mask_expanded.sum().item()
+        valid_tokens = mask_expanded.sum() # Tensor for division in loss
 
-        # circuit_breaker_loss = torch.relu(inner_product).sum() / mask.sum()
+        for layer_idx in target_layers:
+            target_act = checkpoint_cb_outputs[layer_idx].detach()
+            pred_act = lora_cb_outputs[layer_idx]
 
+            # --- Loss Calculation (MSE) ---
+            # (Using MSE as per your OOM request, not the Cosine loss in the logging script)
+            target_masked = target_act * mask_expanded
+            pred_masked = pred_act * mask_expanded
+            
+            layer_mse = torch.nn.functional.mse_loss(target_masked, pred_masked, reduction='none')
+            mse_per_token = layer_mse.mean(dim=-1)
+            masked_loss = mse_per_token * mask_expanded.squeeze(-1)
+            
+            if valid_tokens > 0:
+                cb_loss_accumulator += (masked_loss.sum() / valid_tokens)
+
+            # --- Logging (Iterative) ---
+            if log_now:
+                with torch.no_grad():
+                    # 1. Activation Norms
+                    # shape: [Batch, Seq] -> mean(1) -> [Batch] -> mean() -> Scalar
+                    cb_lora_norm_sum += pred_act.norm(dim=-1).mean(dim=1).mean().item()
+                    cb_orig_norm_sum += target_act.norm(dim=-1).mean(dim=1).mean().item()
+                    cb_layer_count += 1
+
+                    # 2. Cosine Similarity
+                    layer_cos = torch.nn.functional.cosine_similarity(target_act, pred_act, dim=-1)
+                    cb_cos_sum += (layer_cos * circuit_breaker_attention_mask).sum().item()
+                    cb_mask_sum += mask_sum_float
+
+            # Memory Cleanup
+            del target_act, pred_act, layer_mse, mse_per_token, masked_loss, target_masked, pred_masked
+
+        circuit_breaker_loss = cb_loss_accumulator / len(target_layers)
+
+        # Finalize Logging
         if log_now:
-            # Compute mean activation norm for scaling
-            updated_activations_norm = torch.mean(
-                lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-            )
-            orig_activations_norm = torch.mean(
-                circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-            )
+            print(f"\nupdated_cb_activations_norm: {cb_lora_norm_sum / max(cb_layer_count, 1):.4f}")
+            print(f"orig_cb_activations_norm: {cb_orig_norm_sum / max(cb_layer_count, 1):.4f}")
+            
+            if cb_mask_sum > 0:
+                print(f"cb_cos_sim: {(cb_cos_sum / cb_mask_sum):.4f}")
 
-            print("\nupdated_cb_activations_norm:", updated_activations_norm.item())
-            print("orig_cb_activations_norm:", orig_activations_norm.item())
-
-            # Debug: Check if LoRA weights are changing
+            # Weights Logging (Cheap, no OOM risk)
             lora_weight_sum = 0.0
             lora_weight_count = 0
             for name, param in model.named_parameters():
@@ -202,36 +202,60 @@ def compute_loss(
             print(f"lora_weights_abs_sum: {lora_weight_sum:.6f}")
             print(f"lora_weights_mean_abs: {lora_weight_sum / max(lora_weight_count, 1):.8f}")
 
-            orig_cosine = cosine_similarity(
-                circuit_breaker_hidden, lora_circuit_breaker_hidden, dim=-1
-            ) * layers_circuit_breaker_attention_mask.squeeze(-1)
-            print(
-                f"cb_cos_sim: {(orig_cosine.sum() / layers_circuit_breaker_attention_mask.sum()).item():.4f}"
-            )
-    else:
-        circuit_breaker_loss = 0
+        # Big Cleanup
+        del checkpoint_cb_outputs, lora_cb_outputs
+        gc.collect()
 
-    # Val
+    # ========================================================================
+    # 3. VALIDATION (Logging Only)
+    # ========================================================================
     if log_now:
+        val_inputs = dict(
+            input_ids=val_input_ids,
+            attention_mask=val_attention_mask,
+            output_hidden_states=True,
+        )
+        
+        val_cos_sum = 0.0
+        val_mask_sum = 0.0
+        
+        mask_expanded = val_attention_mask.unsqueeze(-1)
+        mask_sum_float = mask_expanded.sum().item()
+
         with torch.no_grad():
-            lora_val_outputs = model(**val_inputs)[module]
-            lora_val_hidden = torch.stack([lora_val_outputs[l] for l in target_layers])
-            layers_val_attention_mask = val_attention_mask.repeat(
-                len(target_layers), 1, 1
-            ).unsqueeze(-1)
+            # Standard model outputs
+            val_outputs = model(**val_inputs)[module]
+            
+            # Note: We don't have a "target" for validation in your snippet other than comparing
+            # to itself or potentially a frozen model.
+            # Your script showed: `val_hidden = stack(...)` and `cosine_similarity(val_hidden, lora_val_hidden)`
+            # But usually `val_outputs` IS `lora_val_outputs`. 
+            # If you meant comparing LoRA val vs Frozen val, we need to run the disabled model again.
+            # Assuming you want LoRA vs Frozen (similar to Retain):
+            
+            with model.disable_adapter():
+                orig_val_outputs = model(**val_inputs)[module]
 
-            val_cosine = cosine_similarity(
-                val_hidden, lora_val_hidden, dim=-1
-            ) * layers_val_attention_mask.squeeze(-1)
-            print(
-                f"val_cos_sim: {(val_cosine.sum() / layers_val_attention_mask.sum()).item():.4f}"
-            )
+            for layer_idx in target_layers:
+                lora_layer = val_outputs[layer_idx]
+                orig_layer = orig_val_outputs[layer_idx]
 
+                layer_cos = torch.nn.functional.cosine_similarity(lora_layer, orig_layer, dim=-1)
+                val_cos_sum += (layer_cos * val_attention_mask).sum().item()
+                val_mask_sum += mask_sum_float
+            
+            if val_mask_sum > 0:
+                print(f"val_cos_sim: {(val_cos_sum / val_mask_sum):.4f}")
+            
+            del val_outputs, orig_val_outputs
+            gc.collect()
+
+    # ========================================================================
+    # TOTAL LOSS
+    # ========================================================================
     loss = retain_coeff * retain_loss + circuit_breaker_coeff * circuit_breaker_loss
 
-    print(
-        f"\nretain_loss: {retain_loss:.4f} \ncircuit_breaker_loss: {circuit_breaker_loss:.4f}"
-    )
+    print(f"\nretain_loss: {retain_loss.item():.4f} \ncircuit_breaker_loss: {circuit_breaker_loss.item():.4f}")
     print("=" * 50)
 
     return (loss,) if return_outputs else loss

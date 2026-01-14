@@ -53,7 +53,7 @@ python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \
     --lora_target_modules query_key_value dense dense_h_to_4h dense_4h_to_h \
     --output_dir  $output_dir \
     --overwrite_output_dir \
-    --max_steps 150 \
+    --max_steps 1500 \
     --bf16 True \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 32 \
