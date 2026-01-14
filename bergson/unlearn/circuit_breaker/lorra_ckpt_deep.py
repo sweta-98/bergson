@@ -210,44 +210,8 @@ def compute_loss(
         )
         gc.collect()
 
-        # if log_now:
-        #     # Compute cosine similarity for logging
-        #     cb_cosine = cosine_similarity(
-        #         checkpoint_cb_hidden, lora_cb_hidden, dim=-1
-        #     ) * layers_cb_attention_mask.squeeze(-1)
-        #     print(
-        #         f"checkpoint_to_cb_cos_sim: {(cb_cosine.sum() / layers_cb_attention_mask.sum()).item():.4f}"
-        #     )
-        #     print(f"transfer_mse_loss: {circuit_breaker_loss:.4f}")
-
     else:
         circuit_breaker_loss = 0
-
-    # Val
-    # if log_now:
-    #     with torch.no_grad():
-    #         # Get validation hidden states from original model (for comparison)
-    #         with model.disable_adapter():
-    #             val_outputs = model(**val_inputs)[module]
-    #             val_hidden = torch.stack([val_outputs[l] for l in target_layers])
-
-    #         # Get validation hidden states from LoRA model
-    #         lora_val_outputs_log = model(**val_inputs)[module]
-    #         lora_val_hidden_log = torch.stack(
-    #             [lora_val_outputs_log[l] for l in target_layers]
-    #         )
-    #         layers_val_attention_mask = val_attention_mask.repeat(
-    #             len(target_layers), 1, 1
-    #         ).unsqueeze(-1)
-
-    #         val_cosine = cosine_similarity(
-    #             val_hidden, lora_val_hidden_log, dim=-1
-    #         ) * layers_val_attention_mask.squeeze(-1)
-    #         print(
-    #             f"val_cos_sim: {(val_cosine.sum() / layers_val_attention_mask.sum()).item():.4f}"
-    #         )
-
-    #         del val_outputs, val_hidden, lora_val_outputs_log, lora_val_hidden_log
 
     loss = retain_coeff * retain_loss + circuit_breaker_coeff * circuit_breaker_loss
 
