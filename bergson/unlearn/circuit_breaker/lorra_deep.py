@@ -153,21 +153,34 @@ def compute_loss(
             normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
         ) * layers_circuit_breaker_attention_mask
 
-        # Loss is already scale-invariant since inner_product uses normalized vectors
+        # Compute mean activation norm for scaling
+        updated_activations_norm = torch.mean(
+            lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+        )
+        orig_activations_norm = torch.mean(
+            circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
+        )
+        # Use the mean of both norms for scaling
+        mean_activation_norm = (updated_activations_norm + orig_activations_norm) / 2
+
         circuit_breaker_loss = (
             torch.relu(inner_product.sum(dim=-1)).sum()
             / layers_circuit_breaker_attention_mask.sum()
-        )
+        ) / mean_activation_norm
 
         if log_now:
-            updated_activations_norm = torch.mean(
-                lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-            )
-            orig_activations_norm = torch.mean(
-                circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
-            )
             print("\nupdated_cb_activations_norm:", updated_activations_norm.item())
             print("orig_cb_activations_norm:", orig_activations_norm.item())
+
+            # Debug: Check if LoRA weights are changing
+            lora_weight_sum = 0.0
+            lora_weight_count = 0
+            for name, param in model.named_parameters():
+                if "lora_" in name and param.requires_grad:
+                    lora_weight_sum += param.abs().sum().item()
+                    lora_weight_count += param.numel()
+            print(f"lora_weights_abs_sum: {lora_weight_sum:.6f}")
+            print(f"lora_weights_mean_abs: {lora_weight_sum / max(lora_weight_count, 1):.8f}")
 
             orig_cosine = cosine_similarity(
                 circuit_breaker_hidden, lora_circuit_breaker_hidden, dim=-1
@@ -250,7 +263,6 @@ def get_model_generation(inputs, model, tokenizer, prefill=""):
     encoded_inputs = tokenizer(inputs, return_tensors="pt")
 
     with torch.no_grad():
-        # Ensure we clear any stale cache and handle device properly
         if hasattr(model, "module"):
             generation_model = model.module
         else:
@@ -318,16 +330,6 @@ def train():
     print(model_args)
     print(training_args)
 
-    # device_map = None  # Set to None for accelerate compatibility
-    # # Check for FSDP or DeepSpeed ZeRO3
-    # try:
-    #     is_zero3 = deepspeed.is_deepspeed_zero3_enabled()
-    # except AttributeError:
-    #     # Fallback for newer DeepSpeed versions
-    #     is_zero3 = False
-
-    # if len(training_args.fsdp) > 0 or is_zero3:
-    #     logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
     device_map = "auto"
     if len(training_args.fsdp) > 0:  # or deepspeed.is_deepspeed_zero3_enabled():
         logging.warning("FSDP and ZeRO3 are both currently incompatible with QLoRA.")
@@ -365,15 +367,6 @@ def train():
     if drop_layers_after:
         config.num_hidden_layers = drop_layers_after + 1
 
-    print("config.architectures", config.architectures)
-    # if "GPTNeoXForCausalLM" in config.architectures:
-    #     from run_local_evaluation_gpt_neox import run_local_evaluation as local_eval_fn_gpt_neox
-    #     local_eval_fn = local_eval_fn_gpt_neox
-    #     print("Using GPT-NeoX local evaluation function")
-    # else:
-    #     local_eval_fn = run_local_evaluation
-    #     print("Using default local evaluation function")
-
     tokenizer = AutoTokenizer.from_pretrained(
         model_name_or_path,
         cache_dir=training_args.cache_dir,
@@ -395,26 +388,20 @@ def train():
 
     if drop_layers_after and "GPTNeoXForCausalLM" in config.architectures:
         print("Truncating GPT-NeoX layers")
-        # Ensure config is updated
         model.config.num_hidden_layers = drop_layers_after + 1
 
-        # Slice the actual PyTorch module list
-        # For GPT-NeoX, layers are usually in model.gpt_neox.layers
         if hasattr(model, "gpt_neox") and hasattr(model.gpt_neox, "layers"):
             print(
                 f"Truncating GPT-NeoX layers from {len(model.gpt_neox.layers)} to {drop_layers_after + 1}"
             )
             model.gpt_neox.layers = model.gpt_neox.layers[: drop_layers_after + 1]
-            # Clear cache and force config update for generation
             model._modules_to_not_convert = getattr(
                 model, "_modules_to_not_convert", set()
             )
 
-        # Also update the head_mask handling in config for generation
         if hasattr(model.config, "num_attention_heads") and hasattr(
             model.config, "num_hidden_layers"
         ):
-            # Ensure generation uses correct number of layers
             model.config._name_or_path = (
                 model.config._name_or_path
                 if hasattr(model.config, "_name_or_path")
@@ -436,8 +423,6 @@ def train():
 
     if training_args.deepspeed is not None and training_args.local_rank == 0:
         model.print_trainable_parameters()
-    #     # Handle DataParallel wrapper
-    #     base_model = model.module if hasattr(model, 'module') else model
 
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()
@@ -462,29 +447,14 @@ def train():
         def get_training_progress(self):
             return self.current_training_step / 300
 
-        def train(
-            self,
-            resume_from_checkpoint=None,
-            trial=None,
-            ignore_keys_for_eval=None,
-            **kwargs,
-        ):
-            # Run actual training
-            train_result = super().train(
-                resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs
-            )
-
-            return train_result
-
-        def compute_loss(
-            self, model, inputs, return_outputs=False, num_items_in_batch=None
-        ):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
             return compute_loss(
                 self,
                 model,
                 inputs,
                 target_layers=lorra_target_layers,
                 alpha=lorra_args.lorra_alpha,
+                num_items_in_batch=num_items_in_batch,
                 return_outputs=return_outputs,
                 tokenizer=tokenizer,
             )

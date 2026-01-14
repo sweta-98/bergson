@@ -52,7 +52,7 @@ python bergson/unlearn/circuit_breaker/lorra_deep.py \
     --lora_target_modules query_key_value dense dense_h_to_4h dense_4h_to_h \
     --output_dir  $output_dir \
     --overwrite_output_dir \
-    --max_steps 150 \
+    --max_steps 20 \
     --bf16 True \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 32 \
@@ -61,14 +61,14 @@ python bergson/unlearn/circuit_breaker/lorra_deep.py \
     --do_eval \
     --eval_steps 1000  \
     --save_total_limit 0 \
-    --learning_rate 1e-4 \
+    --learning_rate 1e-3 \
     --weight_decay 0. \
     --lr_scheduler_type "constant" \
     --logging_steps 10 \
     --tf32 True \
     --model_max_length 8192 \
     --q_lora False \
-    --gradient_checkpointing True \
+    --gradient_checkpointing False \
     --report_to none \
     --log_every 1 \
     --coeff_schedule linear_converge \
