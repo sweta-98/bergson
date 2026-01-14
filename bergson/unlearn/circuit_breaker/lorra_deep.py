@@ -141,6 +141,23 @@ def compute_loss(
             [lora_circuit_breaker_outputs[l] for l in target_layers]
         )
 
+        normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (
+            torch.norm(
+                lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float
+            )
+        )
+        normalized_circuit_breaker_outputs = circuit_breaker_hidden / (
+            torch.norm(circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float)
+        )
+        inner_product = (
+            normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
+        ) * layers_circuit_breaker_attention_mask
+        
+        circuit_breaker_loss = (
+            torch.relu(inner_product.sum(dim=-1)).sum()
+            / layers_circuit_breaker_attention_mask.sum()
+        )
+
         # normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (
         #     torch.norm(
         #         lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float
@@ -154,13 +171,14 @@ def compute_loss(
         # Normalized cos_sim has vanishing gradients when vectors are nearly aligned
         # because d(cos_sim)/d(x) = (y_norm - cos_sim * x_norm) / ||x|| -> 0 as x -> y.
         # Raw inner product has gradient = circuit_breaker_hidden, which is non-zero.
-        hidden_dim = lora_circuit_breaker_hidden.shape[-1]
-        mask = layers_circuit_breaker_attention_mask.squeeze(-1)
-        inner_product = (
-            (lora_circuit_breaker_hidden * circuit_breaker_hidden).sum(dim=-1) / hidden_dim
-        ) * mask
+        # hidden_dim = lora_circuit_breaker_hidden.shape[-1]
+        # mask = layers_circuit_breaker_attention_mask.squeeze(-1)
+        # inner_product = (
+        #     (lora_circuit_breaker_hidden * circuit_breaker_hidden).sum(dim=-1) / hidden_dim
+        # ) * mask
+        
 
-        circuit_breaker_loss = torch.relu(inner_product).sum() / mask.sum()
+        # circuit_breaker_loss = torch.relu(inner_product).sum() / mask.sum()
 
         if log_now:
             # Compute mean activation norm for scaling
@@ -400,6 +418,8 @@ def train():
             model._modules_to_not_convert = getattr(
                 model, "_modules_to_not_convert", set()
             )
+            # Ensure inner model config is synced for head_mask preparation
+            model.gpt_neox.config.num_hidden_layers = drop_layers_after + 1
 
         if hasattr(model.config, "num_attention_heads") and hasattr(
             model.config, "num_hidden_layers"
@@ -422,6 +442,13 @@ def train():
 
     model = get_peft_model(model, lora_config)
     print("model", model)
+
+    # Re-sync config after PEFT wrapping for GPT-NeoX models
+    if drop_layers_after and "GPTNeoXForCausalLM" in config.architectures:
+        base_model = model.get_base_model()
+        if hasattr(base_model, "gpt_neox"):
+            base_model.config.num_hidden_layers = drop_layers_after + 1
+            base_model.gpt_neox.config.num_hidden_layers = drop_layers_after + 1
 
     if training_args.deepspeed is not None and training_args.local_rank == 0:
         model.print_trainable_parameters()

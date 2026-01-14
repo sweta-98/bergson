@@ -22,7 +22,7 @@ You can call CLI commands without prefixing `python -m`, like `bergson build`.
 
 Use `pre-commit run --all-files` if you forget to install pre-commit and it doesn't run in the hook.
 
-If you can, open a dedicated tmux pane named "claude" to run commands in and tell the user how to access it for monitoring purposes.
+If you can, open a dedicated tmux pane named "claude-commands" to run commands in and tell the user how to access it for monitoring purposes.
 
 Don't keep default run path values inside low level code - if a module calls another module, the higher level module should always pass through inject a base path.
 

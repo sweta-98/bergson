@@ -14,11 +14,11 @@ CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 
 ### Matches Llama-3-8B Config ###
 model_name_or_path=EleutherAI/deep-ignorance-unfiltered
-lorra_alpha=10 # llama was 10, mistral was 5
-layers="10,20" # 2,4,
+lorra_alpha=100 # Higher alpha to increase CB loss weight (MSE has smaller gradients)
+layers="10,20" # Fewer layers like working script
 transform_layers="-1"
 
-output_dir="./out/DeepIgnorance_CB"
+output_dir="./out/DeepIgnorance_checkpoint"
 
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
@@ -28,7 +28,7 @@ mkdir -p $output_dir
 
 # Print the command that will be executed
 echo "Executing command:"
-echo "python bergson/unlearn/circuit_breaker/lorra_deep.py \\"
+echo "python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \\"
 
 # Run with localized CUDA environment and paper hyperparameters
 # same lr as llama
@@ -41,7 +41,7 @@ DS_BUILD_OPS=0 \
 DS_BUILD_FUSED_ADAM=0 \
 DS_BUILD_CPU_ADAM=0 \
 DS_BUILD_UTILS=0 \
-python bergson/unlearn/circuit_breaker/lorra_deep.py \
+python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \
     --model_name_or_path $model_name_or_path \
     --target_layers $layers \
     --transform_layers $transform_layers \

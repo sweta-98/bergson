@@ -15,26 +15,34 @@ def save_model_and_tokenizer(
     merged_model = model.merge_and_unload()
     # merge original layers
     if drop_layers_after is not None:
+        # Load anchor model on CPU to avoid device distribution issues
         anchor_model = AutoModelForCausalLM.from_pretrained(
-            model_name_or_path, torch_dtype=merged_model.dtype, device_map="auto"
+            model_name_or_path, torch_dtype=merged_model.dtype, device_map="cpu"
         )
         # Handle different model architectures
         if hasattr(merged_model, 'model') and hasattr(merged_model.model, 'layers'):
-            # Llama-style models
-            merged_model.model.layers = (
-                merged_model.model.layers
-                + anchor_model.model.layers[drop_layers_after + 1 :]
-            )
+            # Llama-style models - get device of last layer
+            last_layer = merged_model.model.layers[-1]
+            target_device = next(last_layer.parameters()).device
+            # Move restored layers to target device before concatenating
+            restored_layers = anchor_model.model.layers[drop_layers_after + 1 :]
+            for layer in restored_layers:
+                layer.to(target_device)
+            merged_model.model.layers = merged_model.model.layers + restored_layers
         elif hasattr(merged_model, 'gpt_neox') and hasattr(merged_model.gpt_neox, 'layers'):
-            # GPTNeoX-style models
-            merged_model.gpt_neox.layers = (
-                merged_model.gpt_neox.layers
-                + anchor_model.gpt_neox.layers[drop_layers_after + 1 :]
-            )
+            # GPTNeoX-style models - get device of last layer
+            last_layer = merged_model.gpt_neox.layers[-1]
+            target_device = next(last_layer.parameters()).device
+            # Move restored layers to target device before concatenating
+            restored_layers = anchor_model.gpt_neox.layers[drop_layers_after + 1 :]
+            for layer in restored_layers:
+                layer.to(target_device)
+            merged_model.gpt_neox.layers = merged_model.gpt_neox.layers + restored_layers
         merged_model.config = anchor_model.config
         # Update config to reflect the actual number of layers after restoration
         if hasattr(merged_model, 'gpt_neox') and hasattr(merged_model.gpt_neox, 'layers'):
             merged_model.config.num_hidden_layers = len(merged_model.gpt_neox.layers)
+            merged_model.gpt_neox.config = merged_model.config
         elif hasattr(merged_model, 'model') and hasattr(merged_model.model, 'layers'):
             merged_model.config.num_hidden_layers = len(merged_model.model.layers)
 

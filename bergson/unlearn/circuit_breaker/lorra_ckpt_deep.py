@@ -81,12 +81,7 @@ def compute_loss(
     layers_circuit_breaker_attention_mask = circuit_breaker_attention_mask.repeat(
         len(target_layers), 1, 1
     ).unsqueeze(-1)
-    # # Collect model hidden states with memory optimization
-    # # Handle DataParallel wrapper
-    # base_model = model.module if hasattr(model, 'module') else model
-
     with model.disable_adapter():
-        # with base_model.disable_adapter():
         model.eval()
         with torch.no_grad():
             ### Retain control
@@ -116,9 +111,8 @@ def compute_loss(
                 val_outputs = model(**val_inputs)[module]
                 val_hidden = torch.stack([val_outputs[l] for l in target_layers])
 
-                # Clear immediately
                 del val_outputs
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                gc.collect()
 
     model.train()
 
@@ -179,11 +173,8 @@ def compute_loss(
         masked_loss = mse_per_token * valid_mask
 
         # Average over valid tokens and layers
-        if valid_mask.sum() > 0:
-            circuit_breaker_loss = masked_loss.sum() / valid_mask.sum()
-        else:
-            raise ValueError("No valid tokens found for circuit breaker loss")
-            circuit_breaker_loss = torch.tensor(0.0, device=model.device)
+        assert valid_mask.sum() > 0
+        circuit_breaker_loss = masked_loss.sum() / valid_mask.sum()
 
         if log_now:
             # Compute cosine similarity for logging
@@ -195,7 +186,6 @@ def compute_loss(
             )
             print(f"transfer_mse_loss: {circuit_breaker_loss:.4f}")
 
-        # Clean up
         del checkpoint_cb_outputs, checkpoint_cb_hidden
     else:
         circuit_breaker_loss = 0
@@ -224,7 +214,6 @@ def compute_loss(
                 f"val_cos_sim: {(val_cosine.sum() / layers_val_attention_mask.sum()).item():.4f}"
             )
 
-            # Clean up
             del val_outputs, val_hidden, lora_val_outputs_log, lora_val_hidden_log
 
     loss = retain_coeff * retain_loss + circuit_breaker_coeff * circuit_breaker_loss
@@ -482,21 +471,6 @@ def train():
                 f"Truncating GPT-NeoX layers from {len(model.gpt_neox.layers)} to {drop_layers_after + 1}"
             )
             model.gpt_neox.layers = model.gpt_neox.layers[: drop_layers_after + 1]
-            # Clear cache and force config update for generation
-            model._modules_to_not_convert = getattr(
-                model, "_modules_to_not_convert", set()
-            )
-
-        # Also update the head_mask handling in config for generation
-        if hasattr(model.config, "num_attention_heads") and hasattr(
-            model.config, "num_hidden_layers"
-        ):
-            # Ensure generation uses correct number of layers
-            model.config._name_or_path = (
-                model.config._name_or_path
-                if hasattr(model.config, "_name_or_path")
-                else model_name_or_path
-            )
 
     save_model_function = partial(
         save_model_function,
@@ -510,6 +484,13 @@ def train():
 
     model = get_peft_model(model, lora_config)
     print("model", model)
+
+    # Re-sync config after PEFT wrapping for GPT-NeoX models
+    if drop_layers_after and "GPTNeoXForCausalLM" in config.architectures:
+        base_model = model.get_base_model()
+        if hasattr(base_model, "gpt_neox"):
+            base_model.config.num_hidden_layers = drop_layers_after + 1
+            base_model.gpt_neox.config.num_hidden_layers = drop_layers_after + 1
 
     if training_args.deepspeed is not None and training_args.local_rank == 0:
         model.print_trainable_parameters()
