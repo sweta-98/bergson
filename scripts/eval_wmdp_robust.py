@@ -55,14 +55,13 @@ def main():
     print("WMDP Bio Robust Results:")
     print("=" * 60)
 
-    if "results" in results:
-        for task_name, task_results in results["results"].items():
-            print(f"\n{task_name}:")
-            for metric, value in task_results.items():
-                if isinstance(value, float):
-                    print(f"  {metric}: {value:.4f}")
-                else:
-                    print(f"  {metric}: {value}")
+    if "results" in results and "wmdp_bio_robust" in results["results"]:
+        task_results = results["results"]["wmdp_bio_robust"]
+        for metric, value in task_results.items():
+            if isinstance(value, float):
+                print(f"  {metric}: {value:.4f}")
+            else:
+                print(f"  {metric}: {value}")
 
     return results
 
