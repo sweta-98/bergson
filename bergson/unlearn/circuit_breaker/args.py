@@ -47,7 +47,7 @@ class LorraArguments:
         metadata={"help": "Whether to use final layer MSE loss (True) or L2 norm loss across all layers (False) for retain loss"},
     )
     affine: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Whether to use affine transformation for target layers"},
     )
 

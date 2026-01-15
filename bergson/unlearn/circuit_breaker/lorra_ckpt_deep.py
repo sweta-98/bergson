@@ -32,7 +32,7 @@ def compute_loss(
     target_layers,
     alpha,
     num_items_in_batch=None,
-    affine = True,
+    affine = False,
     return_outputs=False,
     tokenizer=None,
     use_final_mse_retain_loss=True,
