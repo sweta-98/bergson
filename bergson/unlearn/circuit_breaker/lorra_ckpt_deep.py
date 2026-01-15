@@ -1,6 +1,8 @@
 import atexit
+import csv
 import gc
 import logging
+import os
 from functools import partial
 
 import numpy as np
@@ -31,6 +33,7 @@ def compute_loss(
     num_items_in_batch=None,
     return_outputs=False,
     tokenizer=None,
+    use_final_mse_retain_loss=True,
     **kwargs,
 ):
     self.current_training_step += 1
@@ -67,43 +70,97 @@ def compute_loss(
         # Keep as tuple, DO NOT stack to save memory
         with model.disable_adapter(), torch.no_grad():
             orig_retain_outputs = model(**retain_inputs)[module]
+            # Also get logits for matching accuracy
+            orig_retain_logits = model(**retain_inputs).logits
 
         # 1b. Get LoRA (Trainable) Outputs
         lora_retain_outputs = model(**retain_inputs)[module]
+        # Also get logits for matching accuracy
+        lora_retain_logits = model(**retain_inputs).logits
 
-        # 1c. Calculate Loss Layer-by-Layer
-        # We assume target_layers applies here too? 
-        # If the original code meant "all layers" for retain, use range(len(orig...))
-        # Based on your snippet, retain used 'orig_retain_outputs' which implies all layers returned.
-        retain_loss_accumulator = 0
-        valid_layers_count = 0
-        
-        # Prepare mask once (Batch, Seq, 1)
-        mask_expanded = retain_attention_mask.unsqueeze(-1)
+        # 1c. Calculate Retain Argmax Matching Accuracy
+        if log_now:
+            with torch.no_grad():
+                # Get argmax predictions for both models
+                orig_preds = torch.argmax(orig_retain_logits, dim=-1)  # [batch, seq]
+                lora_preds_retain = torch.argmax(lora_retain_logits, dim=-1)  # [batch, seq]
 
-        for i, (orig_layer, lora_layer) in enumerate(zip(orig_retain_outputs, lora_retain_outputs)):
-            # If you only want specific layers for retain as well, filter here:
-            # if i not in target_layers: continue 
+                # Calculate matching accuracy
+                matches_retain = (orig_preds == lora_preds_retain).float()  # [batch, seq]
 
-            # Apply mask individually per layer
-            # Calculation: Norm(lora - orig)
-            diff = (lora_layer - orig_layer) * mask_expanded
-            
-            # Use norm p=2
-            layer_loss = torch.norm(diff, dim=-1, p=2, dtype=torch.float).nanmean()
-            
-            retain_loss_accumulator += layer_loss
-            valid_layers_count += 1
-            
-            # logging cosine sim (optional, expensive)
-            if log_now and i == len(orig_retain_outputs) - 1: # Just log last layer to save time
-                 with torch.no_grad():
-                    cos = torch.nn.functional.cosine_similarity(lora_layer, orig_layer, dim=-1)
-                    cos = (cos * retain_attention_mask).sum() / retain_attention_mask.sum()
-                    print(f"retain_cos_sim (layer {i}): {cos.item():.4f}")
+                # Apply attention mask to only consider valid tokens
+                masked_matches_retain = matches_retain * retain_attention_mask.float()
+                valid_tokens_retain = retain_attention_mask.sum().float()
 
-        if valid_layers_count > 0:
-            retain_loss = retain_loss_accumulator / valid_layers_count
+                if valid_tokens_retain > 0:
+                    retain_matching_accuracy = masked_matches_retain.sum() / valid_tokens_retain
+                    self._last_retain_argmax = retain_matching_accuracy.item()
+                    print(f"retain_argmax_matching_accuracy: {retain_matching_accuracy.item():.4f}")
+                else:
+                    self._last_retain_argmax = 0.0
+                    print(f"retain_argmax_matching_accuracy: 0.0000")
+
+        # 1d. Calculate Loss - Final Layer MSE or L2 Norm Loss
+        if use_final_mse_retain_loss:
+            # Use MSE Loss between final layer hidden states
+            # Get final layer outputs (last element in the tuple)
+            final_orig_layer = orig_retain_outputs[-1]  # [batch, seq, hidden_dim]
+            final_lora_layer = lora_retain_outputs[-1]  # [batch, seq, hidden_dim]
+
+            # Apply attention mask (batch, seq, 1)
+            mask_expanded = retain_attention_mask.unsqueeze(-1)
+
+            # Compute MSE between final layer outputs
+            mse_loss = F.mse_loss(final_lora_layer, final_orig_layer, reduction='none')  # [batch, seq, hidden_dim]
+
+            # Apply mask and compute mean
+            masked_mse = mse_loss * mask_expanded  # [batch, seq, hidden_dim]
+
+            # Average over hidden dimension first, then over sequence/batch
+            mse_per_token = masked_mse.mean(dim=-1)  # [batch, seq]
+            masked_token_loss = mse_per_token * retain_attention_mask  # [batch, seq]
+
+            # Sum over valid tokens
+            valid_tokens = retain_attention_mask.sum()
+            if valid_tokens > 0:
+                retain_loss = masked_token_loss.sum() / valid_tokens
+            else:
+                retain_loss = torch.tensor(0.0, device=model.device)
+
+            if log_now:
+                print(f"retain_final_layer_mse: {retain_loss.item():.4f}")
+
+        else:
+            # Use original L2 Norm Loss between hidden states
+            retain_loss_accumulator = 0
+            valid_layers_count = 0
+
+            # Prepare mask once (Batch, Seq, 1)
+            mask_expanded = retain_attention_mask.unsqueeze(-1)
+
+            for i, (orig_layer, lora_layer) in enumerate(zip(orig_retain_outputs, lora_retain_outputs)):
+                # If you only want specific layers for retain as well, filter here:
+                # if i not in target_layers: continue
+
+                # Apply mask individually per layer
+                # Calculation: Norm(lora - orig)
+                diff = (lora_layer - orig_layer) * mask_expanded
+
+                # Use norm p=2
+                layer_loss = torch.norm(diff, dim=-1, p=2, dtype=torch.float).nanmean()
+
+                retain_loss_accumulator += layer_loss
+                valid_layers_count += 1
+
+                # logging cosine sim (optional, expensive)
+                if log_now and i == len(orig_retain_outputs) - 1: # Just log last layer to save time
+                     with torch.no_grad():
+                        cos = torch.nn.functional.cosine_similarity(lora_layer, orig_layer, dim=-1)
+                        cos = (cos * retain_attention_mask).sum() / retain_attention_mask.sum()
+                        print(f"retain_cos_sim (layer {i}): {cos.item():.4f}")
+
+            if valid_layers_count > 0:
+                retain_loss = retain_loss_accumulator / valid_layers_count
 
         # Clean up
         del orig_retain_outputs, lora_retain_outputs
@@ -124,11 +181,37 @@ def compute_loss(
         # 2a. Get Source Activations (Checkpoint)
         with torch.no_grad():
             checkpoint_cb_outputs = self.checkpoint_model(**cb_inputs)[module]
+            # Also get logits for matching accuracy
+            checkpoint_logits = self.checkpoint_model(**cb_inputs).logits
 
         # 2b. Get Target Activations (LoRA)
         lora_cb_outputs = model(**cb_inputs)[module]
+        # Also get logits for matching accuracy
+        lora_logits = model(**cb_inputs).logits
 
-        # 2c. Calculate MSE Layer-by-Layer (Iterative)
+        # 2c. Calculate Argmax Matching Accuracy
+        if log_now:
+            with torch.no_grad():
+                # Get argmax predictions for both models
+                checkpoint_preds = torch.argmax(checkpoint_logits, dim=-1)  # [batch, seq]
+                lora_preds = torch.argmax(lora_logits, dim=-1)  # [batch, seq]
+
+                # Calculate matching accuracy
+                matches = (checkpoint_preds == lora_preds).float()  # [batch, seq]
+
+                # Apply attention mask to only consider valid tokens
+                masked_matches = matches * circuit_breaker_attention_mask.float()
+                valid_tokens = circuit_breaker_attention_mask.sum().float()
+
+                if valid_tokens > 0:
+                    matching_accuracy = masked_matches.sum() / valid_tokens
+                    self._last_forget_argmax = matching_accuracy.item()
+                    print(f"forget_argmax_matching_accuracy: {matching_accuracy.item():.4f}")
+                else:
+                    self._last_forget_argmax = 0.0
+                    print(f"forget_argmax_matching_accuracy: 0.0000")
+
+        # 2e. Calculate MSE Layer-by-Layer (Iterative)
         cb_loss_accumulator = 0
         
         # Prepare mask (Batch, Seq, 1) - no need to repeat for layers
@@ -183,7 +266,18 @@ def compute_loss(
 
     if log_now:
         print(f"retain_loss: {retain_loss.item():.4f} \ncircuit_breaker_loss: {circuit_breaker_loss.item():.4f}")
-    
+
+        # Log metrics to CSV if trainer has logging method
+        if hasattr(self, '_log_metrics'):
+            self._log_metrics(
+                step=self.current_training_step,
+                forget_argmax=getattr(self, '_last_forget_argmax', None),
+                retain_argmax=getattr(self, '_last_retain_argmax', None),
+                retain_loss=retain_loss.item(),
+                cb_loss=circuit_breaker_loss.item(),
+                total_loss=loss.item()
+            )
+
     return (loss,) if return_outputs else loss
     
 def maybe_zero_3(param):
@@ -477,6 +571,10 @@ def train():
             self.lorra_args = lorra_args
             self.training_args = training_args
 
+            # Setup CSV logging for metrics
+            self.metrics_log_file = os.path.join(self.args.output_dir or ".", "training_metrics.csv")
+            self._setup_csv_logging()
+
             # Load early checkpoint model for source activations
             print("Loading early checkpoint model for transfer loss...")
             self.checkpoint_model = AutoModelForCausalLM.from_pretrained(
@@ -493,7 +591,24 @@ def train():
                 param.requires_grad = False
 
         def get_training_progress(self):
-            return self.current_training_step / 300
+            return self.current_training_step / self.num_training_steps
+
+        def _setup_csv_logging(self):
+            """Setup CSV file for logging training metrics"""
+            os.makedirs(os.path.dirname(self.metrics_log_file) if os.path.dirname(self.metrics_log_file) else ".", exist_ok=True)
+
+            # Write CSV header if file doesn't exist
+            if not os.path.exists(self.metrics_log_file):
+                with open(self.metrics_log_file, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['step', 'forget_argmax_accuracy', 'retain_argmax_accuracy', 'retain_loss', 'circuit_breaker_loss', 'total_loss'])
+                print(f"📊 Metrics will be logged to: {self.metrics_log_file}")
+
+        def _log_metrics(self, step, forget_argmax=None, retain_argmax=None, retain_loss=None, cb_loss=None, total_loss=None):
+            """Log metrics to CSV file"""
+            with open(self.metrics_log_file, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([step, forget_argmax, retain_argmax, retain_loss, cb_loss, total_loss])
 
         def train(
             self,
@@ -520,6 +635,7 @@ def train():
                 alpha=lorra_args.lorra_alpha,
                 return_outputs=return_outputs,
                 tokenizer=tokenizer,
+                use_final_mse_retain_loss=lorra_args.use_final_mse_retain_loss,
             )
 
         def evaluate(

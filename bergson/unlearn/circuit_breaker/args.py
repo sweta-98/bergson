@@ -42,6 +42,10 @@ class LorraArguments:
         default=False,
         metadata={"help": "Whether to drop not used layer during training"},
     )
+    use_final_mse_retain_loss: bool = field(
+        default=True,
+        metadata={"help": "Whether to use final layer MSE loss (True) or L2 norm loss across all layers (False) for retain loss"},
+    )
 
     def to_dict(self):
         return dict(
@@ -51,6 +55,7 @@ class LorraArguments:
             trainsets=self.trainsets,
             valsets=self.valsets,
             full_layers=self.full_layers,
+            use_final_mse_retain_loss=self.use_final_mse_retain_loss,
         )
 
 
