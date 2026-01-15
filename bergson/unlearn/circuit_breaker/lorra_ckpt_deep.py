@@ -22,6 +22,7 @@ from peft import LoraConfig, get_peft_model
 from torch.nn.functional import cosine_similarity
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Trainer
 from utils import save_model_and_tokenizer
+from bergson.unlearn.circuit_breaker.online_affine_fitter import train_affine_transform
 
 
 def compute_loss(
@@ -31,6 +32,7 @@ def compute_loss(
     target_layers,
     alpha,
     num_items_in_batch=None,
+    affine = True,
     return_outputs=False,
     tokenizer=None,
     use_final_mse_retain_loss=True,
@@ -222,7 +224,12 @@ def compute_loss(
         for layer_idx in target_layers:
             # Extract single layer tensors
             # Checkpoint tensor (detach to be safe, though context is no_grad)
-            target_act = checkpoint_cb_outputs[layer_idx].detach()
+            if affine:
+                raw_target_act = checkpoint_cb_outputs[layer_idx].detach()
+                target_act = self.affine_transforms[layer_idx](raw_target_act)
+            else:
+                target_act = checkpoint_cb_outputs[layer_idx].detach()
+
             # LoRA tensor (requires grad)
             pred_act = lora_cb_outputs[layer_idx]
 
@@ -571,6 +578,7 @@ def train():
             self.current_training_step = 0
             self.lorra_args = lorra_args
             self.training_args = training_args
+            self.affine = self.args.affine
 
             # Setup CSV logging for metrics
             self.metrics_log_file = os.path.join(self.args.output_dir or ".", "training_metrics.csv")
@@ -590,6 +598,21 @@ def train():
             self.checkpoint_model.eval()
             for param in self.checkpoint_model.parameters():
                 param.requires_grad = False
+
+            self.affine_transforms = train_affine_transform(
+                source_model=self.checkpoint_model,
+                target_model=self.model,
+                tokenizer=tokenizer,
+                dataset=train_dataset,
+                target_layers=lorra_target_layers,
+                num_examples=512,
+                device=self.model.device
+            )
+            
+            # Ensure transforms are on the correct device and frozen
+            for idx, transform in self.affine_transforms.items():
+                self.affine_transforms[idx] = transform.to(self.model.device)
+                self.affine_transforms[idx].requires_grad_(False)
 
         def get_training_progress(self):
             total_micro_steps = self.num_training_steps * self.training_args.gradient_accumulation_steps
@@ -641,6 +664,8 @@ def train():
                 inputs,
                 target_layers=lorra_target_layers,
                 alpha=lorra_args.lorra_alpha,
+                num_items_in_batch=num_items_in_batch,
+                affine=self.affine,
                 return_outputs=return_outputs,
                 tokenizer=tokenizer,
                 use_final_mse_retain_loss=lorra_args.use_final_mse_retain_loss,

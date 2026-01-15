@@ -17,7 +17,7 @@ model_name_or_path=EleutherAI/deep-ignorance-unfiltered
 lorra_alpha=100 # Higher alpha to increase CB loss weight (MSE has smaller gradients)
 # layers="2,4,6,8,10,12,14,16,18,20" 
 # layers="3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26"  #27,28,29,30,31,32,33 34,35,36,37,38,39
-layers="2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,22,24,26" #28,30,32, 34,36,38,40
+layers="2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31" #28,30,32, 34,36,38,40
 transform_layers="-1"
 
 output_dir="./out/DeepIgnorance_checkpoint"
@@ -54,11 +54,11 @@ python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \
     --lora_target_modules query_key_value dense dense_h_to_4h dense_4h_to_h \
     --output_dir  $output_dir \
     --overwrite_output_dir \
-    --max_steps 1500 \
+    --max_steps 150 \
     --bf16 True \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 1 \
     --per_device_eval_batch_size 32 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 16 \
     --use_refusal_retain \
     --use_final_mse_retain_loss True \
     --do_eval \
@@ -76,4 +76,5 @@ python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \
     --log_every 1 \
     --coeff_schedule linear_converge \
     --sc_loss_type orig_act_dotprod \
-    --sc_train_seq_type all_text
+    --sc_train_seq_type all_text \
+    --affine True
