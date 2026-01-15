@@ -578,7 +578,6 @@ def train():
             self.current_training_step = 0
             self.lorra_args = lorra_args
             self.training_args = training_args
-            self.affine = self.args.affine
 
             # Setup CSV logging for metrics
             self.metrics_log_file = os.path.join(self.args.output_dir or ".", "training_metrics.csv")
@@ -665,7 +664,7 @@ def train():
                 target_layers=lorra_target_layers,
                 alpha=lorra_args.lorra_alpha,
                 num_items_in_batch=num_items_in_batch,
-                affine=self.affine,
+                affine=lorra_args.affine,
                 return_outputs=return_outputs,
                 tokenizer=tokenizer,
                 use_final_mse_retain_loss=lorra_args.use_final_mse_retain_loss,

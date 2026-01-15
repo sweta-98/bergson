@@ -103,10 +103,34 @@ def train_affine_transform(
     else:
         subset = [dataset[i] for i in range(min(num_examples, len(dataset)))]
 
-    # Simple Collator
-    def collate(batch_items):
-        texts = [x['text'] if 'text' in x else x['content'] for x in batch_items]
-        return tokenizer(texts, return_tensors='pt', padding=True, truncation=True, max_length=1024)
+    def collate(batch_items, device):
+        # input_ids_circuit_breaker, attention_mask_circuit_breaker
+        
+        # 1. Process Input IDs: Ensure they are 1D before stacking
+        input_ids_list = []
+        for x in batch_items:
+            tensor = torch.tensor(x['input_ids_circuit_breaker'], dtype=torch.long)
+            # Remove extra dimensions (e.g., if shape is [1, 1024] -> [1024])
+            if tensor.ndim > 1:
+                tensor = tensor.view(-1)
+            input_ids_list.append(tensor)
+            
+        input_ids_circuit_breaker = torch.stack(input_ids_list).to(device)
+
+        # 2. Process Mask: Ensure 1D and use Bool dtype (from previous fix)
+        mask_list = []
+        for x in batch_items:
+            tensor = torch.tensor(x['attention_mask_circuit_breaker'])
+            if tensor.ndim > 1:
+                tensor = tensor.view(-1)
+            mask_list.append(tensor)
+
+        attention_mask_circuit_breaker = torch.stack(mask_list).to(device=device, dtype=torch.bool)
+
+        return dict(
+            input_ids=input_ids_circuit_breaker,
+            attention_mask=attention_mask_circuit_breaker,
+        )
 
     # 3. Loop
     source_model.eval()
@@ -120,7 +144,8 @@ def train_affine_transform(
             end_idx = min((i + 1) * batch_size, len(subset))
             batch = subset[start_idx:end_idx]
             
-            inputs = collate(batch).to(device)
+            inputs = collate(batch, device)
+
             mask = inputs["attention_mask"].bool().reshape(-1) # [Batch*Seq]
             
             # Forward Source (Old)
