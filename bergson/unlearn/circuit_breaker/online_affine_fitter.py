@@ -109,27 +109,27 @@ def train_affine_transform(
         # 1. Process Input IDs: Ensure they are 1D before stacking
         input_ids_list = []
         for x in batch_items:
-            tensor = torch.tensor(x['input_ids_circuit_breaker'], dtype=torch.long)
+            tensor = torch.tensor(x['input_ids'], dtype=torch.long)
             # Remove extra dimensions (e.g., if shape is [1, 1024] -> [1024])
             if tensor.ndim > 1:
                 tensor = tensor.view(-1)
             input_ids_list.append(tensor)
             
-        input_ids_circuit_breaker = torch.stack(input_ids_list).to(device)
+        input_ids = torch.stack(input_ids_list).to(device)
 
         # 2. Process Mask: Ensure 1D and use Bool dtype (from previous fix)
         mask_list = []
         for x in batch_items:
-            tensor = torch.tensor(x['attention_mask_circuit_breaker'])
+            tensor = torch.tensor(x['attention_mask'])
             if tensor.ndim > 1:
                 tensor = tensor.view(-1)
             mask_list.append(tensor)
 
-        attention_mask_circuit_breaker = torch.stack(mask_list).to(device=device, dtype=torch.bool)
+        attention_mask = torch.stack(mask_list).to(device=device, dtype=torch.bool)
 
         return dict(
-            input_ids=input_ids_circuit_breaker,
-            attention_mask=attention_mask_circuit_breaker,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
         )
 
     # 3. Loop

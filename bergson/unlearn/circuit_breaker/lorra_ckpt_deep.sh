@@ -46,6 +46,7 @@ DS_BUILD_UTILS=0 \
 python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \
     --model_name_or_path $model_name_or_path \
     --target_layers $layers \
+    --affine True \
     --transform_layers $transform_layers \
     --lorra_alpha $lorra_alpha \
     --lora_r 16 \
@@ -56,9 +57,9 @@ python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \
     --overwrite_output_dir \
     --max_steps 150 \
     --bf16 True \
-    --per_device_train_batch_size 1 \
+    --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 32 \
-    --gradient_accumulation_steps 16 \
+    --gradient_accumulation_steps 32 \
     --use_refusal_retain \
     --use_final_mse_retain_loss True \
     --do_eval \
@@ -76,5 +77,4 @@ python bergson/unlearn/circuit_breaker/lorra_ckpt_deep.py \
     --log_every 1 \
     --coeff_schedule linear_converge \
     --sc_loss_type orig_act_dotprod \
-    --sc_train_seq_type all_text \
-    --affine True
+    --sc_train_seq_type all_text
