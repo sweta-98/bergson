@@ -209,6 +209,7 @@ def compute_loss(
                     print(f"forget_argmax_matching_accuracy: {matching_accuracy.item():.4f}")
                 else:
                     self._last_forget_argmax = 0.0
+                    print("no valid tokens")
                     print(f"forget_argmax_matching_accuracy: 0.0000")
 
         # 2e. Calculate MSE Layer-by-Layer (Iterative)
@@ -591,7 +592,14 @@ def train():
                 param.requires_grad = False
 
         def get_training_progress(self):
-            return self.current_training_step / self.num_training_steps
+            total_micro_steps = self.num_training_steps * self.training_args.gradient_accumulation_steps
+
+            if total_micro_steps == 0:
+                return 0.0
+
+            progress = self.current_training_step / total_micro_steps
+            
+            return min(max(progress, 0.0), 1.0)
 
         def _setup_csv_logging(self):
             """Setup CSV file for logging training metrics"""
