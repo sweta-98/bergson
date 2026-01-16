@@ -3,15 +3,16 @@ import os
 import torch
 from safetensors.torch import load_file
 
-from tests.ekfac_tests.test_utils import load_sharded_covariances
-
-
-@pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason="Numerical precision differences on CPU vs GPU",
+from tests.ekfac_tests.test_utils import (
+    compute_eigenvector_cosine_similarity,
+    format_per_layer_errors,
+    load_sharded_covariances,
 )
+
+
 def test_eigenvalue_corrections(
     ground_truth_eigenvalue_corrections_path: str,
+    ground_truth_eigenvectors_path: str,
     ekfac_results_path: str,
 ) -> None:
     """Test eigenvalue corrections against ground truth."""
@@ -35,50 +36,51 @@ def test_eigenvalue_corrections(
     # Normalize by total
     lambda_run = {k: v / total for k, v in lambda_run.items()}
 
-    # Use reasonable tolerance for numerical differences between implementations
-    # due to float precision, accumulation order, and eigenvector differences
-    # query_key_value layers can have up to ~10% differences due to eigenvector issues
-    rtol = 0.12  # 12% relative tolerance
-    atol = 1e-4
-    all_match = True
-    error_details = []
-    has_significant_errors = False
-
-    for k in lambda_ground_truth:
-        gt = lambda_ground_truth[k]
-        run = lambda_run[k]
-
-        if not torch.allclose(gt, run, rtol=rtol, atol=atol):
-            all_match = False
-            diff = (gt - run).abs()
-            rel_diff = diff / (gt.abs() + 1e-10)
-            max_rel_diff = rel_diff.max()
-
-            # Find location of max difference
-            coord = diff.argmax()
-            a, b = coord // gt.shape[1], coord % gt.shape[1]
-
-            if max_rel_diff < 0.05:  # 5% threshold for reporting
-                error_details.append(
-                    f"  {k}: small differences within tolerance "
-                    f"(max_rel_diff={(100 * max_rel_diff):.3f}%)"
-                )
-            else:
-                has_significant_errors = True
-                error_details.append(
-                    f"  {k}: max_rel_diff={(100 * max_rel_diff):.3f}%, "
-                    f"mean={(100 * rel_diff.mean()):.3f}%"
-                )
-                error_details.append(
-                    f"    at [{a},{b}]: gt={gt[a, b]:.3e}, run={run[a, b]:.3e}"
-                )
-
-    if all_match:
-        print(f"Eigenvalue corrections match within tolerance (rtol={rtol})")
-    elif has_significant_errors:
-        error_msg = f"Eigenvalue corrections do not match (rtol={rtol})!\n" + "\n".join(
-            error_details
+    # Load eigenvectors to compute sign alignment.
+    gt_act_eigenvectors = load_file(
+        os.path.join(
+            ground_truth_eigenvectors_path, "eigenvectors_activations.safetensors"
         )
-        assert False, error_msg
-    else:
-        print("Eigenvalue corrections: all differences within tolerance")
+    )
+    gt_grad_eigenvectors = load_file(
+        os.path.join(
+            ground_truth_eigenvectors_path, "eigenvectors_gradients.safetensors"
+        )
+    )
+    run_act_eigenvectors = load_sharded_covariances(
+        os.path.join(ekfac_results_path, "eigen_activation_sharded")
+    )
+    run_grad_eigenvectors = load_sharded_covariances(
+        os.path.join(ekfac_results_path, "eigen_gradient_sharded")
+    )
+
+    _, act_signs = compute_eigenvector_cosine_similarity(
+        gt_act_eigenvectors, run_act_eigenvectors
+    )
+    _, grad_signs = compute_eigenvector_cosine_similarity(
+        gt_grad_eigenvectors, run_grad_eigenvectors
+    )
+
+    # Align eigenvalue correction signs
+    lambda_run_aligned = {}
+    for k in lambda_run:
+        sign_G = grad_signs[k][:, None]  # (d_out, 1)
+        sign_A = act_signs[k][None, :]  # (1, d_in)
+        lambda_run_aligned[k] = lambda_run[k] * sign_G * sign_A
+
+    # Concatenate and check relative error
+    gt_all = torch.cat(
+        [lambda_ground_truth[k].flatten() for k in sorted(lambda_ground_truth)]
+    )
+    run_all = torch.cat(
+        [lambda_run_aligned[k].flatten() for k in sorted(lambda_run_aligned)]
+    )
+
+    rel_error = (gt_all - run_all).norm() / gt_all.norm()
+
+    atol = 1e-4
+    assert rel_error < atol, (
+        f"eigenvalue corrections: rel_error={rel_error:.2e}, expected < {atol}\n"
+        + format_per_layer_errors(lambda_ground_truth, lambda_run_aligned)
+    )
+    print(f"Eigenvalue corrections match (rel_error={rel_error:.2e})")

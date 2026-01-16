@@ -3,7 +3,11 @@ import os
 import pytest
 from safetensors.torch import load_file
 
-from tests.ekfac_tests.test_utils import load_sharded_covariances
+from tests.ekfac_tests.test_utils import (
+    compute_eigenvector_cosine_similarity,
+    format_per_layer_cosine_similarity,
+    load_sharded_covariances,
+)
 
 
 @pytest.mark.parametrize("eigenvector_type", ["activation", "gradient"])
@@ -28,35 +32,15 @@ def test_eigenvectors(
     # load run eigenvectors (sharded) and concatenate
     run_eigenvectors = load_sharded_covariances(eigenvectors_run_path)
 
-    rtol = 1e-5
-    atol = 1e-7
-    all_match = True
-    error_details = []
+    # Eigenvectors are only defined up to sign, so check |cosine_similarity| ≈ 1
+    abs_cos_sims, _ = compute_eigenvector_cosine_similarity(
+        ground_truth_eigenvectors, run_eigenvectors
+    )
 
-    for k in ground_truth_eigenvectors:
-        gt = ground_truth_eigenvectors[k]
-        run = run_eigenvectors[k]
-
-        if not torch.allclose(gt, run, rtol=rtol, atol=atol):
-            all_match = False
-            diff = (gt - run).abs()
-            max_diff_val = diff.max()
-
-            # Find location of max difference
-            max_diff_flat_idx = torch.argmax(diff)
-            max_diff_idx = torch.unravel_index(max_diff_flat_idx, diff.shape)
-            relative_diff = 100 * max_diff_val / (gt[max_diff_idx].abs() + 1e-10)
-
-            error_details.append(
-                f"  {k}: abs_diff={max_diff_val:.2e}, rel_diff={relative_diff:.2e}%"
-            )
-
-    if all_match:
-        print(f"{eigenvector_type} eigenvectors match (rtol={rtol}, atol={atol})")
-    else:
-        error_msg = f"{eigenvector_type} eigenvectors do not match!\n" + "\n".join(
-            error_details
-        )
-        assert False, error_msg
-
-    print("-*" * 50)
+    min_cos_sim = abs_cos_sims.min().item()
+    atol = 1e-4
+    assert min_cos_sim > 1 - atol, (
+        f"{eigenvector_type} eigenvectors: min |cos_sim|={min_cos_sim:.6f}, expected > {1 - atol}\n"
+        + format_per_layer_cosine_similarity(ground_truth_eigenvectors, run_eigenvectors)
+    )
+    print(f"{eigenvector_type} eigenvectors match (min |cos_sim|={min_cos_sim:.6f})")

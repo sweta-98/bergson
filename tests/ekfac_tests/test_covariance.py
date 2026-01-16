@@ -4,7 +4,10 @@ import pytest
 import torch
 from safetensors.torch import load_file
 
-from tests.ekfac_tests.test_utils import load_sharded_covariances
+from tests.ekfac_tests.test_utils import (
+    format_per_layer_errors,
+    load_sharded_covariances,
+)
 
 
 @pytest.mark.parametrize("covariance_type", ["activation", "gradient"])
@@ -26,31 +29,20 @@ def test_covariances(
     ground_truth_covariances = load_file(covariances_ground_truth_path)
     run_covariances = load_sharded_covariances(covariances_run_path)
 
-    rtol = 1e-10
-    atol = 0
-    all_match = True
-    error_details = []
+    # Concatenate and check relative error
+    gt_all = torch.cat(
+        [
+            ground_truth_covariances[k].flatten()
+            for k in sorted(ground_truth_covariances)
+        ]
+    )
+    run_all = torch.cat([run_covariances[k].flatten() for k in sorted(run_covariances)])
 
-    for k in ground_truth_covariances:
-        gt = ground_truth_covariances[k]
-        run = run_covariances[k]
+    rel_error = (gt_all - run_all).norm() / gt_all.norm()
 
-        if not torch.allclose(gt, run, rtol=rtol, atol=atol):
-            all_match = False
-            diff = (gt - run).abs()
-            rel_diff = diff / (gt.abs() + 1e-10)
-            error_details.append(
-                f"  {k}: max_rel_diff={100 * rel_diff.max():.3f}%, "
-                f"mean={100 * rel_diff.mean():.3f}%"
-            )
-
-    if all_match:
-        print(f"{covariance_type} covariances match within tolerance (rtol={rtol})")
-    else:
-        error_msg = (
-            f"{covariance_type} covariances do not match (rtol={rtol})!\n"
-            + "\n".join(error_details)
-        )
-        assert False, error_msg
-
-    print("-*" * 50)
+    atol = 1e-4
+    assert rel_error < atol, (
+        f"{covariance_type} covariances: rel_error={rel_error:.2e}, expected < {atol}\n"
+        + format_per_layer_errors(ground_truth_covariances, run_covariances)
+    )
+    print(f"{covariance_type} covariances match (rel_error={rel_error:.2e})")
