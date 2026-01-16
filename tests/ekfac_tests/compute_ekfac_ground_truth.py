@@ -120,6 +120,7 @@ def setup_paths_and_config(
     model_name: str,
     world_size: int,
     overwrite: bool = False,
+    token_batch_size: int = 2048,
 ) -> tuple[IndexConfig, int, torch.device, Any, torch.dtype]:
     """Setup paths and configuration object."""
     os.makedirs(test_path, exist_ok=True)
@@ -133,8 +134,7 @@ def setup_paths_and_config(
     cfg.precision = precision  # type: ignore[assignment]
     cfg.fsdp = False
     cfg.data = DataConfig(dataset=os.path.join(parent_path, "data"), truncation=True)
-    # Set token_batch_size to a value that fits in GPU memory (8GB GPU)
-    cfg.token_batch_size = 2048
+    cfg.token_batch_size = token_batch_size
 
     # model_max_length is limited in some models like `roneneldan/TinyStories-1M`
     tokenizer = AutoTokenizer.from_pretrained(cfg.model)

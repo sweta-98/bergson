@@ -60,6 +60,13 @@ def pytest_addoption(parser) -> None:
         default=1,
         help="World size for distributed training (default: 1)",
     )
+    parser.addoption(
+        "--token_batch_size",
+        action="store",
+        type=int,
+        default=2048,
+        help="Token batch size for EKFAC computation (default: 2048)",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +101,11 @@ def world_size(request) -> int:
 
 
 @pytest.fixture(scope="session")
+def token_batch_size(request) -> int:
+    return request.config.getoption("--token_batch_size")
+
+
+@pytest.fixture(scope="session")
 def test_dir(request, tmp_path_factory) -> str:
     """Get or create test directory (does not generate ground truth data)."""
     # Check if test directory was provided
@@ -112,7 +124,11 @@ def ground_truth_base_path(test_dir: str) -> str:
 
 @pytest.fixture(scope="session")
 def ground_truth_setup(
-    request, test_dir: str, precision: Precision, overwrite: bool
+    request,
+    test_dir: str,
+    precision: Precision,
+    overwrite: bool,
+    token_batch_size: int,
 ) -> dict[str, Any]:
     # Setup for generation
     model_name = request.config.getoption("--model_name")
@@ -123,6 +139,7 @@ def ground_truth_setup(
     print(f"Model: {model_name}")
     print(f"Precision: {precision}")
     print(f"World size: {world_size}")
+    print(f"Token batch size: {token_batch_size}")
     print(f"{'='*60}\n")
 
     cfg, workers, device, target_modules, dtype = setup_paths_and_config(
@@ -131,6 +148,7 @@ def ground_truth_setup(
         model_name=model_name,
         world_size=world_size,
         overwrite=overwrite,
+        token_batch_size=token_batch_size,
     )
 
     model = load_model_step(cfg, dtype)
