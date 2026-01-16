@@ -78,7 +78,7 @@ def train_affine_transform(
     tokenizer,
     dataset,
     target_layers,
-    num_examples=512,
+    num_examples=100_000,
     batch_size=4,
     device="cuda",
     alpha=0.01

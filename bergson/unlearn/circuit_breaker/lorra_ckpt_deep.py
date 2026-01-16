@@ -604,7 +604,7 @@ def train():
                 tokenizer=tokenizer,
                 dataset=train_dataset,
                 target_layers=lorra_target_layers,
-                num_examples=512,
+                num_examples=100_000,
                 device=self.model.device
             )
             
