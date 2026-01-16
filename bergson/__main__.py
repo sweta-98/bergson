@@ -11,6 +11,7 @@ from .config import IndexConfig, QueryConfig, ReduceConfig, ScoreConfig
 from .query.query_index import query
 from .reduce import reduce
 from .score.score import score_dataset
+from .tuned_lens.train import TunedLensTrainConfig, train_tuned_lens
 
 
 def validate_run_path(index_cfg: IndexConfig):
@@ -102,10 +103,21 @@ class Query:
 
 
 @dataclass
+class TrainTunedLens:
+    """Train a Tuned Lens using Muon optimizer."""
+
+    train_cfg: TunedLensTrainConfig
+
+    def execute(self):
+        """Train a Tuned Lens for every layer of a model."""
+        train_tuned_lens(self.train_cfg)
+
+
+@dataclass
 class Main:
     """Routes to the subcommands."""
 
-    command: Union[Build, Query, Reduce, Score]
+    command: Union[Build, Query, Reduce, Score, TrainTunedLens]
 
     def execute(self):
         """Run the script."""

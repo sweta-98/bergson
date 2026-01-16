@@ -7,9 +7,16 @@ I can use /ide to connect to the IDE if disconnected.
 
 
 python scripts/eval_wmdp_robust.py --model_path ./out/DeepIgnorance_CB --batch_size 8
+python scripts/eval_mmlu_stem.py --model_path ./out/DeepIgnorance_CB --batch_size 8
+
 python scripts/eval_wmdp_robust.py --model_path EleutherAI/deep-ignorance-unfiltered --batch_size 8
 python scripts/eval_mmlu_stem.py --model_path EleutherAI/deep-ignorance-unfiltered --batch_size 8
-python scripts/eval_mmlu_stem.py --model_path ./out/DeepIgnorance_CB --batch_size 8
 
 python scripts/eval_mmlu_stem.py --model_path ./out/DeepIgnorance_checkpoint --batch_size 8
 python scripts/eval_wmdp_robust.py --model_path ./out/DeepIgnorance_checkpoint --batch_size 8
+
+python scripts/eval_mmlu_stem.py --model_path ./runs/lens_unlearn_test --batch_size 8
+python scripts/eval_wmdp_robust.py --model_path ./runs/lens_unlearn_test --batch_size 8
+
+<!-- ./runs/lens_unlearn_test  -->
+<!-- tim rusto -->

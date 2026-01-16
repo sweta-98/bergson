@@ -66,3 +66,10 @@ python bergson/unlearn/circuit_breaker/lorra.py \
     --coeff_schedule linear_converge \
     --sc_loss_type orig_act_dotprod \
     --sc_train_seq_type all_text
+
+# Run evaluations
+echo "Running MMLU STEM evaluation..."
+python scripts/eval_mmlu_stem.py --model_path $output_dir --batch_size 8
+
+echo "Running WMDP Robust evaluation..."
+python scripts/eval_wmdp_robust.py --model_path $output_dir --batch_size 8

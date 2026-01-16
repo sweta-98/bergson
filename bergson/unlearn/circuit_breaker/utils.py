@@ -1,5 +1,6 @@
 import json
 import os
+import gc
 
 import torch
 from transformers import AutoModelForCausalLM, LlavaNextForConditionalGeneration
@@ -13,30 +14,25 @@ def save_model_and_tokenizer(
 
     # merge lora
     merged_model = model.merge_and_unload()
+
     # merge original layers
     if drop_layers_after is not None:
+        # Move merged model to CPU first to free GPU memory
+        merged_model = merged_model.to("cpu")
+        gc.collect()
+
         # Load anchor model on CPU to avoid device distribution issues
         anchor_model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path, torch_dtype=merged_model.dtype, device_map="cpu"
         )
-        # Handle different model architectures
+        # Handle different model architectures - keep everything on CPU for saving
         if hasattr(merged_model, 'model') and hasattr(merged_model.model, 'layers'):
-            # Llama-style models - get device of last layer
-            last_layer = merged_model.model.layers[-1]
-            target_device = next(last_layer.parameters()).device
-            # Move restored layers to target device before concatenating
+            # Llama-style models
             restored_layers = anchor_model.model.layers[drop_layers_after + 1 :]
-            for layer in restored_layers:
-                layer.to(target_device)
             merged_model.model.layers = merged_model.model.layers + restored_layers
         elif hasattr(merged_model, 'gpt_neox') and hasattr(merged_model.gpt_neox, 'layers'):
-            # GPTNeoX-style models - get device of last layer
-            last_layer = merged_model.gpt_neox.layers[-1]
-            target_device = next(last_layer.parameters()).device
-            # Move restored layers to target device before concatenating
+            # GPTNeoX-style models
             restored_layers = anchor_model.gpt_neox.layers[drop_layers_after + 1 :]
-            for layer in restored_layers:
-                layer.to(target_device)
             merged_model.gpt_neox.layers = merged_model.gpt_neox.layers + restored_layers
         merged_model.config = anchor_model.config
         # Update config to reflect the actual number of layers after restoration
