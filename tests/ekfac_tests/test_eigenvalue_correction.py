@@ -1,6 +1,5 @@
 import os
 
-import pytest
 import torch
 from safetensors.torch import load_file
 

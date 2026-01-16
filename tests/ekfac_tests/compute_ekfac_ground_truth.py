@@ -27,7 +27,7 @@ from ground_truth.collector import (
     GroundTruthCovarianceCollector,
 )
 from safetensors.torch import load_file, save_file
-from test_utils import add_tensor_dicts, set_all_seeds, tensor_dict_to_device
+from test_utils import add_tensor_dicts, tensor_dict_to_device
 from torch import Tensor
 from tqdm import tqdm
 from transformers import (
@@ -40,7 +40,7 @@ from transformers import (
 from bergson.config import DataConfig, IndexConfig
 from bergson.data import allocate_batches, pad_and_tensor, tokenize
 from bergson.hessians.kfac import CovarianceCollector
-from bergson.utils.utils import assert_type, get_device
+from bergson.utils.utils import assert_type, get_device, setup_reproducibility
 
 Precision = str  # Type alias for precision strings
 
@@ -98,8 +98,7 @@ def parse_config() -> tuple[Precision, str, str, int, bool]:
     else:
         args = parser.parse_args([])
 
-    # Set random seeds for reproducibility
-    set_all_seeds(42)
+    setup_reproducibility()
 
     return (
         args.precision,
@@ -405,6 +404,8 @@ def compute_covariances_step(
     during the same forward/backward passes. This ensures both collectors see exactly
     the same gradients, enabling precise numerical comparison.
     """
+    setup_reproducibility()
+
     covariance_test_path = os.path.join(test_path, "covariances")
 
     # Create EKFAC collector if path is provided

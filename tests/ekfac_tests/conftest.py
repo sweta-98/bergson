@@ -1,7 +1,8 @@
 """Pytest configuration and fixtures for EKFAC tests."""
 
 import os
-from typing import Any, Optional
+from dataclasses import replace
+from typing import Any
 
 import pytest
 from compute_ekfac_ground_truth import (
@@ -15,7 +16,10 @@ from compute_ekfac_ground_truth import (
     setup_paths_and_config,
     tokenize_and_allocate_step,
 )
-from test_utils import set_all_seeds
+
+from bergson.config import HessianConfig
+from bergson.hessians.hessian_approximations import approximate_hessians
+from bergson.utils.utils import setup_reproducibility
 
 Precision = str  # Type alias for precision strings
 
@@ -61,17 +65,7 @@ def pytest_addoption(parser) -> None:
 @pytest.fixture(autouse=True)
 def setup_test() -> None:
     """Setup logic run before each test."""
-    set_all_seeds(seed=42)
-
-
-@pytest.fixture(scope="session")
-def gradient_batch_size(request) -> int:
-    return request.config.getoption("--gradient_batch_size")
-
-
-@pytest.fixture(scope="session")
-def gradient_path(request) -> Optional[str]:
-    return request.config.getoption("--gradient_path")
+    setup_reproducibility()
 
 
 @pytest.fixture(scope="session")
@@ -169,8 +163,6 @@ def ground_truth_covariances_path(
         return covariances_path
 
     setup = ground_truth_setup
-    # Reset seeds for deterministic computation (same seed as EKFAC will use)
-    set_all_seeds(42)
     covariance_test_path = compute_covariances_step(
         setup["model"],
         setup["data"],
@@ -264,85 +256,24 @@ def ekfac_results_path(
     ground_truth_setup: dict[str, Any],
     overwrite: bool,
 ) -> str:
-    """Run EKFAC computation and return results path.
-
-    Uses the same data and batches as ground truth via collect_hessians to ensure
-    identical batch composition and floating-point accumulation order.
-    """
-    import torch
-
-    from bergson.config import HessianConfig
-    from bergson.hessians.eigenvectors import compute_eigendecomposition
-    from bergson.hessians.hessian_approximations import collect_hessians
-
-    # collect_hessians writes to partial_run_path (run_path + ".part")
-    # We set run_path so partial_run_path points to our desired output location
-    base_run_path = os.path.join(test_dir, "run/kfac")
-    results_path = base_run_path + ".part"  # Where collect_hessians will write
-
-    if os.path.exists(results_path) and not overwrite:
-        print(f"Using existing EKFAC results in {results_path}")
-        return results_path
-
-    setup = ground_truth_setup
-    cfg = setup["cfg"]
-    data = setup["data"]
-    batches = setup["batches_world"][0]  # Single worker
-    target_modules = setup["target_modules"]
-    dtype = setup["dtype"]
-
-    print(f"\nRunning EKFAC computation in {results_path}...")
-
-    # Reset seeds for determinism (same as used before GT computation)
-    set_all_seeds(42)
-
-    # Reload model to get fresh state (same as GT does)
-    model = load_model_step(cfg, dtype)
-    model.eval()
-
-    cfg.run_path = base_run_path
-    cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
-
+    """Run EKFAC computation using approximate_hessians and return results path."""
+    base_run_path = os.path.join(test_dir, "run")
     hessian_cfg = HessianConfig(
         method="kfac", ev_correction=True, use_dataset_labels=True
     )
 
-    # Phase 1: Covariance collection using collect_hessians
-    collect_hessians(
-        model=model,
-        data=data,
-        index_cfg=cfg,
-        batches=batches,
-        target_modules=target_modules,
-        hessian_cfg=hessian_cfg,
-    )
+    # Check for cached results (approximate_hessians appends /{method} to run_path)
+    expected_path = os.path.join(base_run_path, hessian_cfg.method)
+    if os.path.exists(expected_path) and not overwrite:
+        print(f"Using existing EKFAC results in {expected_path}")
+        return expected_path
 
-    total_processed = torch.load(
-        os.path.join(results_path, "total_processed.pt"),
-        map_location="cpu",
-        weights_only=False,
-    )
+    setup = ground_truth_setup
+    # Copy cfg with updated fields (avoids mutating the shared fixture)
+    cfg = replace(setup["cfg"], run_path=base_run_path, debug=True)
 
-    # Phase 2: Eigendecomposition
-    compute_eigendecomposition(
-        os.path.join(results_path, "activation_sharded"),
-        total_processed=total_processed,
-    )
-    compute_eigendecomposition(
-        os.path.join(results_path, "gradient_sharded"),
-        total_processed=total_processed,
-    )
-
-    # Phase 3: Eigenvalue correction
-    collect_hessians(
-        model=model,
-        data=data,
-        index_cfg=cfg,
-        batches=batches,
-        target_modules=target_modules,
-        hessian_cfg=hessian_cfg,
-        ev_correction=True,
-    )
+    print("\nRunning EKFAC computation...")
+    results_path = approximate_hessians(cfg, hessian_cfg)
 
     print(f"EKFAC computation completed in {results_path}")
     return results_path

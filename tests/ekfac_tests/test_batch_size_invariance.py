@@ -10,7 +10,7 @@ from bergson.collector.collector import CollectorComputer, fwd_bwd_hessian_facto
 from bergson.config import HessianConfig, IndexConfig
 from bergson.hessians.kfac import CovarianceCollector
 from bergson.utils.utils import get_device
-from tests.ekfac_tests.test_utils import load_sharded_covariances, set_all_seeds
+from tests.ekfac_tests.test_utils import load_sharded_covariances
 from tests.ekfac_tests.toy_model import (
     ToyDataConfig,
     ToyLM,
@@ -30,8 +30,6 @@ from tests.ekfac_tests.toy_model import (
 )
 def test_trace_batch_invariant(seq_lengths, num_batches, tmp_path):
     """Normalized covariance traces should be the same regardless of batch size."""
-    set_all_seeds(42)
-
     config = ToyDataConfig(
         vocab_size=16,
         hidden_size=8,

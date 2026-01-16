@@ -37,7 +37,7 @@ HESSIAN_APPROXIMATIONS = {
 }
 
 
-def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig):
+def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> str:
     """
     Approximate Hessian matrices using KFAC or EKFAC.
 
@@ -54,6 +54,11 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig):
         and gradient collection settings.
     hessian_cfg : HessianConfig
         Specifies the Hessian approximation method (kfac or ekfac).
+
+    Returns
+    -------
+    str
+        Path to the directory containing the computed Hessian approximations.
     """
     if index_cfg.debug:
         setup_reproducibility()
@@ -78,6 +83,8 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig):
     rank = index_cfg.distributed.rank
     if rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)
+
+    return index_cfg.run_path
 
 
 def hessian_worker(

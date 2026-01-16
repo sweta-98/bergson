@@ -16,7 +16,7 @@ from bergson.collector.collector import CollectorComputer, fwd_bwd_hessian_facto
 from bergson.config import HessianConfig, IndexConfig
 from bergson.hessians.kfac import CovarianceCollector
 from bergson.utils.utils import get_device
-from tests.ekfac_tests.test_utils import load_sharded_covariances, set_all_seeds
+from tests.ekfac_tests.test_utils import load_sharded_covariances
 from tests.ekfac_tests.toy_model import (
     ToyDataConfig,
     ToyLM,
@@ -115,8 +115,6 @@ def test_kfac_fim_accuracy(seq_lengths, num_batches, max_rel_error, sample, tmp_
         sample: If True, test true FIM (sampled labels).
                 If False, test empirical FIM (dataset labels).
     """
-    set_all_seeds(42)
-
     config = ToyDataConfig(
         vocab_size=8,
         hidden_size=4,

@@ -1,7 +1,6 @@
 import os
 
 import pytest
-import torch
 from safetensors.torch import load_file
 
 from tests.ekfac_tests.test_utils import load_sharded_covariances

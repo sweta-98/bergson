@@ -1,10 +1,7 @@
 """Common utilities for EKFAC tests."""
 
-import os
-import random
 from pathlib import Path
 
-import numpy as np
 import torch
 from safetensors.torch import load_file
 from torch import Tensor
@@ -67,23 +64,3 @@ def load_covariances(
     total_processed = torch.load(results_path / "total_processed.pt").item()
 
     return A_cov, G_cov, total_processed
-
-
-def set_all_seeds(seed: int = 42) -> None:
-    """Set all random seeds for reproducibility."""
-    # Set all random seeds
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-
-    # Force deterministic behavior
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
-
-    # Set environment variables for additional determinism
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
