@@ -54,6 +54,12 @@ def pytest_addoption(parser) -> None:
         help="Directory containing test data. If not provided, generates data.",
     )
     parser.addoption(
+        "--use_fsdp",
+        action="store_true",
+        default=False,
+        help="Directory containing test data. If not provided, generates data.",
+    )
+    parser.addoption(
         "--world_size",
         action="store",
         type=int,
@@ -288,6 +294,8 @@ def ekfac_results_path(
     ground_truth_path: str,
     ground_truth_setup: dict[str, Any],
     overwrite: bool,
+    use_fsdp: bool,
+    world_size: int,
 ) -> str:
     """Run EKFAC computation using approximate_hessians and return results path."""
     base_run_path = os.path.join(test_dir, "run")
@@ -303,7 +311,8 @@ def ekfac_results_path(
 
     setup = ground_truth_setup
     # Copy cfg with updated fields (avoids mutating the shared fixture)
-    cfg = replace(setup["cfg"], run_path=base_run_path, debug=True)
+    cfg = replace(setup["cfg"], run_path=base_run_path, debug=True, fsdp=use_fsdp)
+    cfg.distributed = replace(cfg.distributed, nproc_per_node=world_size)
 
     print("\nRunning EKFAC computation...")
     results_path = approximate_hessians(cfg, hessian_cfg)

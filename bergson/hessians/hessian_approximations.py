@@ -129,7 +129,8 @@ def hessian_worker(
     ds : Dataset | IterableDataset
         The entire dataset to be indexed. A subset is assigned to each worker.
     """
-    torch.cuda.set_device(local_rank)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
 
     # These should be set by the main process
     if world_size > 1:
@@ -164,6 +165,8 @@ def hessian_worker(
     kwargs["batches"] = batches
     collect_hessians(**kwargs)
 
+    dist.barrier() if dist.is_initialized() else None
+
     total_processed = torch.load(
         f"{index_cfg.partial_run_path}/total_processed.pt",
         map_location="cpu",
@@ -178,6 +181,8 @@ def hessian_worker(
         os.path.join(index_cfg.partial_run_path, "gradient_sharded"),
         total_processed=total_processed,
     )
+
+    dist.barrier() if dist.is_initialized() else None
 
     if hessian_cfg.ev_correction:
         collect_hessians(**kwargs, ev_correction=True)

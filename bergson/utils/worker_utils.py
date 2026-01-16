@@ -118,7 +118,7 @@ def setup_model_and_peft(
     # Common configuration
     if device_map_auto:
         device_map = "auto"
-    elif cfg.fsdp:
+    elif cfg.fsdp or not torch.cuda.is_available():
         device_map = "cpu"
     else:
         device_map = {"": f"cuda:{local_rank}"}

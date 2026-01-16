@@ -38,7 +38,7 @@ from transformers import (
 )
 
 from bergson.config import DataConfig, IndexConfig
-from bergson.data import allocate_batches, pad_and_tensor, tokenize
+from bergson.data import _allocate_batches_world, pad_and_tensor, tokenize
 from bergson.hessians.kfac import CovarianceCollector
 from bergson.utils.utils import assert_type, get_device, setup_reproducibility
 
@@ -300,11 +300,9 @@ def tokenize_and_allocate_step(
     )
     data = ds
 
-    # Allocate batches - use same allocate_batches as EKFAC for consistent order
-    # This ensures floating-point accumulation happens in the same order
-    batches = allocate_batches(doc_lengths=ds["length"], N=cfg.token_batch_size)
-    batches_world = [batches]  # Wrap for single worker case
-    assert len(batches_world) == workers
+    batches_world = _allocate_batches_world(
+        doc_lengths=ds["length"], N=cfg.token_batch_size, world_size=workers
+    )
 
     return data, batches_world, tokenizer
 

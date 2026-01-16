@@ -76,6 +76,23 @@ def allocate_batches(
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
+    (batches,) = _allocate_batches_world(doc_lengths, N, world_size, seed, ranks=[rank])
+    return batches
+
+
+def _allocate_batches_world(
+    doc_lengths: list[int],
+    N: int,
+    world_size: int,
+    seed: int = 42,
+    ranks: list[int] | None = None,
+) -> list[list[list[int]]]:
+    """Lower-level version of allocate_batches that returns batches for specified ranks.
+
+    If ranks is None, returns batches for all ranks.
+    """
+    if ranks is None:
+        ranks = list(range(world_size))
     if len(doc_lengths) < world_size:
         raise RuntimeError("Not enough documents to distribute across workers.")
 
@@ -162,11 +179,12 @@ def allocate_batches(
     # Sanity: equal # of batches per worker
     assert len({len(b) for b in allocation}) == 1
 
-    # Break any systematic ordering of batches
-    random.seed(seed)
-    random.shuffle(allocation[rank])
+    # Break any systematic ordering of batches (shuffle only requested ranks)
+    for rank in ranks:
+        random.seed(seed)
+        random.shuffle(allocation[rank])
 
-    return allocation[rank]
+    return [allocation[rank] for rank in ranks]
 
 
 def create_index(
