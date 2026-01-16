@@ -5,8 +5,9 @@
 cd "$(dirname "$0")"
 
 pytest -s -v \
-    --test_dir "./test_files/pile_100_examples" \
+    --test_dir "./test_files/pile_10k_examples" \
     --world_size 8 \
+    --n_samples 10000 \
     --overwrite \
     test_compute_ekfac.py \
     test_covariance.py \

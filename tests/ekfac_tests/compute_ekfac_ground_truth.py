@@ -121,12 +121,13 @@ def setup_paths_and_config(
     world_size: int,
     overwrite: bool = False,
     token_batch_size: int = 2048,
+    n_samples: int = 100,
 ) -> tuple[IndexConfig, int, torch.device, Any, torch.dtype]:
     """Setup paths and configuration object."""
     os.makedirs(test_path, exist_ok=True)
 
     current_path = os.getcwd()
-    parent_path = os.path.join(current_path, "test_files", "pile_100_examples")
+    parent_path = os.path.join(current_path, "test_files", f"pile_{n_samples}_examples")
 
     # Configuration
     cfg = IndexConfig(run_path="", loss_reduction="sum")
@@ -150,14 +151,14 @@ def setup_paths_and_config(
 
     data_str = cfg.data.dataset
 
-    # Create pile-100 dataset if it doesn't exist
+    # Create dataset if it doesn't exist
     if not os.path.exists(data_str):
         full_dataset = load_dataset("NeelNanda/pile-10k", split="train")
         assert isinstance(full_dataset, Dataset), "Expected Dataset, got something else"
-        subset = full_dataset.select(range(100))
+        subset = full_dataset.select(range(n_samples))
         os.makedirs(os.path.dirname(data_str), exist_ok=True)
         subset.save_to_disk(data_str)
-        print(f"Generated pile-100 in {data_str}")
+        print(f"Generated pile-{n_samples} in {data_str}")
 
     config_path = os.path.join(test_path, "index_config.json")
     if os.path.exists(config_path):

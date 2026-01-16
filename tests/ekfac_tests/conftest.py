@@ -67,6 +67,13 @@ def pytest_addoption(parser) -> None:
         default=2048,
         help="Token batch size for EKFAC computation (default: 2048)",
     )
+    parser.addoption(
+        "--n_samples",
+        action="store",
+        type=int,
+        default=100,
+        help="Number of samples from pile-10k dataset (default: 100)",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -106,6 +113,11 @@ def token_batch_size(request) -> int:
 
 
 @pytest.fixture(scope="session")
+def n_samples(request) -> int:
+    return request.config.getoption("--n_samples")
+
+
+@pytest.fixture(scope="session")
 def test_dir(request, tmp_path_factory) -> str:
     """Get or create test directory (does not generate ground truth data)."""
     # Check if test directory was provided
@@ -129,6 +141,7 @@ def ground_truth_setup(
     precision: Precision,
     overwrite: bool,
     token_batch_size: int,
+    n_samples: int,
 ) -> dict[str, Any]:
     # Setup for generation
     model_name = request.config.getoption("--model_name")
@@ -140,6 +153,7 @@ def ground_truth_setup(
     print(f"Precision: {precision}")
     print(f"World size: {world_size}")
     print(f"Token batch size: {token_batch_size}")
+    print(f"Samples: {n_samples}")
     print(f"{'='*60}\n")
 
     cfg, workers, device, target_modules, dtype = setup_paths_and_config(
@@ -149,6 +163,7 @@ def ground_truth_setup(
         world_size=world_size,
         overwrite=overwrite,
         token_batch_size=token_batch_size,
+        n_samples=n_samples,
     )
 
     model = load_model_step(cfg, dtype)
