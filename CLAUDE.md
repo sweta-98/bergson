@@ -47,6 +47,8 @@ results = simple_evaluate(
 )
 ```
 
+When you run a python script with many args available make a shell script (or better yet, check if one already exists).
+
 ### Environment Setup
 
 If you use need to use a venv, create and/or activate it with `python3 -m venv .venv && source .venv/bin/activate`.

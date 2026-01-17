@@ -22,7 +22,7 @@ class GradDiffDataset(Dataset):
         self,
         tokenizer: transformers.PreTrainedTokenizer,
         model_name_or_path: str,
-        max_length: int = 512,
+        max_length: int = 1024,
         num_forget_examples: int = 5000,
         num_retain_examples: int = 5000,
     ):
