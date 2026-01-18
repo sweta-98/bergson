@@ -53,9 +53,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
 }
 
 
-def save_record(
-    path: Path, record, filename: str = "benchmark.json"
-) -> None:
+def save_record(path: Path, record, filename: str = "benchmark.json") -> None:
     assert is_dataclass(record) and not isinstance(record, type)
 
     path.mkdir(parents=True, exist_ok=True)
