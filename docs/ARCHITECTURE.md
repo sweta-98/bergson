@@ -82,9 +82,6 @@ bergson/
 │   ├── peft.py              # PEFT adapter detection
 │   ├── math.py              # Mathematical utilities
 │   └── auto_batch_size.py   # Automatic batch size tuning
-│
-└── cli/                     # CLI-specific commands
-    └── auto_batch_size.py   # Auto batch size CLI
 ```
 
 ### Module Responsibilities

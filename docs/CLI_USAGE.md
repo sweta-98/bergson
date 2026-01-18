@@ -22,7 +22,7 @@ When prompted, enter any text and Bergson will show you the top 5 most influenti
 
 ## CLI Commands Overview
 
-Bergson provides 5 main commands:
+Bergson provides 4 main commands:
 
 | Command | Purpose |
 |---------|---------|
@@ -30,7 +30,6 @@ Bergson provides 5 main commands:
 | `query` | Interactively query a pre-built index |
 | `reduce` | Aggregate dataset gradients to a query vector |
 | `score` | Score a dataset against a query vector |
-| `autobatchsize` | Auto-determine optimal batch size for your hardware |
 
 ---
 
@@ -294,72 +293,6 @@ bergson score runs/mixed_scores \
 
 ---
 
-## 5. Auto-Determining Batch Size
-
-The `autobatchsize` command automatically finds the optimal `token_batch_size` for your hardware.
-
-### Basic Usage
-
-```bash
-bergson autobatchsize <model> <output_path>
-```
-
-### Example: Local Testing
-
-```bash
-# Test locally and cache result
-bergson autobatchsize \
-    EleutherAI/pythia-410m \
-    runs/my_exp/batch_cache.json \
-    --method disk
-```
-
-### Example: CLI Subprocess Testing
-
-```bash
-# Run actual bergson build subprocesses to test
-bergson autobatchsize \
-    EleutherAI/pythia-410m \
-    runs/my_exp/batch_cache.json \
-    --method cli \
-    --starting_batch_size 8192
-```
-
-### Example: FSDP Testing
-
-```bash
-# Test with FSDP enabled
-bergson autobatchsize \
-    EleutherAI/pythia-1b \
-    runs/fsdp_exp/batch_cache.json \
-    --fsdp
-```
-
-### Example: Force Re-determination
-
-```bash
-# Overwrite existing cache
-bergson autobatchsize \
-    EleutherAI/pythia-410m \
-    runs/my_exp/batch_cache.json \
-    --overwrite
-```
-
-### Key Parameters
-
-- `model`: HuggingFace model ID
-- `output_path`: Path to save cache JSON
-- `--method`: Testing method (`disk` or `cli`)
-- `--dataset`: Dataset for testing (default: `Skylion007/openwebtext`)
-- `--max_length`: Max sequence length (default: 1024)
-- `--starting_batch_size`: Starting size to test (default: 16384)
-- `--fsdp`: Test with FSDP enabled
-- `--overwrite`: Re-determine even if cache exists
-
-**Important:** Use the standalone CLI before distributed training to avoid race conditions.
-
----
-
 ## Common Workflows
 
 ### Workflow 1: Build and Query
@@ -403,25 +336,16 @@ bergson score runs/attribution_scores \
     --score mean
 ```
 
-### Workflow 3: Auto Batch Size → Distributed Build
+### Workflow 3: Distributed Build
 
-Optimize batch size before large-scale distributed training:
+For large-scale distributed training:
 
 ```bash
-# Step 1: Auto-determine batch size (run once on single GPU)
-bergson autobatchsize \
-    EleutherAI/pythia-1b \
-    runs/large_exp/batch_cache.json \
-    --fsdp
-
-# Step 2: Extract the determined batch size
-TOKEN_BATCH_SIZE=$(python -c "import json; print(json.load(open('runs/large_exp/batch_cache.json'))['token_batch_size'])")
-
-# Step 3: Use in distributed training
+# Distributed training with appropriate batch size
 bergson build runs/large_exp/index \
     --model EleutherAI/pythia-1b \
     --dataset NeelNanda/pile-10k \
-    --token_batch_size $TOKEN_BATCH_SIZE \
+    --token_batch_size 8192 \
     --fsdp \
     --precision bf16
 ```
@@ -557,8 +481,7 @@ bergson build runs/my_index \
     --dataset NeelNanda/pile-10k \
     --token_batch_size 1024  # Lower value
 
-# Or use autobatchsize to find the optimal value
-bergson autobatchsize EleutherAI/pythia-160m runs/batch_cache.json
+# Use a lower token_batch_size value
 ```
 
 ### Slow Query Performance
@@ -582,10 +505,8 @@ bergson build runs/my_index \
 ### Distributed Training Issues
 
 ```bash
-# Ensure you run autobatchsize BEFORE multi-GPU training
-# to avoid race conditions with the batch size cache
-bergson autobatchsize EleutherAI/pythia-1b runs/cache.json
-bergson build runs/index --fsdp --token_batch_size <determined_size>
+# Ensure you set an appropriate token_batch_size for multi-GPU training
+bergson build runs/index --fsdp --token_batch_size 8192
 ```
 
 ---
