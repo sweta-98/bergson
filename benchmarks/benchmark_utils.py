@@ -53,11 +53,13 @@ MODEL_SPECS: dict[str, ModelSpec] = {
 }
 
 
-def save_record(path: Path, record) -> None:
+def save_record(
+    path: Path, record, filename: str = "benchmark.json"
+) -> None:
     assert is_dataclass(record) and not isinstance(record, type)
 
     path.mkdir(parents=True, exist_ok=True)
-    with open(path / "benchmark.json", "w", encoding="utf-8") as fh:
+    with open(path / filename, "w", encoding="utf-8") as fh:
         json.dump(asdict(record), fh, indent=2)
 
 

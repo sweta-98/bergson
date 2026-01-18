@@ -368,7 +368,7 @@ class Run:
             hardware=get_hardware_info(),
             token_batch_size=token_batch_size,
         )
-        save_record(benchmark_path, record)
+        save_record(benchmark_path, record, "benchmark_cli.json")
 
         print(json.dumps(asdict(record), indent=2))
 
