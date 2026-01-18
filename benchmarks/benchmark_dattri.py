@@ -20,10 +20,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Import from same directory
 from benchmarks.benchmark_utils import (
-    DEFAULT_DATASET,
     MODEL_SPECS,
     get_run_path,
     parse_tokens,
+    prepare_benchmark_ds_path,
     save_record,
     timestamp,
 )
@@ -60,7 +60,7 @@ class RunConfig:
     num_gpus: int = 1
     """Number of GPUs to use."""
 
-    dataset: str = DEFAULT_DATASET
+    dataset: str = ""
     """Dataset to use for benchmarking."""
 
     train_split: str = DEFAULT_TRAIN_SPLIT
@@ -113,6 +113,9 @@ class Run:
 
     def execute(self) -> None:
         """Run the benchmark."""
+        if not self.run_cfg.dataset:
+            self.run_cfg.dataset = str(prepare_benchmark_ds_path())
+
         if self.run_cfg.model not in MODEL_SPECS:
             raise ValueError(f"Unknown model '{self.run_cfg.model}'")
 
@@ -156,133 +159,117 @@ class Run:
         status = "success"
         error_message: str | None = None
 
+        # Load model and tokenizer
+        model = AutoModelForCausalLM.from_pretrained(
+            spec.hf_id, torch_dtype=torch.bfloat16, device_map="auto"
+        )
+        model.cuda()
+
+        tokenizer = AutoTokenizer.from_pretrained(spec.hf_id)
+        tokenizer.pad_token = tokenizer.eos_token
+
+        def tokenize(batch):
+            return tokenizer.batch_encode_plus(
+                batch["text"],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.run_cfg.max_length,
+            )
+
+        # Load datasets
+        train_dataset = assert_type(
+            Dataset,
+            load_dataset(self.run_cfg.dataset, split=self.run_cfg.train_split),
+        )
+        train_dataset = train_dataset.map(tokenize, batched=True)
+
+        # Estimate examples needed based on token count
+        # We'll sample until we have enough tokens
+        max_length = self.run_cfg.max_length or 1024
+        train_examples_needed = max(1, train_tokens // max_length)
+        eval_examples_needed = 1
+
+        # Select enough examples
+        total_needed = train_examples_needed + eval_examples_needed
+        train_dataset = train_dataset.select(
+            range(min(total_needed, len(train_dataset)))
+        )
+
+        eval_dataset = train_dataset.select(
+            range(train_examples_needed, train_examples_needed + eval_examples_needed)
+        )
+        train_dataset = train_dataset.select(range(train_examples_needed))
+
+        train_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+        eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+
+        def collate_fn(batch):
+            # Dattri expects tuples of (input_ids, labels) where
+            # labels = input_ids for language modeling
+            # Keep on CPU - dattri will handle device placement
+            input_ids = torch.stack([item["input_ids"] for item in batch])
+            labels = (
+                input_ids.clone()
+            )  # For language modeling, labels are the same as input_ids
+            return (input_ids, labels)
+
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,  # type: ignore
+            batch_size=self.run_cfg.batch_size,
+            collate_fn=collate_fn,
+        )
+        test_loader = torch.utils.data.DataLoader(
+            eval_dataset,  # type: ignore
+            batch_size=self.run_cfg.batch_size,
+            collate_fn=collate_fn,
+        )
+
+        # Get model device
+        model_device = next(model.parameters()).device
+
+        def loss_func(params, data_target_pair):
+            x, y = data_target_pair
+            # Ensure data is on the same device as model
+            if isinstance(x, torch.Tensor) and x.device != model_device:
+                x = x.to(model_device)
+            if isinstance(y, torch.Tensor) and y.device != model_device:
+                y = y.to(model_device)
+            # functional_call returns a tuple for transformers models,
+            # extract logits
+            output = torch.func.functional_call(model, params, (x,))
+            if isinstance(output, tuple):
+                logits = output[0]  # First element is logits
+            else:
+                logits = output.logits if hasattr(output, "logits") else output
+            shift_logits = logits[:, :-1].contiguous()
+            shift_labels = y[:, 1:].contiguous()
+            loss = nn.CrossEntropyLoss()(
+                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+            )
+            return loss
+
+        # Create task
+        task = AttributionTask(
+            loss_func=loss_func,
+            model=model,
+            checkpoints=model.state_dict(),
+        )
+
+        # Create attributor and cache
+        # Try to set device if BaseInnerProductAttributor supports it
         try:
-            # Load model and tokenizer
-            model = AutoModelForCausalLM.from_pretrained(
-                spec.hf_id, torch_dtype=torch.bfloat16, device_map="auto"
-            )
-            model.cuda()
+            attributor = BaseInnerProductAttributor(task=task, device="cuda")
+        except TypeError:
+            # Device parameter not supported, use default
+            attributor = BaseInnerProductAttributor(task=task)
+        print("Caching training data...")
+        attributor.cache(train_loader)
 
-            tokenizer = AutoTokenizer.from_pretrained(spec.hf_id)
-            tokenizer.pad_token = tokenizer.eos_token
-
-            def tokenize(batch):
-                return tokenizer.batch_encode_plus(
-                    batch["text"],
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=self.run_cfg.max_length,
-                )
-
-            # Load datasets
-            train_dataset = assert_type(
-                Dataset,
-                load_dataset(self.run_cfg.dataset, split=self.run_cfg.train_split),
-            )
-
-            # Estimate examples needed based on token count
-            # We'll sample until we have enough tokens
-            max_length = self.run_cfg.max_length or 1024
-            train_examples_needed = max(1, train_tokens // max_length)
-            eval_examples_needed = 1
-
-            # Select enough examples
-            total_needed = train_examples_needed + eval_examples_needed
-            train_dataset = train_dataset.select(
-                range(min(total_needed, len(train_dataset)))
-            )
-
-            eval_dataset = train_dataset.select(
-                range(
-                    train_examples_needed, train_examples_needed + eval_examples_needed
-                )
-            )
-            train_dataset = train_dataset.select(range(train_examples_needed))
-
-            train_dataset = train_dataset.map(tokenize, batched=True)
-            eval_dataset = eval_dataset.map(tokenize, batched=True)
-
-            train_dataset.set_format(
-                type="torch", columns=["input_ids", "attention_mask"]
-            )
-            eval_dataset.set_format(
-                type="torch", columns=["input_ids", "attention_mask"]
-            )
-
-            def collate_fn(batch):
-                # Dattri expects tuples of (input_ids, labels) where
-                # labels = input_ids for language modeling
-                # Keep on CPU - dattri will handle device placement
-                input_ids = torch.stack([item["input_ids"] for item in batch])
-                labels = (
-                    input_ids.clone()
-                )  # For language modeling, labels are the same as input_ids
-                return (input_ids, labels)
-
-            train_loader = torch.utils.data.DataLoader(
-                train_dataset,
-                batch_size=self.run_cfg.batch_size,
-                collate_fn=collate_fn,
-            )
-            test_loader = torch.utils.data.DataLoader(
-                eval_dataset,
-                batch_size=self.run_cfg.batch_size,
-                collate_fn=collate_fn,
-            )
-
-            # Get model device
-            model_device = next(model.parameters()).device
-
-            def loss_func(params, data_target_pair):
-                x, y = data_target_pair
-                # Ensure data is on the same device as model
-                if isinstance(x, torch.Tensor) and x.device != model_device:
-                    x = x.to(model_device)
-                if isinstance(y, torch.Tensor) and y.device != model_device:
-                    y = y.to(model_device)
-                # functional_call returns a tuple for transformers models,
-                # extract logits
-                output = torch.func.functional_call(model, params, (x,))
-                if isinstance(output, tuple):
-                    logits = output[0]  # First element is logits
-                else:
-                    logits = output.logits if hasattr(output, "logits") else output
-                shift_logits = logits[:, :-1].contiguous()
-                shift_labels = y[:, 1:].contiguous()
-                loss = nn.CrossEntropyLoss()(
-                    shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
-                )
-                return loss
-
-            # Create task
-            task = AttributionTask(
-                loss_func=loss_func,
-                model=model,
-                checkpoints=model.state_dict(),
-            )
-
-            # Create attributor and cache
-            # Try to set device if BaseInnerProductAttributor supports it
-            try:
-                attributor = BaseInnerProductAttributor(task=task, device="cuda")
-            except TypeError:
-                # Device parameter not supported, use default
-                attributor = BaseInnerProductAttributor(task=task)
-            print("Caching training data...")
-            attributor.cache(train_loader)
-
-            # Compute attributions
-            print("Computing attributions...")
-            with torch.no_grad():
-                attributor.attribute(train_loader, test_loader)
-
-        except Exception as exc:  # noqa: BLE001
-            status = "error"
-            error_message = repr(exc)
-            import traceback
-
-            traceback.print_exc()
+        # Compute attributions
+        print("Computing attributions...")
+        with torch.no_grad():
+            attributor.attribute(train_loader, test_loader)
 
         runtime = time.perf_counter() - start
         end_wall = timestamp()

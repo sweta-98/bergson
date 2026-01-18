@@ -21,12 +21,12 @@ from kronfluence.arguments import FactorArguments, ScoreArguments
 from kronfluence.task import Task
 from matplotlib import pyplot as plt
 from simple_parsing import ArgumentParser, field
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 from benchmarks.benchmark_utils import (
-    DEFAULT_DATASET,
     MODEL_SPECS,
     get_run_path,
+    prepare_benchmark_ds_path,
     save_record,
     timestamp,
 )
@@ -111,7 +111,7 @@ class RunConfig:
     offload_activations_to_cpu: bool = False
     """Offload activations to CPU."""
 
-    dataset: str = DEFAULT_DATASET
+    dataset: str = ""
     """Dataset to use."""
 
     train_split: str = DEFAULT_TRAIN_SPLIT
@@ -303,6 +303,9 @@ class Run:
 
     def execute(self) -> None:
         """Run the benchmark."""
+        if not self.run_cfg.dataset:
+            self.run_cfg.dataset = prepare_benchmark_ds_path()
+
         if self.run_cfg.model not in MODEL_SPECS:
             raise ValueError(f"Unknown model '{self.run_cfg.model}'")
         spec = MODEL_SPECS[self.run_cfg.model]
@@ -340,18 +343,6 @@ class Run:
             )
             model.cuda()  # type: ignore
 
-            tokenizer = AutoTokenizer.from_pretrained(spec.hf_id)
-            tokenizer.pad_token = tokenizer.eos_token
-
-            def tokenize(batch):
-                return tokenizer.batch_encode_plus(
-                    batch["text"],
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=self.run_cfg.max_length,
-                )
-
             # Load datasets
             train_dataset = assert_type(
                 Dataset,
@@ -363,9 +354,6 @@ class Run:
                 range(train_examples, train_examples + eval_examples)
             )
             train_dataset = train_dataset.select(range(train_examples))
-
-            train_dataset = train_dataset.map(tokenize, batched=True)
-            eval_dataset = eval_dataset.map(tokenize, batched=True)
 
             train_dataset.set_format(
                 type="torch", columns=["input_ids", "attention_mask"]
@@ -544,7 +532,7 @@ class CommandsConfig:
     offload_activations_to_cpu: bool = False
     """Offload activations to CPU."""
 
-    dataset: str = DEFAULT_DATASET
+    dataset: str = ""
     """Dataset to use."""
 
     train_split: str = DEFAULT_TRAIN_SPLIT

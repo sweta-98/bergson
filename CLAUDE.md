@@ -1,4 +1,4 @@
-Always test your changes by running the appropriate script or CLI command. Never complete a task without testing your changes until the script or CLI command runs without issues for 3 minutes+ (at minimum). If you find an error unrelated to your task, at minimum quote the exact error back to me when you have completed your task and offer to investigate and fix it.
+Always test your changes by running the appropriate script or CLI command. Never complete a task without testing your changes until the script or CLI command runs without issues. If it's a long-running script let it run for at least a few iterations of the main loop. If you find an error unrelated to your task, at minimum quote the exact error back to me when you have completed your task and offer to investigate and fix it.
 
 ## Project Structure and Conventions
 
@@ -29,6 +29,10 @@ Don't keep default run path values inside low level code - if a module calls ano
 Don't save data to a directory that is not in the gitignore - especially the data/ directory.
 
 Don't remove large datasets from the HF cache without asking.
+
+Do not write lines longer than 88 characters.
+
+Never use try/except blocks or fallbacks. Fail fast, fail explicitly.
 
 ### Documentation
 

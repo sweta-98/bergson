@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import platform
-import shutil
 import subprocess
 import sys
 import time
@@ -15,17 +14,14 @@ from typing import Optional
 from simple_parsing import ArgumentParser, ConflictResolution, field
 
 from benchmarks.benchmark_utils import (
-    DEFAULT_DATASET,
     MODEL_SPECS,
     get_run_path,
     parse_tokens,
+    prepare_benchmark_ds_path,
     save_record,
     timestamp,
 )
-from bergson.utils.auto_batch_size import (
-    determine_batch_size_cli,
-    get_optimal_batch_size,
-)
+from bergson.config import IndexConfig
 
 SCHEMA_VERSION = 1
 
@@ -74,7 +70,7 @@ class RunConfig:
     token_batch_size: int = 8192
     """Batch size in tokens for the bergson build command."""
 
-    dataset: str = DEFAULT_DATASET
+    dataset: str = ""
     """Dataset to use for benchmarking."""
 
     run_path: str | None = None
@@ -91,9 +87,6 @@ class RunConfig:
 
     auto_batch_size: bool = True
     """Automatically determine optimal token_batch_size for hardware."""
-
-    starting_batch_size: int = 4096
-    """Starting token_batch_size for auto-determination (optimized to power of 2)."""
 
     num_gpus: int = 1
     """Number of GPUs to use for benchmarking."""
@@ -186,6 +179,9 @@ class Run:
 
     def execute(self) -> None:
         """Run the benchmark."""
+        if not self.run_cfg.dataset:
+            self.run_cfg.dataset = str(prepare_benchmark_ds_path())
+
         if self.run_cfg.model not in MODEL_SPECS:
             raise ValueError(f"Unknown model '{self.run_cfg.model}'")
 
@@ -198,7 +194,6 @@ class Run:
         print(
             f"Running Bergson CLI benchmark for {self.run_cfg.model} with "
             f"{train_tokens} train tokens and {eval_seqs} eval sequences. "
-            "Note eval sequences is not implemented, it's implicit."
         )
 
         run_root = Path(self.run_cfg.run_root).resolve()
@@ -243,40 +238,6 @@ class Run:
         index_path = benchmark_path / "index"
         score_path = benchmark_path / "score"
 
-        # Determine optimal token_batch_size if requested
-        if self.run_cfg.auto_batch_size:
-            print("Determining optimal token_batch_size...")
-
-            # Use model-specific cache path so it's shared
-            # across all runs for this model
-            cache_dir = run_root / "batch_size_cache"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            fsdp_suffix = "_fsdp" if self.run_cfg.fsdp else ""
-            cache_path = cache_dir / f"{spec.key}{fsdp_suffix}.json"
-            test_path = cache_dir / f"test_{spec.key}{fsdp_suffix}"
-
-            optimal_token_batch_size = get_optimal_batch_size(
-                cache_path=cache_path,
-                model_hf_id=spec.hf_id,
-                fsdp=self.run_cfg.fsdp,
-                starting_batch_size=self.run_cfg.starting_batch_size,
-                determine_fn=lambda: determine_batch_size_cli(
-                    model_hf_id=spec.hf_id,
-                    dataset=self.run_cfg.dataset,
-                    test_path=test_path,
-                    starting_batch_size=self.run_cfg.starting_batch_size,
-                    use_fsdp=self.run_cfg.fsdp,
-                ),
-            )
-
-            # Clean up test directory
-            if test_path.exists():
-                shutil.rmtree(test_path)
-        else:
-            optimal_token_batch_size = self.run_cfg.token_batch_size
-
-        print(f"Using token_batch_size={optimal_token_batch_size}")
-
         common_args = [
             "--model",
             spec.hf_id,
@@ -284,8 +245,6 @@ class Run:
             self.run_cfg.dataset,
             "--split",
             "train",
-            "--token_batch_size",
-            str(optimal_token_batch_size),
             "--skip_preconditioners",
             "--overwrite",
             "--truncation",
@@ -293,6 +252,7 @@ class Run:
             str(train_tokens),
             "--nproc_per_node",
             str(self.run_cfg.num_gpus),
+            "--autobatchsize",
         ]
 
         if self.run_cfg.fsdp:
@@ -319,12 +279,11 @@ class Run:
             spec.hf_id,
             "--dataset",
             str(query_dataset_path),
-            "--token_batch_size",
-            str(optimal_token_batch_size),
             "--skip_preconditioners",
             "--overwrite",
             "--nproc_per_node",
             str(self.run_cfg.num_gpus),
+            "--autobatchsize",
         ]
         if self.run_cfg.fsdp:
             query_cmd.append("--fsdp")
@@ -380,9 +339,10 @@ class Run:
         runtime = time.perf_counter() - start
         end_wall = timestamp()
 
-        token_batch_size = (
-            optimal_token_batch_size if self.run_cfg.auto_batch_size else None
-        )
+        # Load index config
+        with open(index_path / "index_config.json", "r") as f:
+            index_cfg = IndexConfig(**json.load(f))
+            token_batch_size = index_cfg.token_batch_size
 
         record = CLIRunRecord(
             schema_version=SCHEMA_VERSION,

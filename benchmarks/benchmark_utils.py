@@ -5,9 +5,35 @@ from pathlib import Path
 
 from datasets import Dataset, load_from_disk
 
-DEFAULT_DATASET = "EleutherAI/SmolLM2-135M-10B"
-TOKENIZED_DATASET_PATH = "data/EleutherAI/SmolLM2-135M-10B-tokenized"
+from bergson.config import DataConfig, IndexConfig
+from bergson.utils.worker_utils import setup_data_pipeline
+
 MAX_BENCHMARK_LENGTH = 1024
+
+
+def prepare_benchmark_ds_path():
+    benchmark_ds_path = Path("data/EleutherAI/SmolLM2-135M-10B-tokenized")
+    if not benchmark_ds_path.exists():
+        benchmark_ds_path.mkdir(parents=True, exist_ok=True)
+
+        index_cfg = IndexConfig(
+            run_path="data/EleutherAI/SmolLM2-135M-10B",
+            token_batch_size=1024,
+            data=DataConfig(
+                dataset="EleutherAI/SmolLM2-135M-10B",
+                split="train",
+                truncation=True,
+            ),
+            autobatchsize=True,
+        )
+        ds = setup_data_pipeline(index_cfg)
+        ds.save_to_disk(benchmark_ds_path)
+
+        # Count number of tokens in the dataset
+        total_tokens = sum(len(tokens) for tokens in ds["input_ids"])
+        print(f"Total tokens: {total_tokens}")
+
+    return benchmark_ds_path
 
 
 @dataclass(frozen=True)
@@ -100,7 +126,7 @@ def parse_tokens(value: str) -> int:
 
 
 def load_benchmark_dataset(
-    path: str | Path = TOKENIZED_DATASET_PATH,
+    path: str | Path = prepare_benchmark_ds_path(),
     min_length: int = MAX_BENCHMARK_LENGTH,
 ) -> Dataset:
     """
