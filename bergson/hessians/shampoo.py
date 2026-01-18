@@ -97,6 +97,23 @@ class ShampooCollector(HookCollectorBase):
 
         os.makedirs(activation_path, exist_ok=True)
         os.makedirs(gradient_path, exist_ok=True)
+
+        # Normalize activation covariance by trace
+        for name, A_shampoo_ki in self.A_shampoo_dict.items():
+            rows_per_rank = A_shampoo_ki.shape[0]
+            # Extract diagonal elements from this shard
+            # For row i in shard, the resp. diagonal column is i + rank * rows_per_rank
+            diag_indices = torch.arange(rows_per_rank, device=A_shampoo_ki.device)
+            diag_col_indices = diag_indices + self.rank * rows_per_rank
+            local_trace = A_shampoo_ki[diag_indices, diag_col_indices].sum()
+
+            # All-reduce to get full trace
+            if dist.is_initialized():
+                dist.all_reduce(local_trace, op=dist.ReduceOp.SUM)
+
+            # Divide by trace
+            A_shampoo_ki.div_(local_trace)
+
         self.logger.info(
             f"Saving sharded covariance matrices to {activation_path} "
             f"and {gradient_path}"

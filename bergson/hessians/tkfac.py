@@ -41,6 +41,11 @@ class TraceCovarianceCollector(HookCollectorBase):
             dtype=self.dtype,
             target_info=self.target_info,
         )
+        # Initialize trace accumulators for each module
+        for name in self.target_info:
+            self.trace_dict[name] = torch.zeros(
+                (), device=self.shard_computer.device, dtype=self.dtype
+            )
 
     def forward_hook(self, module: nn.Module, a: Tensor) -> None:
         """Compute activation covariance: A^T @ A."""
@@ -90,9 +95,15 @@ class TraceCovarianceCollector(HookCollectorBase):
         end_row_act = (self.rank + 1) * A_tcov_ki.shape[0]
         update_slice_ki = local_update_ii[start_row_act:end_row_act, :]
 
-        # Accumulate
+        # Accumulate covariances
         S_tcov_po.add_(update_slice_po)
         A_tcov_ki.add_(update_slice_ki)
+
+        # Accumulate trace product (trace_ii * trace_oo summed across ranks)
+        trace_product = trace_ii * trace_oo
+        if dist.is_initialized():
+            dist.all_reduce(trace_product, op=dist.ReduceOp.SUM)
+        self.trace_dict[name].add_(trace_product)
 
     def process_batch(self, indices: list[int], **kwargs) -> None:
         """No per-batch processing needed for covariance collection."""
@@ -118,4 +129,8 @@ class TraceCovarianceCollector(HookCollectorBase):
             self.S_tcov_dict,
             os.path.join(gradient_path, f"shard_{self.rank}.safetensors"),
         )
-        # TODO: Multiply by trace and save trace_dict
+        # Save trace dict (only rank 0 needs to save since it's not sharded)
+        if self.rank == 0:
+            trace_path = os.path.join(self.path, "trace.safetensors")
+            save_file(self.trace_dict, trace_path)
+            self.logger.info(f"Saved trace dict to {trace_path}")
