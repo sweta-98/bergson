@@ -284,6 +284,8 @@ class Run:
             "--nproc_per_node",
             str(self.run_cfg.num_gpus),
             "--autobatchsize",
+            "--nproc_per_node",
+            "1",
         ]
         if self.run_cfg.fsdp:
             query_cmd.append("--fsdp")

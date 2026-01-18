@@ -154,8 +154,6 @@ class Run:
             )
         )
 
-        start_wall = timestamp()
-        start = time.perf_counter()
         status = "success"
         error_message: str | None = None
 
@@ -258,12 +256,11 @@ class Run:
 
         # Create attributor and cache
         # Try to set device if BaseInnerProductAttributor supports it
-        try:
-            attributor = BaseInnerProductAttributor(task=task, device="cuda")
-        except TypeError:
-            # Device parameter not supported, use default
-            attributor = BaseInnerProductAttributor(task=task)
-        print("Caching training data...")
+        # Remove device if this breaks
+        attributor = BaseInnerProductAttributor(task=task, device="cuda")
+
+        start_time = timestamp()
+        start = time.perf_counter()
         attributor.cache(train_loader)
 
         # Compute attributions
@@ -272,7 +269,7 @@ class Run:
             attributor.attribute(train_loader, test_loader)
 
         runtime = time.perf_counter() - start
-        end_wall = timestamp()
+        end_time = timestamp()
 
         record = RunRecord(
             schema_version=SCHEMA_VERSION,
@@ -289,8 +286,8 @@ class Run:
             max_length=self.run_cfg.max_length or 1024,
             num_gpus=num_gpus,
             runtime_seconds=runtime,
-            start_time=start_wall,
-            end_time=end_wall,
+            start_time=start_time,
+            end_time=end_time,
             run_path=str(run_path),
             notes=self.run_cfg.notes,
             error=error_message,
