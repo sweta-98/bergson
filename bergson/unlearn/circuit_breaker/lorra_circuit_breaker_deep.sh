@@ -20,8 +20,9 @@ lorra_alpha=100  # Higher alpha for stronger intervention
 layers="10,20"
 transform_layers="-1"
 learning_rate=3e-4
+cb_loss_scale=2000  # Target the promising loss_scale=2000
 
-output_dir="./out/DeepIgnorance_CB_cosine_alpha100_scale500"
+output_dir="./out/DeepIgnorance_CB_cosine_alpha100_scale2000"
 
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
@@ -76,7 +77,8 @@ $PYTHON bergson/unlearn/circuit_breaker/lorra_deep.py \
     --log_every 1 \
     --coeff_schedule linear_converge \
     --sc_loss_type orig_act_dotprod \
-    --sc_train_seq_type all_text
+    --sc_train_seq_type all_text \
+    --cb_loss_scale $cb_loss_scale
 
 # Run evaluations
 echo "Running MMLU STEM evaluation..."
