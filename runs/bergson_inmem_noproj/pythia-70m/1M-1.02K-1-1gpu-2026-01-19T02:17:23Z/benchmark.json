@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "status": "success",
+  "model_key": "pythia-70m",
+  "model_name": "EleutherAI/pythia-70m",
+  "params": 70000000,
+  "train_tokens": 1000000,
+  "eval_tokens": 1024,
+  "dataset": "data/EleutherAI/SmolLM2-135M-10B-tokenized",
+  "train_split": "train",
+  "eval_split": "validation",
+  "batch_size": 4,
+  "max_length": 1024,
+  "query_seconds": 0.3467914969660342,
+  "build_seconds": 204.0264915889711,
+  "score_seconds": 54.19188410701463,
+  "run_path": "/home/luciarosequirke/lucia/bergson/runs/bergson_inmem_noproj/pythia-70m/1M-1.02K-1-1gpu-2026-01-19T02:17:23Z",
+  "notes": null,
+  "error": null,
+  "num_gpus": 1,
+  "token_batch_size": 2048,
+  "projection_dim": 0
+}
