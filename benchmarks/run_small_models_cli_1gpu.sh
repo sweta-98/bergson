@@ -38,7 +38,7 @@ for model in "${MODELS[@]}"; do
             "$tokens" \
             "runs/bergson_cli_benchmark_2" \
             --dataset "$DATASET" \
-            2>&1 | tee "runs/benchmarks/small_models_cli_benchmark_${model}_${tokens}.log"
+            2>&1 | tee "runs/benchmarks/cli_benchmark_1gpu_${model}_${tokens}.log"
 
         EXIT_CODE=$?
         END_TIME=$(date +%s)
@@ -54,7 +54,7 @@ for model in "${MODELS[@]}"; do
 
         # Update plot after each completion
         echo "Updating plot..."
-        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models_cli_benchmark_1gpu.csv" --output_plot "figures/small_models_cli_benchmark_1gpu.png"
+        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/cli_benchmark_1gpu.csv" --output_plot "figures/cli_benchmark_1gpu.png"
     done
 
     echo ""
@@ -66,5 +66,5 @@ echo "=========================================="
 echo "COMPLETE!"
 echo "=========================================="
 
-python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models_cli_benchmark_1gpu.csv" --output_plot "figures/small_models_cli_benchmark_1gpu.png"
-echo "Final plot saved to figures/small_models_cli_benchmark_1gpu.png"
+python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/cli_benchmark_1gpu.csv" --output_plot "figures/cli_benchmark_1gpu.png"
+echo "Final plot saved to figures/cli_benchmark_1gpu.png"
