@@ -63,6 +63,7 @@ def create_combined_dataframe(
                     "runtime_seconds": r.total_runtime_seconds,
                     "num_gpus": r.num_gpus,
                     "hardware": r.hardware or hardware,
+                    "projection_dim": r.projection_dim,
                 }
             )
 
@@ -82,6 +83,7 @@ def create_combined_dataframe(
                     "runtime_seconds": total,
                     "num_gpus": r.num_gpus,
                     "hardware": hardware,
+                    "projection_dim": r.projection_dim,
                 }
             )
 
@@ -98,6 +100,7 @@ def create_combined_dataframe(
                     "runtime_seconds": r.runtime_seconds,
                     "num_gpus": r.num_gpus,
                     "hardware": hardware,
+                    "projection_dim": r.projection_dim,
                 }
             )
 

@@ -67,6 +67,7 @@ class RunRecord:
     error: str | None
     num_gpus: int = 1
     token_batch_size: int | None = None
+    projection_dim: int | None = None
 
 
 @dataclass
@@ -361,6 +362,7 @@ class Run:
             notes=self.run_cfg.notes,
             error=error_message,
             token_batch_size=optimal_token_batch_size,
+            projection_dim=self.run_cfg.projection_dim,
         )
         save_record(run_path, record)
 

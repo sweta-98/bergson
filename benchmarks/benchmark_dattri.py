@@ -166,6 +166,7 @@ class RunRecord:
     notes: str | None
     error: str | None
     num_gpus: int = 1
+    projection_dim: int | None = None
 
 
 @dataclass
@@ -402,6 +403,7 @@ class Run:
             run_path=str(run_path),
             notes=self.run_cfg.notes,
             error=error_message,
+            projection_dim=self.run_cfg.projection_dim,
         )
         save_record(run_path, record)
 

@@ -52,6 +52,7 @@ class CLIRunRecord:
     hardware: str | None = None
     max_length: int | None = None
     token_batch_size: int | None = None
+    projection_dim: int | None = None
 
 
 @dataclass
@@ -93,6 +94,9 @@ class RunConfig:
 
     skip_existing: bool = True
     """Skip benchmark if successful run exists for this model/token combo."""
+
+    projection_dim: int = 16
+    """Dimension to project gradients to. Matches bergson default."""
 
 
 def get_hardware_info() -> str:
@@ -367,6 +371,7 @@ class Run:
             num_gpus=self.run_cfg.num_gpus,
             hardware=get_hardware_info(),
             token_batch_size=token_batch_size,
+            projection_dim=self.run_cfg.projection_dim,
         )
         save_record(benchmark_path, record, "benchmark_cli.json")
 

@@ -65,6 +65,7 @@ def create_inmem_dataframe(records: list[RunRecord]) -> pd.DataFrame:
                     "num_gpus": r.num_gpus,
                     "hardware": hardware,
                     "token_batch_size": r.token_batch_size,
+                    "projection_dim": r.projection_dim,
                 }
             )
 
