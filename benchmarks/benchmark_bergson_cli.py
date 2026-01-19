@@ -287,8 +287,6 @@ class Run:
             "--nproc_per_node",
             "1",
         ]
-        if self.run_cfg.fsdp:
-            query_cmd.append("--fsdp")
 
         success, _, err = run_cli_command(query_cmd, "Query index build")
         if not success:
