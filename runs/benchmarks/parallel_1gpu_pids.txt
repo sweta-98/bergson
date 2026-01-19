@@ -1,0 +1,6 @@
+Process PIDs for Single GPU Benchmarks:
+GPU 0 (pythia-70m): 347813
+GPU 1 (pythia-160m): 347814
+GPU 2 (pythia-1b): 347815
+GPU 3 (pythia-6.9b): 347816
+GPU 4 (pythia-12b): 347817

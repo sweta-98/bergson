@@ -1,0 +1,55 @@
+Running Bergson CLI benchmark for pythia-70m with 10000 train tokens and 1 eval sequences.
+Creating 1-example query dataset (untimed)...
+Saving the dataset (0/1 shards):   0%|          | 0/1 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 634.54 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 591.25 examples/s]
+Map:   0%|          | 0/1 [00:00<?, ? examples/s]Map: 100%|██████████| 1/1 [00:00<00:00, 72.50 examples/s]
+Loaded optimal token_batch_size from cache: 2048
+collector.py:__init__:437:INFO:  Computing with collector for target modules.
+Computing New worker - Collecting gradients:   0%|          | 0/1 [00:00<?, ?it/s]Computing New worker - Collecting gradients: 100%|██████████| 1/1 [00:00<00:00,  8.81it/s]Computing New worker - Collecting gradients: 100%|██████████| 1/1 [00:00<00:00,  8.80it/s]
+Saving the dataset (0/1 shards):   0%|          | 0/1 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 579.32 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 549.50 examples/s]
+collector.py:run_with_collector_hooks:511:INFO:  Total processed: 1
+Filtered dataset to 14 examples (9582 tokens) due to max_tokens limit.
+collector.py:__init__:437:INFO:  Computing with collector for target modules.
+Computing New worker - Collecting gradients:   0%|          | 0/6 [00:00<?, ?it/s]Computing New worker - Collecting gradients:  50%|█████     | 3/6 [00:00<00:00, 22.27it/s]Computing New worker - Collecting gradients: 100%|██████████| 6/6 [00:00<00:00, 26.82it/s]
+Saving the dataset (0/1 shards):   0%|          | 0/14 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14/14 [00:00<00:00, 6004.12 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14/14 [00:00<00:00, 5772.73 examples/s]
+collector.py:run_with_collector_hooks:511:INFO:  Total processed: 14
+Using a projection dimension of 16.
+Filtered dataset to 14 examples (9582 tokens) due to max_tokens limit.
+Map:   0%|          | 0/1 [00:00<?, ? examples/s]Map: 100%|██████████| 1/1 [00:00<00:00, 48.19 examples/s]
+Creating new scores file: /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-70m/10K-1.02K-1-1gpu-2026-01-19T06:30:40Z/score.part/scores.bin
+collector.py:__init__:437:INFO:  Computing with collector for target modules.
+Computing New worker - Collecting gradients:   0%|          | 0/6 [00:00<?, ?it/s]Computing New worker - Collecting gradients:  50%|█████     | 3/6 [00:00<00:00, 24.79it/s]Computing New worker - Collecting gradients: 100%|██████████| 6/6 [00:00<00:00, 28.39it/s]
+Saving the dataset (0/1 shards):   0%|          | 0/14 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14/14 [00:00<00:00, 5532.86 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 14/14 [00:00<00:00, 5324.65 examples/s]
+collector.py:run_with_collector_hooks:511:INFO:  Total processed: 14
+Building query index (untimed)...
+Running: bergson build /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-70m/10K-1.02K-1-1gpu-2026-01-19T06:30:40Z/query_index --model EleutherAI/pythia-70m --dataset /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-70m/10K-1.02K-1-1gpu-2026-01-19T06:30:40Z/query_dataset --skip_preconditioners --overwrite --nproc_per_node 1 --autobatchsize
+Query index build completed in 7.87s
+Using token_batch_size: 2048 (determined before timing)
+Running: bergson build /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-70m/10K-1.02K-1-1gpu-2026-01-19T06:30:40Z/index --model EleutherAI/pythia-70m --dataset data/EleutherAI/SmolLM2-135M-10B-tokenized --split train --skip_preconditioners --overwrite --truncation --max_tokens 10000 --nproc_per_node 1 --token_batch_size 2048
+Build completed in 7.89s
+Running: bergson score /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-70m/10K-1.02K-1-1gpu-2026-01-19T06:30:40Z/score --query_path /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-70m/10K-1.02K-1-1gpu-2026-01-19T06:30:40Z/query_index --score mean --model EleutherAI/pythia-70m --dataset data/EleutherAI/SmolLM2-135M-10B-tokenized --split train --skip_preconditioners --overwrite --truncation --max_tokens 10000 --nproc_per_node 1 --token_batch_size 2048
+Score completed in 8.30s
+{
+  "schema_version": 1,
+  "status": "success",
+  "model_key": "pythia-70m",
+  "model_name": "EleutherAI/pythia-70m",
+  "params": 70000000,
+  "train_tokens": 10000,
+  "eval_tokens": 1,
+  "dataset": "data/EleutherAI/SmolLM2-135M-10B-tokenized",
+  "batch_size": 8192,
+  "build_seconds": 7.893542138976045,
+  "reduce_seconds": null,
+  "score_seconds": 8.296080743020866,
+  "total_runtime_seconds": 16.189744199975394,
+  "start_time": "2026-01-19T06:30:48Z",
+  "end_time": "2026-01-19T06:31:04Z",
+  "run_path": "/home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-70m/10K-1.02K-1-1gpu-2026-01-19T06:30:40Z",
+  "notes": null,
+  "error": null,
+  "num_gpus": 1,
+  "hardware": "eleuther-group-fq9g.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3)",
+  "max_length": null,
+  "token_batch_size": 2048,
+  "projection_dim": 16
+}

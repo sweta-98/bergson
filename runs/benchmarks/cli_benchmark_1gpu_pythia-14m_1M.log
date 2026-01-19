@@ -1,0 +1,4 @@
+Running Bergson CLI benchmark for pythia-14m with 1000000 train tokens and 1 eval sequences.
+⏭️  Skipping: Found existing successful run at /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/1M-1.02K-1-1gpu-2026-01-19T05:20:30Z.
+   Completed at 2026-01-19T05:21:19Z (runtime: 39.1s)
+   Use --skip_existing=False to force re-run

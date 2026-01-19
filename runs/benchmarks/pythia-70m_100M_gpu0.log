@@ -1,0 +1,55 @@
+Traceback (most recent call last):
+  File "/home/luciarosequirke/bergson/bergson/utils/auto_batch_size.py", line 383, in test_batch_size
+    result = subprocess.run(
+             ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1209, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2116, in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+  File "/usr/lib/python3.12/subprocess.py", line 1253, in _check_timeout
+    raise TimeoutExpired(
+subprocess.TimeoutExpired: Command '['bergson', 'build', '/home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/batch_size_cache/test_pythia-70m', '--model', 'EleutherAI/pythia-70m', '--dataset', 'EleutherAI/SmolLM2-135M-10B', '--split', 'train', '--token_batch_size', '2048', '--skip_preconditioners', '--overwrite', '--truncation', '--max_tokens', '100_000']' timed out after 120 seconds
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/luciarosequirke/bergson/benchmarks/benchmark_bergson_cli.py", line 447, in <module>
+    main()
+  File "/home/luciarosequirke/bergson/benchmarks/benchmark_bergson_cli.py", line 443, in main
+    prog.execute()
+  File "/home/luciarosequirke/bergson/benchmarks/benchmark_bergson_cli.py", line 426, in execute
+    self.command.execute()
+  File "/home/luciarosequirke/bergson/benchmarks/benchmark_bergson_cli.py", line 257, in execute
+    optimal_token_batch_size = get_optimal_batch_size(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luciarosequirke/bergson/bergson/utils/auto_batch_size.py", line 455, in get_optimal_batch_size
+    optimal_batch_size = determine_fn()
+                         ^^^^^^^^^^^^^^
+  File "/home/luciarosequirke/bergson/benchmarks/benchmark_bergson_cli.py", line 262, in <lambda>
+    determine_fn=lambda: determine_batch_size_cli(
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luciarosequirke/bergson/bergson/utils/auto_batch_size.py", line 420, in determine_batch_size_cli
+    return find_optimal_token_batch_size_raw(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/luciarosequirke/bergson/bergson/utils/auto_batch_size.py", line 170, in find_optimal_token_batch_size_raw
+    test_fn(token_batch_size)
+  File "/home/luciarosequirke/bergson/bergson/utils/auto_batch_size.py", line 418, in test_batch_size
+    raise RuntimeError("Test timed out")
+RuntimeError: Test timed out
+Running Bergson CLI benchmark for pythia-70m with 100000000 train tokens and 1 eval sequences. Note eval sequences is not implemented, it's implicit.
+Determining optimal token_batch_size...
+
+============================================================
+Auto-determining optimal token_batch_size (CLI)...
+============================================================
+
+Capping starting_batch_size from 4096 to model's max sequence length 2048
+[Iteration 1] Trying token_batch_size=2048...
+Running test build: bergson build /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/batch_size_cache/test_pythia-70m --model EleutherAI/pythia-70m --dataset EleutherAI/SmolLM2-135M-10B --split train --token_batch_size 2048 --skip_preconditioners --overwrite --truncation --max_tokens 100_000
+⏱ Test timed out after 120s - treating as failure

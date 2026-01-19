@@ -1,0 +1,76 @@
+Running Bergson CLI benchmark for pythia-14m with 100000 train tokens and 1 eval sequences.
+Creating 1-example query dataset (untimed)...
+Saving the dataset (0/1 shards):   0%|          | 0/1 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 655.56 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 613.29 examples/s]
+Map:   0%|          | 0/1 [00:00<?, ? examples/s]Map: 100%|██████████| 1/1 [00:00<00:00, 73.90 examples/s]
+Loaded optimal token_batch_size from cache: 2048
+collector.py:__init__:437:INFO:  Computing with collector for target modules.
+Computing New worker - Collecting gradients:   0%|          | 0/1 [00:00<?, ?it/s]Computing New worker - Collecting gradients: 100%|██████████| 1/1 [00:00<00:00,  8.71it/s]Computing New worker - Collecting gradients: 100%|██████████| 1/1 [00:00<00:00,  8.70it/s]
+Saving the dataset (0/1 shards):   0%|          | 0/1 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 598.08 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 1/1 [00:00<00:00, 566.11 examples/s]
+collector.py:run_with_collector_hooks:511:INFO:  Total processed: 1
+Filtered dataset to 180 examples (99956 tokens) due to max_tokens limit.
+Loaded optimal token_batch_size from cache: 2048
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Loaded optimal token_batch_size from cache: 2048
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Loaded optimal token_batch_size from cache: 2048
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Loaded optimal token_batch_size from cache: 2048
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Loaded optimal token_batch_size from cache: 2048
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Loaded optimal token_batch_size from cache: 2048
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Loaded optimal token_batch_size from cache: 2048
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Loaded optimal token_batch_size from cache: 2048
+collector.py:__init__:437:INFO:  Computing with collector for target modules.
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 19.92it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 19.96it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 16.86it/s]Computing New worker - Collecting gradients:  43%|████▎     | 3/7 [00:00<00:00, 23.50it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 16.79it/s]Computing New worker - Collecting gradients:  43%|████▎     | 3/7 [00:00<00:00, 23.58it/s]Computing New worker - Collecting gradients:  43%|████▎     | 3/7 [00:00<00:00, 23.81it/s]Computing New worker - Collecting gradients:  43%|████▎     | 3/7 [00:00<00:00, 22.45it/s]Computing New worker - Collecting gradients:  86%|████████▌ | 6/7 [00:00<00:00, 29.37it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 32.83it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.09it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.51it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.85it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 30.43it/s]
+Computing New worker - Collecting gradients:  86%|████████▌ | 6/7 [00:00<00:00, 27.30it/s]Computing New worker - Collecting gradients:  86%|████████▌ | 6/7 [00:00<00:00, 29.39it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 28.73it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.57it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 30.23it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.73it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 30.41it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 25.40it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 26.69it/s]
+Saving the dataset (0/1 shards):   0%|          | 0/180 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 180/180 [00:00<00:00, 67875.10 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 180/180 [00:00<00:00, 65553.07 examples/s]
+collector.py:run_with_collector_hooks:511:INFO:  Total processed: 180
+Using a projection dimension of 16.
+Filtered dataset to 180 examples (99956 tokens) due to max_tokens limit.
+Map:   0%|          | 0/1 [00:00<?, ? examples/s]Map: 100%|██████████| 1/1 [00:00<00:00, 47.05 examples/s]
+Creating new scores file: /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/100K-1.02K-1-8gpu-2026-01-18T22:35:37Z/score.part/scores.bin
+collector.py:__init__:437:INFO:  Computing with collector for target modules.
+Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:   0%|          | 0/7 [00:00<?, ?it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 17.94it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 18.25it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 19.02it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 19.14it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 19.24it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 19.28it/s]Computing New worker - Collecting gradients:  29%|██▊       | 2/7 [00:00<00:00, 18.60it/s]Computing New worker - Collecting gradients:  43%|████▎     | 3/7 [00:00<00:00, 23.42it/s]Computing New worker - Collecting gradients:  86%|████████▌ | 6/7 [00:00<00:00, 29.12it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 27.82it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.99it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 30.03it/s]
+Computing New worker - Collecting gradients:  86%|████████▌ | 6/7 [00:00<00:00, 30.70it/s]Computing New worker - Collecting gradients:  86%|████████▌ | 6/7 [00:00<00:00, 29.60it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 29.80it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 32.38it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 30.58it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.63it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 29.94it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 33.12it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 31.02it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 32.14it/s]Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 30.65it/s]
+Computing New worker - Collecting gradients: 100%|██████████| 7/7 [00:00<00:00, 28.94it/s]
+Saving the dataset (0/1 shards):   0%|          | 0/180 [00:00<?, ? examples/s]Saving the dataset (1/1 shards): 100%|██████████| 180/180 [00:00<00:00, 60514.16 examples/s]Saving the dataset (1/1 shards): 100%|██████████| 180/180 [00:00<00:00, 58570.58 examples/s]
+collector.py:run_with_collector_hooks:511:INFO:  Total processed: 180
+[W118 22:36:34.634545261 CudaIPCTypes.cpp:16] Producer process has been terminated before all shared CUDA tensors released. See Note [Sharing CUDA tensors]
+Building query index (untimed)...
+Running: bergson build /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/100K-1.02K-1-8gpu-2026-01-18T22:35:37Z/query_index --model EleutherAI/pythia-14m --dataset /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/100K-1.02K-1-8gpu-2026-01-18T22:35:37Z/query_dataset --skip_preconditioners --overwrite --nproc_per_node 8 --autobatchsize --nproc_per_node 1
+Query index build completed in 7.75s
+Running: bergson build /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/100K-1.02K-1-8gpu-2026-01-18T22:35:37Z/index --model EleutherAI/pythia-14m --dataset data/EleutherAI/SmolLM2-135M-10B-tokenized --split train --skip_preconditioners --overwrite --truncation --max_tokens 100000 --nproc_per_node 8 --autobatchsize
+Build completed in 24.18s
+Running: bergson score /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/100K-1.02K-1-8gpu-2026-01-18T22:35:37Z/score --query_path /home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/100K-1.02K-1-8gpu-2026-01-18T22:35:37Z/query_index --score mean --model EleutherAI/pythia-14m --dataset data/EleutherAI/SmolLM2-135M-10B-tokenized --split train --skip_preconditioners --overwrite --truncation --max_tokens 100000 --nproc_per_node 8 --autobatchsize
+Score completed in 25.27s
+{
+  "schema_version": 1,
+  "status": "success",
+  "model_key": "pythia-14m",
+  "model_name": "EleutherAI/pythia-14m",
+  "params": 14000000,
+  "train_tokens": 100000,
+  "eval_tokens": 1,
+  "dataset": "data/EleutherAI/SmolLM2-135M-10B-tokenized",
+  "batch_size": 8192,
+  "build_seconds": 24.17619149701204,
+  "reduce_seconds": null,
+  "score_seconds": 25.271735679008998,
+  "total_runtime_seconds": 49.448097179003526,
+  "start_time": "2026-01-18T22:35:45Z",
+  "end_time": "2026-01-18T22:36:35Z",
+  "run_path": "/home/luciarosequirke/bergson/runs/bergson_cli_benchmark_2/pythia-14m/100K-1.02K-1-8gpu-2026-01-18T22:35:37Z",
+  "notes": null,
+  "error": null,
+  "num_gpus": 8,
+  "hardware": "eleuther-group-fq9g.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3)",
+  "max_length": null,
+  "token_batch_size": 2048
+}
