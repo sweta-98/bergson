@@ -195,12 +195,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--output_csv",
         required=True,
-        help="Path to save CSV data (will append _<num_gpus>gpu suffix)",
+        help="Path to save CSV data",
     )
     parser.add_argument(
         "--output_plot",
         required=True,
-        help="Path to save plot (will append _<num_gpus>gpu suffix)",
+        help="Path to save plot",
     )
     parser.add_argument(
         "--filter_num_gpus",
@@ -264,20 +264,12 @@ def main(argv: list[str] | None = None) -> None:
     plot_path = Path(args.output_plot)
 
     for (num_gpus, hardware), group_df in groups:  # type: ignore
-        # Create suffix for file naming
-        suffix = f"_{num_gpus}gpu"
+        # Save CSV for this group (no automatic GPU suffix)
+        group_df.to_csv(csv_path, index=False)
+        print(f"\nSaved CSV for {num_gpus} GPU(s) to {csv_path}")
 
-        # Save CSV for this group
-        group_csv_path = csv_path.parent / f"{csv_path.stem}{suffix}{csv_path.suffix}"
-        group_csv_path.parent.mkdir(parents=True, exist_ok=True)
-        group_df.to_csv(group_csv_path, index=False)
-        print(f"\nSaved CSV for {num_gpus} GPU(s) to {group_csv_path}")
-
-        # Create plot for this group
-        group_plot_path = (
-            plot_path.parent / f"{plot_path.stem}{suffix}{plot_path.suffix}"
-        )
-        plot_cli_benchmark(group_df, group_plot_path, num_gpus, hardware)  # type: ignore
+        # Create plot for this group (no automatic GPU suffix)
+        plot_cli_benchmark(group_df, plot_path, num_gpus, hardware)  # type: ignore
 
     print(
         f"\nGenerated {len(groups)} separate plots (one per GPU/hardware configuration)"

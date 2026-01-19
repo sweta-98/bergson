@@ -74,8 +74,8 @@ for model in "${MODELS[@]}"; do
 
     # Generate intermediate plot
     echo "Generating updated plot..."
-    python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/large_models_cli_benchmark.csv" --output_plot "figures/large_models_cli_benchmark.png"
-    echo "Plot updated at figures/large_models_cli_benchmark.png"
+    python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/large_models_cli_benchmark_1gpu.csv" --output_plot "figures/large_models_cli_benchmark_1gpu.png"
+    echo "Plot updated at figures/large_models_cli_benchmark_1gpu.png"
     echo ""
 done
 
@@ -85,9 +85,9 @@ echo "=========================================="
 
 # Generate final plot
 echo "Generating final comprehensive plot..."
-python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/large_models_cli_benchmark.csv" --output_plot "figures/large_models_cli_benchmark.png"
+python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/large_models_cli_benchmark_1gpu.csv" --output_plot "figures/large_models_cli_benchmark_1gpu.png"
 
 echo ""
 echo "War of attrition complete! 🎉"
-echo "Final plot saved to figures/large_models_cli_benchmark.png"
-echo "Data saved to runs/benchmarks/large_models_cli_benchmark.csv"
+echo "Final plot saved to figures/large_models_cli_benchmark_1gpu.png"
+echo "Data saved to runs/benchmarks/large_models_cli_benchmark_1gpu.csv"

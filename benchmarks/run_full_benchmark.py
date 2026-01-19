@@ -465,49 +465,157 @@ class Plot:
 
     plot_cfg: PlotConfig
 
+    def load_projection_comparison_data(
+        self, csv_path: Path, projection_type: str
+    ) -> pd.DataFrame:
+        """Load comparison data from projection comparison CSV."""
+        df = pd.read_csv(csv_path)
+
+        # Filter by projection type
+        if projection_type == "without":
+            df_filtered = df[df["projection"] == "without"].copy()
+        elif projection_type == "with":
+            df_filtered = df[df["projection"] == "with (16)"].copy()
+        else:
+            raise ValueError(f"Unknown projection_type: {projection_type}")
+
+        # Keep existing column names (they already match)
+
+        # Add missing columns for compatibility
+        model_params_map = {
+            "pythia-14m": 14000000,
+            "pythia-70m": 70000000,
+            "pythia-160m": 160000000,
+            "pythia-1b": 1000000000,
+        }
+        df_filtered["model_params"] = df_filtered["model_key"].apply(
+            lambda x: model_params_map.get(x, 0)
+        )
+        df_filtered["eval_tokens"] = 1024  # Standard eval tokens
+        df_filtered["num_gpus"] = 1  # All projection data is 1 GPU
+        df_filtered["reduce_seconds"] = None
+        df_filtered["score_seconds"] = None
+
+        return df_filtered
+
     def execute(self) -> None:
         """Generate comparison plots from existing benchmark results."""
-        dattri_root = Path(self.plot_cfg.run_root) / "dattri-scaling"
-        bergson_root = Path(self.plot_cfg.run_root) / "bergson_inmem_benchmark"
+        # Use projection comparison data for fair in-memory comparison
+        projection_csv = Path("runs/benchmarks/projection_comparison_1gpu.csv")
 
-        dattri_records, bergson_records = load_all_records(dattri_root, bergson_root)
+        if projection_csv.exists():
+            # Generate both with and without projection plots
+            projection_types = [
+                ("without", "without_projection"),
+                ("with", "with_projection"),
+            ]
 
-        df = create_comparison_dataframe(dattri_records, bergson_records)
+            for proj_type, file_suffix in projection_types:
+                try:
+                    df = self.load_projection_comparison_data(projection_csv, proj_type)
 
-        # Save CSV
-        csv_path = Path(self.plot_cfg.output_csv)
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(csv_path, index=False)
-        print(f"Saved comparison data to {csv_path}")
+                    if df.empty:
+                        print(f"No data for {proj_type} projection, skipping")
+                        continue
 
-        # Create plots
-        if not self.plot_cfg.skip_plots:
-            plot_dir = Path(self.plot_cfg.plot_output).parent
-            plot_stem = Path(self.plot_cfg.plot_output).stem
-            plot_ext = Path(self.plot_cfg.plot_output).suffix or ".png"
+                    # Save CSV
+                    csv_path = Path(self.plot_cfg.output_csv)
+                    csv_with_suffix = (
+                        csv_path.parent
+                        / f"{csv_path.stem}_{file_suffix}{csv_path.suffix}"
+                    )
+                    csv_with_suffix.parent.mkdir(parents=True, exist_ok=True)
+                    df.to_csv(csv_with_suffix, index=False)
+                    print(
+                        f"Saved {proj_type} projection comparison data to "
+                        f"{csv_with_suffix}"
+                    )
 
-            # Get unique GPU counts in the data
-            gpu_counts = (
-                sorted(df["num_gpus"].unique()) if "num_gpus" in df.columns else [1]
-            )
+                    # Create plots
+                    if not self.plot_cfg.skip_plots:
+                        plot_dir = Path(self.plot_cfg.plot_output).parent
+                        plot_stem = Path(self.plot_cfg.plot_output).stem
+                        plot_ext = Path(self.plot_cfg.plot_output).suffix or ".png"
 
-            if self.plot_cfg.num_gpus is not None:
-                # Filter to specific GPU count
-                gpu_counts = [self.plot_cfg.num_gpus]
+                        # Get unique GPU counts in the data
+                        gpu_counts = (
+                            sorted(df["num_gpus"].unique())
+                            if "num_gpus" in df.columns
+                            else [1]
+                        )
 
-            for num_gpus in gpu_counts:
-                if "num_gpus" in df.columns:
-                    gpu_df = df[df["num_gpus"] == num_gpus]
-                else:
-                    gpu_df = df
+                        if self.plot_cfg.num_gpus is not None:
+                            # Filter to specific GPU count
+                            gpu_counts = [self.plot_cfg.num_gpus]
 
-                if gpu_df.empty:
-                    print(f"No data for {num_gpus} GPU(s), skipping")
+                        for num_gpus in gpu_counts:
+                            if "num_gpus" in df.columns:
+                                gpu_df = df[df["num_gpus"] == num_gpus]
+                            else:
+                                gpu_df = df
+
+                            if gpu_df.empty:
+                                print(f"No data for {num_gpus} GPU(s), skipping")
+                                continue
+
+                            plot_path = (
+                                plot_dir / f"{plot_stem}_{file_suffix}{plot_ext}"
+                            )
+                            title_suffix = (
+                                f" ({proj_type} projection, {num_gpus} "
+                                f"GPU{'s' if num_gpus > 1 else ''})"
+                            )
+                            plot_comparison(gpu_df, plot_path, title_suffix)
+
+                except Exception as e:
+                    print(f"Error processing {proj_type} projection data: {e}")
                     continue
 
-                plot_path = plot_dir / f"{plot_stem}_{num_gpus}gpu{plot_ext}"
-                title_suffix = f" ({num_gpus} GPU{'s' if num_gpus > 1 else ''})"
-                plot_comparison(gpu_df, plot_path, title_suffix)
+        else:
+            # Fallback to directory loading (original behavior)
+            dattri_root = Path(self.plot_cfg.run_root) / "dattri-scaling"
+            bergson_root = (
+                Path(self.plot_cfg.run_root) / "proj_comparison" / "bergson_noproj"
+            )
+            dattri_records, bergson_records = load_all_records(
+                dattri_root, bergson_root
+            )
+            df = create_comparison_dataframe(dattri_records, bergson_records)
+
+            # Save CSV
+            csv_path = Path(self.plot_cfg.output_csv)
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_csv(csv_path, index=False)
+            print(f"Saved comparison data to {csv_path}")
+
+            # Create plots
+            if not self.plot_cfg.skip_plots:
+                plot_dir = Path(self.plot_cfg.plot_output).parent
+                plot_stem = Path(self.plot_cfg.plot_output).stem
+                plot_ext = Path(self.plot_cfg.plot_output).suffix or ".png"
+
+                # Get unique GPU counts in the data
+                gpu_counts = (
+                    sorted(df["num_gpus"].unique()) if "num_gpus" in df.columns else [1]
+                )
+
+                if self.plot_cfg.num_gpus is not None:
+                    # Filter to specific GPU count
+                    gpu_counts = [self.plot_cfg.num_gpus]
+
+                for num_gpus in gpu_counts:
+                    if "num_gpus" in df.columns:
+                        gpu_df = df[df["num_gpus"] == num_gpus]
+                    else:
+                        gpu_df = df
+
+                    if gpu_df.empty:
+                        print(f"No data for {num_gpus} GPU(s), skipping")
+                        continue
+
+                    plot_path = plot_dir / f"{plot_stem}{plot_ext}"
+                    title_suffix = f" ({num_gpus} GPU{'s' if num_gpus > 1 else ''})"
+                    plot_comparison(gpu_df, plot_path, title_suffix)
 
 
 @dataclass

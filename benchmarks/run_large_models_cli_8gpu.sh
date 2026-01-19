@@ -64,8 +64,8 @@ for model in "${MODELS[@]}"; do
             echo "Generating updated plot..."
             python -m benchmarks.plot_cli_benchmark \
                 --run_root "runs/bergson_cli_benchmark_2" \
-                --output_csv "runs/benchmarks/large_models_cli_benchmark.csv" \
-                --output_plot "runs/benchmarks/large_models_cli_benchmark.png" \
+                --output_csv "runs/benchmarks/large_models_cli_benchmark_${NUM_GPUS}gpu.csv" \
+                --output_plot "figures/large_models_cli_benchmark_${NUM_GPUS}gpu.png" \
                 --filter_num_gpus ${NUM_GPUS}
             echo "Plot updated at figures/large_models_cli_benchmark_${NUM_GPUS}gpu.png"
         else
@@ -106,8 +106,8 @@ echo "=========================================="
 echo "Generating final comprehensive plot..."
 python -m benchmarks.plot_cli_benchmark \
     --run_root "runs/bergson_cli_benchmark_2" \
-    --output_csv "runs/benchmarks/large_models_cli_benchmark.csv" \
-    --output_plot "figures/large_models_cli_benchmark.png" \
+    --output_csv "runs/benchmarks/large_models_cli_benchmark_${NUM_GPUS}gpu.csv" \
+    --output_plot "figures/large_models_cli_benchmark_${NUM_GPUS}gpu.png" \
     --filter_num_gpus ${NUM_GPUS}
 
 echo ""

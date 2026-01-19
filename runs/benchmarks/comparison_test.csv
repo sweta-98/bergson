@@ -1,0 +1,4 @@
+method,model_key,model_params,train_tokens,eval_tokens,num_gpus,runtime_seconds,reduce_seconds,score_seconds
+dattri,pythia-14m,14000000,100000,1024,1,128.33659801800968,,
+dattri,pythia-14m,14000000,200000,1024,1,7.121381861972623,,
+dattri,pythia-14m,14000000,500000,1024,1,14.674468000011984,,

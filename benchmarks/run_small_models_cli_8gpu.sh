@@ -57,7 +57,7 @@ for model in "${MODELS[@]}"; do
 
         # Update plot after each completion
         echo "Updating plot..."
-        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models.csv" --output_plot "figures/small_models_cli_benchmark.png"
+        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models_cli_benchmark_8gpu.csv" --output_plot "figures/small_models_cli_benchmark_8gpu.png"
     done
 
     echo ""
@@ -69,5 +69,5 @@ echo "=========================================="
 echo "COMPLETE!"
 echo "=========================================="
 
-python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models.csv" --output_plot "figures/small_models_cli_benchmark.png"
+python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models_cli_benchmark_8gpu.csv" --output_plot "figures/small_models_cli_benchmark_8gpu.png"
 echo "Final plot saved to figures/small_models_cli_benchmark_8gpu.png"
