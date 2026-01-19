@@ -242,26 +242,6 @@ class Run:
         index_path = benchmark_path / "index"
         score_path = benchmark_path / "score"
 
-        common_args = [
-            "--model",
-            spec.hf_id,
-            "--dataset",
-            self.run_cfg.dataset,
-            "--split",
-            "train",
-            "--skip_preconditioners",
-            "--overwrite",
-            "--truncation",
-            "--max_tokens",
-            str(train_tokens),
-            "--nproc_per_node",
-            str(self.run_cfg.num_gpus),
-            "--autobatchsize",
-        ]
-
-        if self.run_cfg.fsdp:
-            common_args.append("--fsdp")
-
         # UNTIMED: Create and build 1-sequence query index
         query_index_path = benchmark_path / "query_index"
         query_dataset_path = benchmark_path / "query_dataset"
@@ -286,15 +266,41 @@ class Run:
             "--skip_preconditioners",
             "--overwrite",
             "--nproc_per_node",
-            str(self.run_cfg.num_gpus),
-            "--autobatchsize",
-            "--nproc_per_node",
             "1",
+            "--autobatchsize",
         ]
 
         success, _, err = run_cli_command(query_cmd, "Query index build")
         if not success:
             raise RuntimeError(f"Failed to build query index: {err}")
+
+        # Read the determined batch size from the query index
+        with open(query_index_path / "index_config.json", "r") as f:
+            query_cfg = IndexConfig(**json.load(f))
+            determined_batch_size = query_cfg.token_batch_size
+        print(f"Using token_batch_size: {determined_batch_size} (determined before timing)")
+
+        # Common args for timed commands - use explicit batch size
+        common_args = [
+            "--model",
+            spec.hf_id,
+            "--dataset",
+            self.run_cfg.dataset,
+            "--split",
+            "train",
+            "--skip_preconditioners",
+            "--overwrite",
+            "--truncation",
+            "--max_tokens",
+            str(train_tokens),
+            "--nproc_per_node",
+            str(self.run_cfg.num_gpus),
+            "--token_batch_size",
+            str(determined_batch_size),
+        ]
+
+        if self.run_cfg.fsdp:
+            common_args.append("--fsdp")
 
         start_wall = timestamp()
         start = time.perf_counter()
