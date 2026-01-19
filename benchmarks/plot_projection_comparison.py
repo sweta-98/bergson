@@ -360,7 +360,9 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Dattri with projection: {len(dattri_proj)} records")
     print(f"Dattri without projection: {len(dattri_noproj)} records")
 
-    total = len(bergson_proj) + len(bergson_noproj) + len(dattri_proj) + len(dattri_noproj)
+    total = (
+        len(bergson_proj) + len(bergson_noproj) + len(dattri_proj) + len(dattri_noproj)
+    )
     if total == 0:
         print("No benchmark records found")
         return
