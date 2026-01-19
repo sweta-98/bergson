@@ -57,9 +57,10 @@ class ShampooCollector(HookCollectorBase):
         name = assert_type(str, module._name)
         S_shampoo_po = self.S_shampoo_dict[name]
         A_shampoo_ki = self.A_shampoo_dict[name]
+        mask = self._current_valid_mask
 
-        # Reshape to [N*S, O]
-        g_bo = g.reshape(-1, g.shape[-1])
+        # g: [N, S, O], mask: [N, S] -> select valid positions
+        g_bo = g[mask]  # [num_valid, O]
         a_bi = module._inputs
         del module._inputs
         assert isinstance(a_bi, Tensor)

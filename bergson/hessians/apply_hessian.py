@@ -1,0 +1,159 @@
+import gc
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.distributed as dist
+from safetensors.torch import load_file
+from torch import Tensor
+
+from bergson.data import create_index, load_gradients
+from bergson.hessians.sharded_computation import ShardedMul
+from bergson.utils.logger import get_logger
+
+
+@dataclass
+class EkfacConfig:
+    hessian_method_path: str
+    gradient_path: str
+    run_path: str
+    debug: bool = False
+    lambda_damp_factor: float = 0.1
+
+
+class EkfacApplicator:
+    def __init__(self, cfg: EkfacConfig):
+        self.cfg = cfg
+        self.path = cfg.hessian_method_path
+        self.gradient_path = cfg.gradient_path
+
+        self.logger = get_logger(
+            "EkfacApplicator", level="DEBUG" if cfg.debug else "INFO"
+        )
+
+        self.rank = dist.get_rank() if dist.is_initialized() else 0
+        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
+        self.device = f"cuda:{self.rank}"
+
+        self.sharded_computer = ShardedMul()
+
+    def compute_ivhp_sharded(self):
+        eigen_a = load_file(
+            self.path + f"/eigen_activation_sharded/shard_{self.rank}.safetensors",
+            device=f"cuda:{self.rank}",
+        )
+        eigen_g = load_file(
+            self.path + f"/eigen_gradient_sharded/shard_{self.rank}.safetensors",
+            device=f"cuda:{self.rank}",
+        )
+        lambda_factor = load_file(
+            self.path + f"/eigenvalue_correction_sharded/shard_{self.rank}.safetensors",
+            device=f"cuda:{self.rank}",
+        )
+
+        for k, v in lambda_factor.items():
+            eigen_a[k] = eigen_a[k].to(dtype=torch.float32)
+            eigen_g[k] = eigen_g[k].to(dtype=torch.float32)
+            lambda_factor[k] = v.to(dtype=torch.float32)
+
+        grad_sizes = {
+            name: eigen_g[name].shape[1] * eigen_a[name].shape[1] for name in eigen_a
+        }
+
+        mmap = load_gradients(self.gradient_path)
+        with open(os.path.join(self.gradient_path, "info.json")) as f:
+            info = json.load(f)
+
+        grad_buffer = create_index(
+            Path(self.cfg.run_path),
+            num_grads=info["num_grads"],
+            grad_sizes=grad_sizes,
+            dtype=np.float32,
+        )
+
+        self.logger.info(
+            f"Loaded gradients for {len(mmap)} queries and computing IVHP..."
+        )
+
+        transformed_gradients: dict[str, Tensor] = {}
+        for k, v in eigen_a.items():
+            gradients_noi = torch.from_numpy(mmap[k][:]).to(
+                device=self.device, dtype=torch.float32
+            )
+            gradients_noi = gradients_noi.view(
+                -1, eigen_g[k].shape[1], eigen_a[k].shape[1]
+            )
+            transformed_gradients[k] = self.sharded_computer._matmul(
+                vector_nsa=gradients_noi, matrix_cb=v
+            )
+
+        self.logger.debug("Finished G @ Q_A")
+        del eigen_a
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        for k, v in eigen_g.items():
+            transformed_gradients[k] = self.sharded_computer._matmul(
+                vector_nsa=transformed_gradients[k].transpose(-2, -1), matrix_cb=v
+            ).transpose(-2, -1)
+
+        self.logger.debug("Finished G'=Q_S.T @ G @ Q_A")
+        del eigen_g
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        for k, v in lambda_factor.items():
+            self.sharded_computer._hadamard(
+                matrix_noi=transformed_gradients[k],
+                lambda_ci=v,
+                lambda_damp_factor=self.cfg.lambda_damp_factor,
+            )
+
+        self.logger.debug("Finished G'/lambda")
+
+        torch.cuda.synchronize()
+        for k, v in transformed_gradients.items():
+            grad_buffer[k][:] = v.to(device="cpu", non_blocking=True).flatten(1).numpy()
+
+        grad_buffer.flush()
+
+        self.logger.info(f"Saved IVHP gradients to {self.cfg.run_path}")
+
+
+if __name__ == "__main__":
+    from datetime import timedelta
+
+    from simple_parsing import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_arguments(EkfacConfig, dest="cfg")
+    args = parser.parse_args()
+
+    rank = int(os.environ.get("RANK", 0))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
+    if world_size > 1:
+        addr = os.environ.get("MASTER_ADDR", "localhost")
+        port = os.environ.get("MASTER_PORT", "29500")
+
+        dist.init_process_group(
+            "nccl",
+            init_method=f"tcp://{addr}:{port}",
+            device_id=torch.device(f"cuda:{local_rank}"),
+            rank=rank,
+            timeout=timedelta(hours=1),
+            world_size=world_size,
+        )
+
+    applicator = EkfacApplicator(args.cfg)
+    applicator.compute_ivhp_sharded()
+
+    if dist.is_initialized():
+        dist.destroy_process_group()

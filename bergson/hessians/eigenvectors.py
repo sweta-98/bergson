@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.hessians.sharded_computation import ShardedMul
+from bergson.utils.logger import get_logger
 from bergson.utils.utils import (
     assert_type,
     get_device,
@@ -307,6 +308,8 @@ def compute_eigendecomposition(
     )
 
     gc.collect()
+
+    get_logger().info(f"Saved eigenvectors to {output_path}")
 
 
 def _merge_and_shard_eigenvectors(

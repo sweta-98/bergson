@@ -311,11 +311,6 @@ class HessianConfig:
     hessian_dtype: Literal["auto", "bf16", "fp16", "fp32"] = "auto"
     """Precision (dtype) to use for the Hessian approximation."""
 
-    lambda_damp_factor: float = 0.1
-    """Damping factor for the Hessian approximation.
-    This will be a relative value multiplied
-    by the average eigenvalue of each module."""
-
     use_dataset_labels: bool = False
     """Whether to use dataset labels for Hessian (empirical Fisher) approximation.
     If false, the model predictions will be used."""
