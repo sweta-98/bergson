@@ -239,7 +239,7 @@ def plot_comparison(
     ax3.set_xscale("log")
     ax3.set_yscale("log")
     ax3.set_xlabel("Training Tokens")
-    ax3.set_ylabel("Runtime (seconds)")
+    ax3.set_ylabel("Score Runtime (seconds)")
     ax3.set_title(f"Bergson: Score Breakdown{title_suffix}")
     ax3.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     ax3.legend(fontsize="small")

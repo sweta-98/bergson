@@ -42,6 +42,8 @@ Don't betray lineage. An example of betraying lineage is duplicating a file, mak
 
 If you think some data files (e.g. CSVs) have been invalidated but you're not 100% sure, you can add them to a .gitignore'd archive directory along with an equivalentally named markdown file explaining the context.
 
+File names always use snake case - in_memory, not inmemory.
+
 ### Documentation
 
 Do not mark documentation for code that has been removed as deprecated - simply remove the documentation.

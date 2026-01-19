@@ -68,7 +68,7 @@ def plot_cli_benchmark(
         if not subset.empty:
             ax1.plot(
                 subset["train_tokens"],
-                subset["total_runtime_seconds"],
+                subset["score_seconds"],
                 marker="o",
                 label=model_key,
                 linewidth=2,
@@ -76,9 +76,9 @@ def plot_cli_benchmark(
     ax1.set_xscale("log")
     ax1.set_yscale("log")
     ax1.set_xlabel("Training Tokens", fontsize=12)
-    ax1.set_ylabel("Total Runtime (seconds)", fontsize=12)
+    ax1.set_ylabel("Score Runtime (seconds)", fontsize=12)
     ax1.set_title(
-        "Bergson CLI: Total Runtime vs Training Tokens", fontsize=14, fontweight="bold"
+        "Bergson CLI: Score Runtime vs Training Tokens", fontsize=14, fontweight="bold"
     )
     ax1.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     ax1.legend(fontsize=10)
@@ -91,7 +91,7 @@ def plot_cli_benchmark(
         if not subset.empty:
             ax2.plot(
                 subset["model_params"],
-                subset["total_runtime_seconds"],
+                subset["score_seconds"],
                 marker="o",
                 label=format_tokens(train_tokens),
                 linewidth=2,
@@ -99,9 +99,11 @@ def plot_cli_benchmark(
     ax2.set_xscale("log")
     ax2.set_yscale("log")
     ax2.set_xlabel("Model Parameters", fontsize=12)
-    ax2.set_ylabel("Total Runtime (seconds)", fontsize=12)
+    ax2.set_ylabel("Score Runtime (seconds)", fontsize=12)
     ax2.set_title(
-        "Bergson CLI: Runtime Scaling by Model Size", fontsize=14, fontweight="bold"
+        "Bergson CLI: Score Runtime Scaling by Model Size",
+        fontsize=14,
+        fontweight="bold",
     )
     ax2.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     ax2.legend(fontsize=10)
@@ -132,7 +134,7 @@ def plot_cli_benchmark(
     ax3.set_xscale("log")
     ax3.set_yscale("log")
     ax3.set_xlabel("Training Tokens", fontsize=12)
-    ax3.set_ylabel("Runtime (seconds)", fontsize=12)
+    ax3.set_ylabel("Build & Score Runtime (seconds)", fontsize=12)
     ax3.set_title(
         "Bergson CLI: Build vs Score Breakdown",
         fontsize=14,
@@ -169,7 +171,7 @@ def plot_cli_benchmark(
             ax4.set_xticks(x_pos)
             ax4.set_xticklabels(x_labels, rotation=45, ha="right")
             ax4.set_xlabel("Training Tokens", fontsize=12)
-            ax4.set_ylabel("Runtime (seconds)", fontsize=12)
+            ax4.set_ylabel("Build + Score Runtime (seconds)", fontsize=12)
             ax4.set_title(
                 f"Time Breakdown for {main_model}", fontsize=14, fontweight="bold"
             )
