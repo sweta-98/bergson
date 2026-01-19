@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--output_csv",
-        default="runs/benchmarks/projection_comparison.csv",
+        default="figures/archive/projection_comparison.csv",
         help="Path to save CSV data",
     )
     parser.add_argument(

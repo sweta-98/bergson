@@ -8,10 +8,8 @@
 
 set -e
 
-source .venv/bin/activate
-
-TOKEN_SCALES=("10K" "100K" "1M")
-MODELS=("pythia-14m" "pythia-70m" "pythia-160m")
+TOKEN_SCALES=("10K" "100K" "1M" "10M" "100M")
+MODELS=("pythia-14m" "pythia-70m" "pythia-160m" "pythia-410m")
 DATASET="data/EleutherAI/SmolLM2-135M-10B-tokenized"
 PROJECTION_DIM=16
 

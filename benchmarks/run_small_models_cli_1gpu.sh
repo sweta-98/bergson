@@ -2,10 +2,8 @@
 
 set -e
 
-source .venv/bin/activate
-
-TOKEN_SCALES=("10K" "100K" "1M") # capped at 1M for speed
-MODELS=("pythia-14m" "pythia-70m" "pythia-160m" "pythia-1b")
+TOKEN_SCALES=("10K" "100K" "1M" "10M" "100M")
+MODELS=("pythia-14m" "pythia-70m" "pythia-160m" "pythia-410m" "pythia-1b")
 DATASET="data/EleutherAI/SmolLM2-135M-10B-tokenized"
 
 # Create runs/benchmarks directory if it doesn't exist
@@ -33,10 +31,11 @@ for model in "${MODELS[@]}"; do
 
         START_TIME=$(date +%s)
 
+        cd /home/luciarosequirke/bergson
         python -m benchmarks.benchmark_bergson_cli \
             "$model" \
             "$tokens" \
-            "runs/bergson_cli_benchmark_2" \
+            "runs/bergson_cli_benchmark" \
             --dataset "$DATASET" \
             2>&1 | tee "runs/benchmarks/cli_benchmark_1gpu_${model}_${tokens}.log"
 
@@ -54,7 +53,8 @@ for model in "${MODELS[@]}"; do
 
         # Update plot after each completion
         echo "Updating plot..."
-        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/cli_benchmark_1gpu.csv" --output_plot "figures/cli_benchmark_1gpu.png"
+        cd /home/luciarosequirke/bergson
+        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark" --output_path "figures"
     done
 
     echo ""
@@ -66,5 +66,5 @@ echo "=========================================="
 echo "COMPLETE!"
 echo "=========================================="
 
-python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/cli_benchmark_1gpu.csv" --output_plot "figures/cli_benchmark_1gpu.png"
-echo "Final plot saved to figures/cli_benchmark_1gpu.png"
+cd /home/luciarosequirke/bergson
+python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark" --output_path "figures"

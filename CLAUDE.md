@@ -44,6 +44,8 @@ If you think some data files (e.g. CSVs) have been invalidated but you're not 10
 
 File names always use snake case - in_memory, not inmemory.
 
+When writing files to disk python scripts should choose their own filenames but be provided with their file paths.
+
 ### Documentation
 
 Do not mark documentation for code that has been removed as deprecated - simply remove the documentation.

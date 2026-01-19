@@ -47,6 +47,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
     "pythia-14m": ModelSpec("pythia-14m", "EleutherAI/pythia-14m", 14_000_000),
     "pythia-70m": ModelSpec("pythia-70m", "EleutherAI/pythia-70m", 70_000_000),
     "pythia-160m": ModelSpec("pythia-160m", "EleutherAI/pythia-160m", 160_000_000),
+    # "pythia-410m": ModelSpec("pythia-410m", "EleutherAI/pythia-410m", 410_000_000),
     "pythia-1b": ModelSpec("pythia-1b", "EleutherAI/pythia-1b", 1_000_000_000),
     "pythia-6.9b": ModelSpec("pythia-6.9b", "EleutherAI/pythia-6.9b", 6_900_000_000),
     "pythia-12b": ModelSpec("pythia-12b", "EleutherAI/pythia-12b", 12_000_000_000),
@@ -123,6 +124,38 @@ def parse_tokens(value: str) -> int:
         text = text[:-1]
     number = float(text)
     return int(number * unit)
+
+
+def extract_gpu_info(hardware_string: str | None) -> str | None:
+    """
+    Extract just the GPU information from a hardware string.
+
+    Hardware strings are typically in the format: "hostname (NxGPU_NAME)"
+    This function returns just the part in parentheses: "NxGPU_NAME"
+
+    Parameters
+    ----------
+    hardware_string : str | None
+        The full hardware string, e.g. "gpu-server-01 (8x NVIDIA A100-SXM4-80GB)"
+
+    Returns
+    -------
+    str | None
+        Just the GPU info part, e.g. "8x NVIDIA A100-SXM4-80GB",
+        or None if no valid format
+    """
+    if not hardware_string:
+        return None
+
+    # Look for content within parentheses
+    start = hardware_string.find("(")
+    end = hardware_string.find(")")
+
+    if start != -1 and end != -1 and end > start:
+        return hardware_string[start + 1 : end]
+
+    # If no parentheses found, return the original string
+    return hardware_string
 
 
 def load_benchmark_dataset(

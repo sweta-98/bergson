@@ -38,7 +38,7 @@ for model in "${MODELS[@]}"; do
         python -m benchmarks.benchmark_bergson_cli \
             "$model" \
             "$tokens" \
-            "runs/bergson_cli_benchmark_2" \
+            "runs/bergson_cli_benchmark" \
             --dataset "$DATASET" \
             --num_gpus $NUM_GPUS \
             2>&1 | tee "runs/benchmarks/small_models_8gpu_${model}_${tokens}.log"
@@ -57,7 +57,7 @@ for model in "${MODELS[@]}"; do
 
         # Update plot after each completion
         echo "Updating plot..."
-        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/cli_benchmark_8gpu.csv" --output_plot "figures/cli_benchmark_8gpu.png"
+        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark" --output_path "figures"
     done
 
     echo ""
@@ -69,5 +69,4 @@ echo "=========================================="
 echo "COMPLETE!"
 echo "=========================================="
 
-python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/cli_benchmark_8gpu.csv" --output_plot "figures/cli_benchmark_8gpu.png"
-echo "Final plot saved to figures/cli_benchmark_8gpu.png"
+python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark" --output_path "figures"

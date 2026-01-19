@@ -46,7 +46,7 @@ for model in "${MODELS[@]}"; do
         python -m benchmarks.benchmark_bergson_cli \
             "$model" \
             "$tokens" \
-            "runs/bergson_cli_benchmark_2" \
+            "runs/bergson_cli_benchmark" \
             --dataset "$DATASET" \
             --token_batch_size "$BATCH_SIZE" \
             --num_gpus $NUM_GPUS \
@@ -63,28 +63,13 @@ for model in "${MODELS[@]}"; do
             # Generate updated plot after each successful benchmark
             echo "Generating updated plot..."
             python -m benchmarks.plot_cli_benchmark \
-                --run_root "runs/bergson_cli_benchmark_2" \
-                --output_csv "runs/benchmarks/large_models_cli_benchmark_${NUM_GPUS}gpu.csv" \
-                --output_plot "figures/large_models_cli_benchmark_${NUM_GPUS}gpu.png" \
+                --run_root "runs/bergson_cli_benchmark" \
+                --output_path "figures" \
                 --filter_num_gpus ${NUM_GPUS}
-            echo "Plot updated at figures/large_models_cli_benchmark_${NUM_GPUS}gpu.png"
         else
             echo "✗ Failed: $model with $tokens tokens on $NUM_GPUS GPUs (after ${DURATION}s)"
             echo "Continuing to next token scale..."
         fi
-
-        echo ""
-
-        # Force GPU memory cleanup between runs to prevent fragmentation
-        echo "Clearing GPU memory..."
-        python3 << EOF
-import torch
-import gc
-gc.collect()
-torch.cuda.empty_cache()
-torch.cuda.synchronize()
-print("GPU memory cleared")
-EOF
 
         # Brief pause to let GPU cool down
         echo "Pausing for 5 seconds..."
@@ -105,12 +90,6 @@ echo "=========================================="
 # Generate final plot
 echo "Generating final comprehensive plot..."
 python -m benchmarks.plot_cli_benchmark \
-    --run_root "runs/bergson_cli_benchmark_2" \
-    --output_csv "runs/benchmarks/large_models_cli_benchmark_${NUM_GPUS}gpu.csv" \
-    --output_plot "figures/large_models_cli_benchmark_${NUM_GPUS}gpu.png" \
+    --run_root "runs/bergson_cli_benchmark" \
+    --output_path "figures" \
     --filter_num_gpus ${NUM_GPUS}
-
-echo ""
-echo "War of attrition complete with 8 GPUs! 🎉"
-echo "Final plot saved to figures/large_models_cli_benchmark_${NUM_GPUS}gpu.png"
-echo "Data saved to runs/benchmarks/large_models_cli_benchmark_${NUM_GPUS}gpu.csv"

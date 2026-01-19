@@ -12,8 +12,6 @@ from matplotlib import pyplot as plt
 
 from benchmarks.benchmark_bergson import RunRecord as InMemRecord
 from benchmarks.benchmark_bergson import load_records as load_inmem_records
-from benchmarks.benchmark_bergson_cli import CLIRunRecord
-from benchmarks.benchmark_bergson_cli import load_records as load_cli_records
 from benchmarks.benchmark_dattri import RunRecord as DattriRecord
 from benchmarks.benchmark_dattri import load_records as load_dattri_records
 from benchmarks.benchmark_utils import format_tokens
@@ -42,30 +40,12 @@ def get_hardware_string() -> str:
 
 
 def create_combined_dataframe(
-    cli_records: list[CLIRunRecord],
     inmem_records: list[InMemRecord],
     dattri_records: list[DattriRecord],
 ) -> pd.DataFrame:
     """Create a combined dataframe from all benchmark records."""
     rows = []
     hardware = get_hardware_string()
-
-    # Add CLI records
-    for r in cli_records:
-        if r.status == "success" and r.total_runtime_seconds is not None:
-            rows.append(
-                {
-                    "method": "bergson-cli",
-                    "model_key": r.model_key,
-                    "model_params": r.params,
-                    "train_tokens": r.train_tokens,
-                    "eval_tokens": r.eval_tokens,
-                    "runtime_seconds": r.total_runtime_seconds,
-                    "num_gpus": r.num_gpus,
-                    "hardware": r.hardware or hardware,
-                    "projection_dim": r.projection_dim,
-                }
-            )
 
     # Add in-memory records
     for r in inmem_records:
@@ -297,11 +277,6 @@ def main(argv: list[str] | None = None) -> None:
         description="Generate comparison plots for all 3 benchmark methods",
     )
     parser.add_argument(
-        "--cli_root",
-        default="runs/bergson_cli_benchmark_2",
-        help="Root directory for CLI benchmark results",
-    )
-    parser.add_argument(
         "--inmem_root",
         default="runs/bergson_inmem_benchmark",
         help="Root directory for in-memory benchmark results",
@@ -312,14 +287,9 @@ def main(argv: list[str] | None = None) -> None:
         help="Root directory for dattri benchmark results",
     )
     parser.add_argument(
-        "--output_csv",
-        default="runs/benchmarks/comparison_benchmark.csv",
+        "--output_path",
+        required=True,
         help="Path to save CSV data",
-    )
-    parser.add_argument(
-        "--output_plot",
-        default="figures/comparison_benchmark.png",
-        help="Path to save plot",
     )
     parser.add_argument(
         "--filter_num_gpus",
@@ -331,24 +301,21 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     # Load records from all sources
-    cli_root = Path(args.cli_root)
     inmem_root = Path(args.inmem_root)
     dattri_root = Path(args.dattri_root)
 
-    cli_records = load_cli_records(cli_root) if cli_root.exists() else []
     inmem_records = load_inmem_records(inmem_root) if inmem_root.exists() else []
     dattri_records = load_dattri_records(dattri_root) if dattri_root.exists() else []
 
-    print(f"Found {len(cli_records)} CLI benchmark records")
     print(f"Found {len(inmem_records)} in-memory benchmark records")
     print(f"Found {len(dattri_records)} dattri benchmark records")
 
-    if not cli_records and not inmem_records and not dattri_records:
+    if not inmem_records and not dattri_records:
         print("No benchmark records found in any source")
         return
 
     # Create combined dataframe
-    df = create_combined_dataframe(cli_records, inmem_records, dattri_records)
+    df = create_combined_dataframe(inmem_records, dattri_records)
 
     if df.empty:
         print("No successful benchmark runs found")
@@ -375,13 +342,15 @@ def main(argv: list[str] | None = None) -> None:
         print(f"    Token scales: {[format_tokens(t) for t in tokens]}")
 
     # Save CSV
-    csv_path = Path(args.output_csv)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path = Path(args.output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    csv_path = output_path / "archive" / "comparison_benchmark.csv"
     df.to_csv(csv_path, index=False)
     print(f"\nSaved CSV to {csv_path}")
 
     # Create plot
-    plot_path = Path(args.output_plot)
+    plot_path = output_path / "comparison_benchmark.png"
     plot_comparison(df, plot_path, args.filter_num_gpus)
 
 

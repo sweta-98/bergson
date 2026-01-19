@@ -1,5 +1,6 @@
 """Coordinate running dattri and bergson benchmarks and generate comparison plots."""
 
+# python -m benchmarks.run_full_benchmark plot runs/benchmarks figures
 from __future__ import annotations
 
 import subprocess
@@ -171,10 +172,10 @@ def plot_comparison(
     df = df[df["runtime_seconds"].notna()].copy()
 
     # Create figure with subplots
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
     # Plot 1: Runtime vs train tokens (by model)
-    ax1 = axes[0, 0]
+    ax1 = axes[0]
     for method in df["method"].unique():
         for model_key in df["model_key"].unique():
             subset = df[(df["method"] == method) & (df["model_key"] == model_key)]
@@ -190,13 +191,13 @@ def plot_comparison(
     ax1.set_xscale("log")
     ax1.set_yscale("log")
     ax1.set_xlabel("Training Tokens")
-    ax1.set_ylabel("Total Runtime (seconds)")
-    ax1.set_title(f"Runtime Scaling: Total Time{title_suffix}")
+    ax1.set_ylabel("Score Runtime (seconds)")
+    ax1.set_title(f"Score Runtime by Training Tokens{title_suffix}")
     ax1.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     ax1.legend(fontsize="small", ncol=2)
 
     # Plot 2: Runtime vs model params (by token scale)
-    ax2 = axes[0, 1]
+    ax2 = axes[1]
     for method in df["method"].unique():
         for train_tokens in sorted(df["train_tokens"].unique())[
             :5
@@ -214,85 +215,10 @@ def plot_comparison(
     ax2.set_xscale("log")
     ax2.set_yscale("log")
     ax2.set_xlabel("Model Parameters")
-    ax2.set_ylabel("Total Runtime (seconds)")
-    ax2.set_title(f"Runtime Scaling: Model Size{title_suffix}")
+    ax2.set_ylabel("Score Runtime (seconds)")
+    ax2.set_title(f"Score Runtime by Model Size{title_suffix}")
     ax2.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     ax2.legend(fontsize="small", ncol=2)
-
-    # Plot 3: Bergson reduce vs score breakdown
-    ax3 = axes[1, 0]
-    bergson_df = df[df["method"] == "bergson"]
-    if not bergson_df.empty and bergson_df["reduce_seconds"].notna().any():
-        for model_key in bergson_df["model_key"].unique():
-            subset = bergson_df[bergson_df["model_key"] == model_key].sort_values(
-                "train_tokens"
-            )
-            if subset["score_seconds"].notna().any():
-                ax3.plot(
-                    subset["train_tokens"],
-                    subset["score_seconds"],
-                    marker="^",
-                    label=f"{model_key} (score)",
-                    linewidth=1.5,
-                    linestyle="--",
-                )
-    ax3.set_xscale("log")
-    ax3.set_yscale("log")
-    ax3.set_xlabel("Training Tokens")
-    ax3.set_ylabel("Score Runtime (seconds)")
-    ax3.set_title(f"Bergson: Score Breakdown{title_suffix}")
-    ax3.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-    ax3.legend(fontsize="small")
-
-    # Plot 4: Speedup comparison (dattri / bergson)
-    ax4 = axes[1, 1]
-    speedup_data = []
-    for model_key in df["model_key"].unique():
-        for train_tokens in df["train_tokens"].unique():
-            dattri_subset = df[
-                (df["method"] == "dattri")
-                & (df["model_key"] == model_key)
-                & (df["train_tokens"] == train_tokens)
-            ]
-            bergson_subset = df[
-                (df["method"] == "bergson")
-                & (df["model_key"] == model_key)
-                & (df["train_tokens"] == train_tokens)
-            ]
-
-            if not dattri_subset.empty and not bergson_subset.empty:
-                dattri_time = dattri_subset["runtime_seconds"].iloc[0]
-                bergson_time = bergson_subset["runtime_seconds"].iloc[0]
-                speedup = dattri_time / bergson_time if bergson_time > 0 else None
-                if speedup is not None:
-                    speedup_data.append(
-                        {
-                            "model_key": model_key,
-                            "train_tokens": train_tokens,
-                            "speedup": speedup,
-                        }
-                    )
-
-    if speedup_data:
-        speedup_df = pd.DataFrame(speedup_data)
-        for model_key in speedup_df["model_key"].unique():
-            subset = speedup_df[speedup_df["model_key"] == model_key].sort_values(
-                "train_tokens"
-            )
-            ax4.plot(
-                subset["train_tokens"],
-                subset["speedup"],
-                marker="o",
-                label=model_key,
-                linewidth=1.5,
-            )
-        ax4.axhline(y=1.0, color="black", linestyle="--", linewidth=1, alpha=0.5)
-        ax4.set_xscale("log")
-        ax4.set_xlabel("Training Tokens")
-        ax4.set_ylabel("Speedup (dattri / bergson)")
-        ax4.set_title(f"Relative Performance: Dattri vs Bergson{title_suffix}")
-        ax4.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-        ax4.legend(fontsize="small")
 
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -446,11 +372,8 @@ class PlotConfig:
     run_root: str = field(positional=True)
     """Root directory for benchmark runs."""
 
-    output_csv: str = field(positional=True)
-    """Path to save comparison data CSV."""
-
-    plot_output: str = field(positional=True)
-    """Path to save comparison plots."""
+    output_path: str = field(positional=True)
+    """Path to save benchmark results."""
 
     num_gpus: int | None = None
     """Filter plots to specific GPU count (default: generate all)."""
@@ -486,6 +409,7 @@ class Plot:
             "pythia-14m": 14000000,
             "pythia-70m": 70000000,
             "pythia-160m": 160000000,
+            "pythia-410m": 410000000,
             "pythia-1b": 1000000000,
         }
         df_filtered["model_params"] = df_filtered["model_key"].apply(
@@ -511,65 +435,56 @@ class Plot:
             ]
 
             for proj_type, file_suffix in projection_types:
-                try:
-                    df = self.load_projection_comparison_data(projection_csv, proj_type)
+                df = self.load_projection_comparison_data(projection_csv, proj_type)
 
-                    if df.empty:
-                        print(f"No data for {proj_type} projection, skipping")
-                        continue
-
-                    # Save CSV
-                    csv_path = Path(self.plot_cfg.output_csv)
-                    csv_with_suffix = (
-                        csv_path.parent
-                        / f"{csv_path.stem}_{file_suffix}{csv_path.suffix}"
-                    )
-                    csv_with_suffix.parent.mkdir(parents=True, exist_ok=True)
-                    df.to_csv(csv_with_suffix, index=False)
-                    print(
-                        f"Saved {proj_type} projection comparison data to "
-                        f"{csv_with_suffix}"
-                    )
-
-                    # Create plots
-                    if not self.plot_cfg.skip_plots:
-                        plot_dir = Path(self.plot_cfg.plot_output).parent
-                        plot_stem = Path(self.plot_cfg.plot_output).stem
-                        plot_ext = Path(self.plot_cfg.plot_output).suffix or ".png"
-
-                        # Get unique GPU counts in the data
-                        gpu_counts = (
-                            sorted(df["num_gpus"].unique())
-                            if "num_gpus" in df.columns
-                            else [1]
-                        )
-
-                        if self.plot_cfg.num_gpus is not None:
-                            # Filter to specific GPU count
-                            gpu_counts = [self.plot_cfg.num_gpus]
-
-                        for num_gpus in gpu_counts:
-                            if "num_gpus" in df.columns:
-                                gpu_df = df[df["num_gpus"] == num_gpus]
-                            else:
-                                gpu_df = df
-
-                            if gpu_df.empty:
-                                print(f"No data for {num_gpus} GPU(s), skipping")
-                                continue
-
-                            plot_path = (
-                                plot_dir / f"{plot_stem}_{file_suffix}{plot_ext}"
-                            )
-                            title_suffix = (
-                                f" ({proj_type} projection, {num_gpus} "
-                                f"GPU{'s' if num_gpus > 1 else ''})"
-                            )
-                            plot_comparison(gpu_df, plot_path, title_suffix)
-
-                except Exception as e:
-                    print(f"Error processing {proj_type} projection data: {e}")
+                if df.empty:
+                    print(f"No data for {proj_type} projection, skipping")
                     continue
+
+                # Save CSV
+                csv_path = (
+                    Path(self.plot_cfg.output_path) / f"{file_suffix}_comparison.csv"
+                )
+                plot_path = (
+                    Path(self.plot_cfg.output_path) / f"{file_suffix}_comparison.png"
+                )
+
+                csv_path.parent.mkdir(parents=True, exist_ok=True)
+                df.to_csv(csv_path, index=False)
+                print(f"Saved {proj_type} projection comparison data to " f"{csv_path}")
+
+                # Create plots
+                if not self.plot_cfg.skip_plots:
+                    # Get unique GPU counts in the data
+                    gpu_counts = (
+                        sorted(df["num_gpus"].unique())
+                        if "num_gpus" in df.columns
+                        else [1]
+                    )
+
+                    if self.plot_cfg.num_gpus is not None:
+                        # Filter to specific GPU count
+                        gpu_counts = [self.plot_cfg.num_gpus]
+
+                    for num_gpus in gpu_counts:
+                        if "num_gpus" in df.columns:
+                            gpu_df = df[df["num_gpus"] == num_gpus]
+                        else:
+                            gpu_df = df
+
+                        if gpu_df.empty:
+                            print(f"No data for {num_gpus} GPU(s), skipping")
+                            continue
+
+                        plot_path = (
+                            Path(self.plot_cfg.output_path)
+                            / f"projection_comparison_{file_suffix}.png"
+                        )
+                        title_suffix = (
+                            f" ({proj_type} projection, {num_gpus} "
+                            f"GPU{'s' if num_gpus > 1 else ''})"
+                        )
+                        plot_comparison(gpu_df, plot_path, title_suffix)
 
         else:
             # Fallback to directory loading (original behavior)
@@ -590,10 +505,6 @@ class Plot:
 
             # Create plots
             if not self.plot_cfg.skip_plots:
-                plot_dir = Path(self.plot_cfg.plot_output).parent
-                plot_stem = Path(self.plot_cfg.plot_output).stem
-                plot_ext = Path(self.plot_cfg.plot_output).suffix or ".png"
-
                 # Get unique GPU counts in the data
                 gpu_counts = (
                     sorted(df["num_gpus"].unique()) if "num_gpus" in df.columns else [1]
@@ -613,7 +524,6 @@ class Plot:
                         print(f"No data for {num_gpus} GPU(s), skipping")
                         continue
 
-                    plot_path = plot_dir / f"{plot_stem}{plot_ext}"
                     title_suffix = f" ({num_gpus} GPU{'s' if num_gpus > 1 else ''})"
                     plot_comparison(gpu_df, plot_path, title_suffix)
 

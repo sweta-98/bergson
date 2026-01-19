@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# In-memory Bergson benchmark for small models (1 GPU)
+# In-memory Bergson benchmark for models that can fit on 1 GPU
 # Tests in-memory reduce + score pipeline
 
 set -e
@@ -15,7 +15,7 @@ DATASET="data/EleutherAI/SmolLM2-135M-10B-tokenized"
 mkdir -p runs/benchmarks
 
 echo "=========================================="
-echo "IN-MEMORY BENCHMARK FOR SMALL MODELS"
+echo "IN-MEMORY BENCHMARK"
 echo "=========================================="
 echo "Dataset: $DATASET"
 echo "Models: ${MODELS[@]}"
@@ -59,8 +59,7 @@ for model in "${MODELS[@]}"; do
         echo "Updating plot..."
         python -m benchmarks.plot_inmem_benchmark \
             --run_root "runs/bergson_inmem_benchmark" \
-            --output_csv "runs/benchmarks/inmem_benchmark_1gpu.csv" \
-            --output_plot "figures/inmem_benchmark_1gpu.png"
+            --output_path "figures"
     done
 
     echo ""
@@ -74,6 +73,4 @@ echo "=========================================="
 
 python -m benchmarks.plot_inmem_benchmark \
     --run_root "runs/bergson_inmem_benchmark" \
-    --output_csv "runs/benchmarks/inmem_benchmark_1gpu.csv" \
-    --output_plot "figures/inmem_benchmark_1gpu.png"
-echo "Final plot saved to figures/inmem_benchmark_1gpu.png"
+    --output_path "figures"
