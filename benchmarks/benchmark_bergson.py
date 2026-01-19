@@ -113,6 +113,9 @@ class RunConfig:
     skip_preconditioners: bool = True
     """Skip preconditioners."""
 
+    projection_dim: int = 16
+    """Dimension to project gradients to. 0 = no projection (full gradients)."""
+
     run_path: str | None = None
     """Explicit run path (overrides auto-generated path)."""
 
@@ -136,7 +139,13 @@ def load_records(root: Path) -> list[RunRecord]:
     return records
 
 
-def get_token_batch_size(model, index_cfg, eval_ds):
+def get_token_batch_size(model, index_cfg, eval_ds, projection_dim=16):
+    """Determine optimal token batch size for the model.
+
+    Args:
+        projection_dim: Gradient projection dimension. 0 means no projection.
+    """
+    proj_dim = projection_dim if projection_dim > 0 else None
     index_cfg = IndexConfig(
         run_path="temp",
         model=index_cfg.model,
@@ -148,7 +157,7 @@ def get_token_batch_size(model, index_cfg, eval_ds):
         model=model,
         collector=InMemoryCollector(
             model=model.base_model,  # type: ignore
-            processor=GradientProcessor(projection_dim=16),
+            processor=GradientProcessor(projection_dim=proj_dim),
             data=eval_ds,
             cfg=index_cfg,
         ),
@@ -234,15 +243,22 @@ class Run:
         )
 
         # Get batch size BEFORE timing (this is setup overhead, not benchmark time)
+        # Convert projection_dim=0 to None (meaning no projection)
+        proj_dim = (
+            self.run_cfg.projection_dim if self.run_cfg.projection_dim > 0 else None
+        )
+        print(f"Projection dim: {proj_dim}")
         print("Determining optimal batch size (not timed)...")
-        optimal_token_batch_size = get_token_batch_size(model, index_cfg, eval_ds)
+        optimal_token_batch_size = get_token_batch_size(
+            model, index_cfg, eval_ds, self.run_cfg.projection_dim
+        )
         index_cfg.token_batch_size = optimal_token_batch_size
         print(f"Using batch size: {optimal_token_batch_size}")
 
         # NOW start timing
         query_collector = InMemoryCollector(
             model=model.base_model,  # type: ignore
-            processor=GradientProcessor(projection_dim=16),
+            processor=GradientProcessor(projection_dim=proj_dim),
             data=eval_ds,
             cfg=index_cfg,
         )
@@ -280,7 +296,7 @@ class Run:
         )
         score_collector = InMemoryCollector(
             model=model.base_model,  # type: ignore
-            processor=GradientProcessor(projection_dim=16),
+            processor=GradientProcessor(projection_dim=proj_dim),
             data=ds,
             cfg=index_cfg,
             scorer=scorer,
@@ -307,7 +323,7 @@ class Run:
         print("Building index...")
         grad_collector = GradientCollector(
             model=model.base_model,  # type: ignore
-            processor=GradientProcessor(projection_dim=16),
+            processor=GradientProcessor(projection_dim=proj_dim),
             data=ds,
             cfg=index_cfg,
         )

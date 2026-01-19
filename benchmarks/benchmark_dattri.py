@@ -14,9 +14,67 @@ import torch
 import torch.nn as nn
 from datasets import Dataset, load_dataset, load_from_disk
 from dattri.algorithm.base import BaseInnerProductAttributor
+from dattri.func.projection import BasicProjector, ProjectionType
 from dattri.task import AttributionTask
 from simple_parsing import ArgumentParser
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Dattri implements projections in the TrakAttributor
+# but it doesn't work with GPT-NeoX models due to rotary 
+# embedding compatibility issues with vmap.
+class ProjectedInnerProductAttributor(BaseInnerProductAttributor):
+    """Inner product attributor with random projection for dimensionality reduction."""
+
+    def __init__(
+        self,
+        task: "AttributionTask",
+        proj_dim: int = 16,
+        layer_name: Optional[str] = None,
+        device: Optional[str] = "cpu",
+    ) -> None:
+        """Initialize the projected attributor.
+
+        Args:
+            task: The attribution task.
+            proj_dim: Dimension to project gradients to.
+            layer_name: Optional layer name to restrict gradients to.
+            device: Device to run on.
+        """
+        super().__init__(task, layer_name, device)
+        self.proj_dim = proj_dim
+        self.projector = None
+        self._feature_dim = None
+
+    def _ensure_projector(self, feature_dim: int) -> None:
+        """Create projector if needed."""
+        if self.projector is None or self._feature_dim != feature_dim:
+            self._feature_dim = feature_dim
+            self.projector = BasicProjector(
+                feature_dim=feature_dim,
+                proj_dim=self.proj_dim,
+                seed=0,
+                proj_type=ProjectionType.rademacher,
+                device=torch.device(self.device),
+                dtype=torch.float32,
+            )
+
+    def transform_train_rep(
+        self,
+        ckpt_idx: int,
+        train_rep: torch.Tensor,
+    ) -> torch.Tensor:
+        """Project train representations to lower dimension."""
+        self._ensure_projector(train_rep.shape[-1])
+        return self.projector.project(train_rep, ensemble_id=ckpt_idx)
+
+    def transform_test_rep(
+        self,
+        ckpt_idx: int,
+        test_rep: torch.Tensor,
+    ) -> torch.Tensor:
+        """Project test representations to lower dimension."""
+        self._ensure_projector(test_rep.shape[-1])
+        return self.projector.project(test_rep, ensemble_id=ckpt_idx)
 
 # Import from same directory
 from benchmarks.benchmark_utils import (
@@ -71,6 +129,9 @@ class RunConfig:
 
     run_root: str = "runs/dattri-scaling"
     """Root directory for benchmark runs."""
+
+    projection_dim: int | None = None
+    """If set, use random projection to this dimension (like TRAK/TrackStar)."""
 
     run_path: str | None = None
     """Explicit run path (overrides auto-generated path)."""
@@ -295,9 +356,17 @@ class Run:
         )
 
         # Create attributor and cache
-        # Try to set device if BaseInnerProductAttributor supports it
-        # Remove device if this breaks
-        attributor = BaseInnerProductAttributor(task=task, device="cuda")
+        if self.run_cfg.projection_dim is not None:
+            print(f"Using projected attributor with dim={self.run_cfg.projection_dim}")
+            # Note: This still computes full gradients then projects, so it doesn't
+            # provide the same speedup as Bergson which projects inside the hook.
+            attributor = ProjectedInnerProductAttributor(
+                task=task,
+                proj_dim=self.run_cfg.projection_dim,
+                device="cuda",
+            )
+        else:
+            attributor = BaseInnerProductAttributor(task=task, device="cuda")
 
         start_time = timestamp()
         start = time.perf_counter()
