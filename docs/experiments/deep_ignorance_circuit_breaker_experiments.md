@@ -18,8 +18,8 @@ Result: Negative CB sim, WMDP 0.3952.
 
 Realizing that lorra alpha increase the weight placed on forget
 
-Intervention: lorra alpha 0.1
-Result: 
+Intervention: lorra alpha 0.1 
+Result: Negative CB sim, WMDP 0.3756.
 
 
 ## Phase 1: Cosine Loss Experiments
