@@ -200,6 +200,8 @@ Based on previous results suggesting optimal performance around loss_scale=2000,
 | exp17 | 1997 | -3 | eval failed* | eval failed* | **-0.1497** | **0.9499** | **0.8871** | Training ✅ |
 | exp20 | 2001 | +1 | **38.82%** | **36.82%** | **-0.2318** | **0.9384** | **0.8592** | Complete ✅ |
 | exp21 | 1999 | -1 | **40.55%** | **36.41%** | **-0.1732** | **0.9515** | **0.8993** | Complete ✅ |
+| exp22 | 2002 | +2 | **39.86%** | **35.68%** | **-0.2392** | **0.9471** | **0.8919** | Complete ✅ |
+| exp23 | 1998 | -2 | **37.90%** | **35.36%** | **-0.1799** | **0.9469** | **0.8906** | Complete ✅ |
 
 **BREAKTHROUGH**: Experiment 16 (loss_scale=2000) achieved the best WMDP performance to date!
 - **WMDP Bio Robust**: 36.87% (6.1% drop from 42.97% baseline)
@@ -211,9 +213,11 @@ Based on previous results suggesting optimal performance around loss_scale=2000,
 
 | loss_scale | WMDP | Δ from optimal | Status |
 |------------|------|----------------|--------|
+| 2002 (+2) | 39.86% | **+2.99% WORSE** | ❌ Degraded |
 | 2001 (+1) | 38.82% | **+1.95% WORSE** | ❌ Degraded |
 | **2000** | **36.87%** | **OPTIMAL** | ✅ **Best** |
 | 1999 (-1) | 40.55% | **+3.68% WORSE** | ❌ Severely Degraded |
+| 1998 (-2) | 37.90% | **+1.03% WORSE** | ❌ Degraded |
 
 This demonstrates **EXTREME hyperparameter sensitivity** - the circuit breaker approach requires precise loss scaling to work effectively on deep-ignorance:
 
@@ -222,6 +226,14 @@ This demonstrates **EXTREME hyperparameter sensitivity** - the circuit breaker a
 🔴 **Zero tolerance for deviation** from loss_scale=2000
 
 **Critical Implication**: This result is extremely brittle and may not be reproducible across different hardware, software versions, or random seeds. The narrow optimum suggests the approach may be fundamentally unstable.
+
+### 🔍 Asymmetric Sensitivity Pattern
+
+Interestingly, the sensitivity is **asymmetric**:
+- **Negative direction**: 1999 (-1) = 40.55% vs 1998 (-2) = 37.90%
+- **Positive direction**: 2001 (+1) = 38.82% vs 2002 (+2) = 39.86%
+
+**Key Observation**: The -1 deviation (1999) is actually WORSE than the -2 deviation (1998), suggesting a complex optimization landscape with multiple local minima rather than a simple convex function around the optimum.
 
 ### Training Dynamics Observations
 
