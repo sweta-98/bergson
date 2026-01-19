@@ -19,8 +19,9 @@ from dattri.task import AttributionTask
 from simple_parsing import ArgumentParser
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+
 # Dattri implements projections in the TrakAttributor
-# but it doesn't work with GPT-NeoX models due to rotary 
+# but it doesn't work with GPT-NeoX models due to rotary
 # embedding compatibility issues with vmap.
 class ProjectedInnerProductAttributor(BaseInnerProductAttributor):
     """Inner product attributor with random projection for dimensionality reduction."""
@@ -75,6 +76,7 @@ class ProjectedInnerProductAttributor(BaseInnerProductAttributor):
         """Project test representations to lower dimension."""
         self._ensure_projector(test_rep.shape[-1])
         return self.projector.project(test_rep, ensemble_id=ckpt_idx)
+
 
 # Import from same directory
 from benchmarks.benchmark_utils import (
