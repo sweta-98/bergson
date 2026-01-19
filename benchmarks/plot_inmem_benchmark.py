@@ -46,9 +46,7 @@ def create_inmem_dataframe(records: list[RunRecord]) -> pd.DataFrame:
         if r.status == "success":
             # Calculate total runtime
             total_seconds = (
-                (r.query_seconds or 0)
-                + (r.build_seconds or 0)
-                + (r.score_seconds or 0)
+                (r.query_seconds or 0) + (r.build_seconds or 0) + (r.score_seconds or 0)
             )
             rows.append(
                 {
