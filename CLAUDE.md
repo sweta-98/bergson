@@ -38,6 +38,10 @@ Use `pre-commit run --all-files` if you forget to install pre-commit and it does
 
 Run bash commands in the dedicated tmux pane named "claude" if it is available.
 
+Don't betray lineage. An example of betraying lineage is duplicating a file, making changes in the duplicate, then calling it "foo_fixed" rather than "foo". The correct action here would be to commit the file to git and then modify it directly. Another example of betraying lineage is adding a RoundButton to a module containing a Button but not updating the original Button to be called RectangleButton. This lack of action betrays that the rectangular button came first.
+
+If you think some data files (e.g. CSVs) have been invalidated but you're not 100% sure, you can add them to a .gitignore'd archive directory along with an equivalentally named markdown file explaining the context.
+
 ### Documentation
 
 Do not mark documentation for code that has been removed as deprecated - simply remove the documentation.
