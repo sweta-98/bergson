@@ -72,11 +72,12 @@ def compute_loss(
     )
 
     # ===== Step Coeff ====
-    # Use 50/50 split for balanced retain/unlearn
     progress = self.get_training_progress()
+    scheduled_coeff = progress
     print(f"\nPROGRESS: {progress:.4f}", "=" * 50)
-    retain_coeff = alpha * 0.5
-    circuit_breaker_coeff = alpha * 0.5
+    retain_coeff, circuit_breaker_coeff = alpha * scheduled_coeff, alpha * (
+        1 - scheduled_coeff
+    )
 
     print(
         f"retain_coeff: {retain_coeff:.4f} || circuit_breaker_coeff: {circuit_breaker_coeff:.4f}"

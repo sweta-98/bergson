@@ -14,15 +14,19 @@ export CUBLAS_WORKSPACE_CONFIG=:16:8
 CIRCUIT_BREAKER_CUDA_HOME=/home/luciarosequirke/bergson/.fake_cuda
 CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 
-### Deep Ignorance Config with Cosine Loss ###
+### Deep Ignorance Config
 model_name_or_path=EleutherAI/deep-ignorance-unfiltered
-lorra_alpha=100  # Higher alpha for stronger intervention
+# Weighting placed on forget loss
+# Right pane 110, 
+lorra_alpha=0.1 # 110  # Llama uses 10, scale by 11x for activation difference (10 * 11)
+# layers="10,20"
 layers="10,20"
 transform_layers="-1"
-learning_rate=3e-4
-cb_loss_scale=2000  # Target the promising loss_scale=2000
+learning_rate=1e-4
 
-output_dir="./out/DeepIgnorance_CB_cosine_alpha100_scale2000"
+# output_dir="./out/DeepIgnorance_CB"
+output_dir="./out/DeepIgnorance_CB_la110"
+
 
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
@@ -31,13 +35,10 @@ echo "output_dir=$output_dir"
 mkdir -p $output_dir
 
 # Print the command that will be executed
-echo "Executing command:"
-echo "python bergson/unlearn/circuit_breaker/lorra_deep.py \\"
+echo "python bergson/unlearn/circuit_breaker/lorra.py \\"
 
 # Run with localized CUDA environment and paper hyperparameters
-# same lr as llama
-# python bergson/unlearn/circuit_breaker/lorra.py \
-# PYTORCH_ALLOC_CONF=expandable_segments:True \
+CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7" \
 CUDA_HOME=$CIRCUIT_BREAKER_CUDA_HOME \
 PATH=$CIRCUIT_BREAKER_PATH \
 DS_SKIP_CUDA_CHECK=1 \
@@ -77,8 +78,7 @@ $PYTHON bergson/unlearn/circuit_breaker/lorra_deep.py \
     --log_every 1 \
     --coeff_schedule linear_converge \
     --sc_loss_type orig_act_dotprod \
-    --sc_train_seq_type all_text \
-    --cb_loss_scale $cb_loss_scale
+    --sc_train_seq_type all_text
 
 # Run evaluations
 echo "Running MMLU STEM evaluation..."
