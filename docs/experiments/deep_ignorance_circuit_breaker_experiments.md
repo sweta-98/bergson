@@ -124,67 +124,6 @@ circuit_breaker_loss = torch.relu(inner_product.sum(dim=-1)).sum() / mask.sum() 
 3. **Don't change the coefficient balance**: 60/40 and 70/30 push WMDP lower but degrade MMLU proportionally
 4. **Activation directions change but WMDP doesn't drop proportionally**: cb_cos_sim reaches -0.28 to -0.31 (activations are opposite) but WMDP only drops from 43% to 38-40% (within the "noise" range).
 
-## Unexplored Mechanistic Avenues
-
-### 1. Layer Selection
-- Currently targeting layers 10, 20 out of ~32 layers
-- Bio knowledge may be stored in different layers for deep-ignorance vs other models
-- **Try**: Systematic layer ablation to find where bio knowledge is concentrated
-
-### 2. Activation Magnitude vs Direction
-- Inner product loss penalizes both direction AND magnitude (unlike cosine which only penalizes direction)
-- Despite this, WMDP doesn't drop - model may encode bio info in ways neither direction nor magnitude capture
-- **Try**: Explicit magnitude reduction to zero, or target specific activation dimensions
-
-### 3. Attention Pattern Intervention
-- Only modifying MLP and attention value projections via LoRA
-- Attention patterns themselves may route bio knowledge
-- **Try**: Intervene on attention weights directly, or target query/key more aggressively
-
-### 4. Residual Stream vs Component Outputs
-- Targeting hidden states (residual stream)
-- Individual component outputs (attention out, MLP out) may need separate treatment
-- **Try**: Decompose and target specific components
-
-### 5. Token-Level Targeting
-- Currently applying loss to all tokens with attention mask
-- Bio-relevant tokens may need stronger intervention
-- **Try**: Weight loss by token importance or bio-relevance
-
-### 6. Deep-Ignorance Architecture Differences
-- Model is GPT-NeoX based (different from Llama)
-- May have different information flow patterns
-- **Try**: Architecture-specific layer targeting based on probing
-
-### 7. Training Data Distribution
-- Circuit breaker training data may not cover deep-ignorance's bio knowledge distribution
-- Model was specifically trained on bio knowledge
-- **Try**: Use deep-ignorance-specific harmful examples, or probe for high-activation bio inputs
-
-### 8. Multi-Scale Intervention
-- Current: Single-scale activation matching
-- Knowledge may be distributed across scales
-- **Try**: Hierarchical loss across multiple representation granularities
-
-### 9. Gradient Flow Analysis
-- High grad_norm observed (~9000 for alpha=100)
-- May indicate optimization instability or conflicting gradients
-- **Try**: Gradient clipping, separate learning rates for retain/CB
-
-### 10. Representation Topology
-- Linear intervention may not capture non-linear knowledge encoding
-- **Try**: Non-linear probes to find bio knowledge, then targeted intervention
-
-### 11. LoRA Rank and Target Modules
-- Current: rank=16, targeting query_key_value, dense, dense_h_to_4h, dense_4h_to_h
-- May need higher rank or different module selection
-- **Try**: Sweep LoRA rank, target only specific modules
-
-### 12. Affine Map Hypothesis
-- Other work uses learned affine maps between representations
-- Linear intervention may be insufficient
-- **Try**: Learn transformation that maps bio activations to safe activations
-
 ---
 
 ## Summary
@@ -237,43 +176,7 @@ circuit_breaker_loss = (
 
 **Key Finding**: WMDP drop doesn't correlate directly with cb_cos_sim magnitude. The circuit breaker effect (activation direction change) is working, but knowledge may be encoded in ways that resist this intervention.
 
-**Conclusion**: Both cosine and inner product loss successfully change activation directions, but WMDP drops only marginally (43% → 40%), far from the target of random chance (25%). The circuit breaker approach may be fundamentally incompatible with deep-ignorance's knowledge encoding architecture.
-
----
-
-## Final Experiment Summary
-
-### What We Accomplished
-1. **Reverted to cosine loss** from failed inner product experiments
-2. **Added loss scaling** (100x, 500x) to amplify gradient signal
-3. **Fixed coefficient schedule** to 50/50 split (avoiding model destruction)
-4. **Tested multiple hyperparameter combinations** with consistent methodology
-
-### Best Results Achieved
-- **WMDP Bio Robust**: 39.75% (from 42.97% baseline, -3.22% drop)
-- **MMLU STEM**: 36.35% (from 36.85% baseline, minimal degradation)
-- **Configuration**: alpha=50, loss_scale=500, cosine loss, 50/50 split
-
-### Key Technical Insights
-1. **Activation direction change ≠ Knowledge removal**: Despite successfully pushing cb_cos_sim to -0.34, WMDP only dropped marginally
-2. **Loss scaling effectiveness**: Higher scaling (500 vs 100) produced better WMDP results despite weaker directional change
-3. **Alpha saturation**: Above loss_scale=500, alpha increases (50→100) have minimal impact
-4. **Robust retention**: All experiments maintained high retain_cos_sim (0.96+), preserving general capabilities
-
-### Circuit Breaker Hypothesis Status
-**LIKELY INEFFECTIVE** for deep-ignorance model. The intervention successfully changes activation patterns but fails to meaningfully reduce harmful knowledge access.
-
-### Recommended Next Steps
-1. **Attention pattern intervention**: Target attention weights directly
-2. **Layer ablation**: Find where bio knowledge is actually stored
-3. **Alternative architectures**: Consider representation-based approaches
-4. **Model-specific datasets**: Use deep-ignorance-specific harmful examples
-
----
-
-### Promising Next Step
-
-1. **Target attention patterns** directly, not just value projections.
+**Conclusion**: Both cosine and inner product loss successfully change activation directions, but WMDP drops only marginally (43% → 40%), far from the target of random chance (25%).
 
 ---
 
