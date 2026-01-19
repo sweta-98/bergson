@@ -14,13 +14,14 @@ export CUBLAS_WORKSPACE_CONFIG=:16:8
 CIRCUIT_BREAKER_CUDA_HOME=/home/luciarosequirke/bergson/.fake_cuda
 CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 
-### Matches Llama-3-8B Config ###
+### Deep Ignorance Config with Cosine Loss ###
 model_name_or_path=EleutherAI/deep-ignorance-unfiltered
-lorra_alpha=10 # llama was 10, mistral was 5
-layers="10,20" # 2,4,
+lorra_alpha=100  # Higher alpha for stronger intervention
+layers="10,20"
 transform_layers="-1"
+learning_rate=3e-4
 
-output_dir="./out/DeepIgnorance_CB"
+output_dir="./out/DeepIgnorance_CB_cosine_alpha100_scale500"
 
 echo "model_name_or_path=$model_name_or_path"
 echo "output_dir=$output_dir"
@@ -43,7 +44,7 @@ DS_BUILD_OPS=0 \
 DS_BUILD_FUSED_ADAM=0 \
 DS_BUILD_CPU_ADAM=0 \
 DS_BUILD_UTILS=0 \
-python bergson/unlearn/circuit_breaker/lorra_deep.py \
+$PYTHON bergson/unlearn/circuit_breaker/lorra_deep.py \
     --model_name_or_path $model_name_or_path \
     --target_layers $layers \
     --transform_layers $transform_layers \
@@ -63,7 +64,7 @@ python bergson/unlearn/circuit_breaker/lorra_deep.py \
     --do_eval \
     --eval_steps 1000  \
     --save_total_limit 0 \
-    --learning_rate 3e-4 \
+    --learning_rate $learning_rate \
     --weight_decay 0. \
     --lr_scheduler_type "constant" \
     --logging_steps 10 \
@@ -79,7 +80,7 @@ python bergson/unlearn/circuit_breaker/lorra_deep.py \
 
 # Run evaluations
 echo "Running MMLU STEM evaluation..."
-python scripts/eval_mmlu_stem.py --model_path $output_dir --batch_size 8
+$PYTHON scripts/eval_mmlu_stem.py --model_path $output_dir --batch_size 8
 
 echo "Running WMDP Robust evaluation..."
-python scripts/eval_wmdp_robust.py --model_path $output_dir --batch_size 8
+$PYTHON scripts/eval_wmdp_robust.py --model_path $output_dir --batch_size 8

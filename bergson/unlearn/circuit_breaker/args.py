@@ -142,3 +142,9 @@ class TrainingArguments(transformers.TrainingArguments):
             "help": "type of loss function for shortcircuiting. can be orig_act_dotprod, rand_vec_norm, pos_constant_rmu_{coeff}, center_constant_rmu_{coeff}"
         },
     )
+    cb_loss_scale: Optional[float] = field(
+        default=500.0,
+        metadata={
+            "help": "Scale factor for circuit breaker loss to compensate for weak gradients"
+        },
+    )

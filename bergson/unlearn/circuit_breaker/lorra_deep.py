@@ -72,8 +72,7 @@ def compute_loss(
     )
 
     # ===== Step Coeff ====
-    # Use constant 50/50 split to maintain retain signal throughout training
-    # (linear_converge schedule destroys model before retain signal kicks in)
+    # Use 50/50 split for balanced retain/unlearn
     progress = self.get_training_progress()
     print(f"\nPROGRESS: {progress:.4f}", "=" * 50)
     retain_coeff = alpha * 0.5
@@ -166,44 +165,39 @@ def compute_loss(
             if lora_norms:
                 print(f"[DEBUG] LoRA B weight norms (first 3): {lora_norms[:3]}")
 
-        # Normalize activations
+        # Cosine similarity loss (normalized inner product)
         normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (
             torch.norm(
                 lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float
             )
+            + 1e-8
         )
         normalized_circuit_breaker_outputs = circuit_breaker_hidden / (
             torch.norm(circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float)
+            + 1e-8
         )
-
-        # Inner product of normalized vectors (= cosine similarity per dimension)
         inner_product = (
             normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs
         ) * layers_circuit_breaker_attention_mask
 
-        # ReLU: only penalize positive similarity, allow orthogonal/opposite
-        circuit_breaker_loss_raw = (
+        # ReLU: only penalize positive cosine similarity, allow orthogonal/opposite
+        # Scale loss to compensate for weak gradients with high-norm activations
+        loss_scale = self.training_args.cb_loss_scale
+        circuit_breaker_loss = (
             torch.relu(inner_product.sum(dim=-1)).sum()
             / layers_circuit_breaker_attention_mask.sum()
+            * loss_scale
         )
 
-        # Scale loss by normalized activation factor
-        # Deep-ignorance has ~5600 norm, other models ~500, so scale by ratio ~11
-        mean_activation_norm = circuit_breaker_hidden.norm(dim=-1).mean()
-        reference_norm = 500.0
-        scale_factor = mean_activation_norm / reference_norm
-        circuit_breaker_loss = circuit_breaker_loss_raw * scale_factor
-
         if log_now:
-            print(f"\nmean_activation_norm: {mean_activation_norm.item():.2f}")
             updated_activations_norm = torch.mean(
                 lora_circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
             )
             orig_activations_norm = torch.mean(
                 circuit_breaker_hidden.norm(dim=-1).mean(dim=1)
             )
-            print("\nupdated_cb_activations_norm:", updated_activations_norm.item())
-            print("orig_cb_activations_norm:", orig_activations_norm.item())
+            print(f"\norig_cb_activations_norm: {orig_activations_norm.item():.2f}")
+            print(f"updated_cb_activations_norm: {updated_activations_norm.item():.2f}")
 
             orig_cosine = cosine_similarity(
                 circuit_breaker_hidden, lora_circuit_breaker_hidden, dim=-1
