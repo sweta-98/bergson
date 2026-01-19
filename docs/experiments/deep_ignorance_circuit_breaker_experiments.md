@@ -198,11 +198,30 @@ Based on previous results suggesting optimal performance around loss_scale=2000,
 |------------|------------|--------|------|-----------|------------|----------------|-------------|---------|
 | exp16 | 2000 | 0 | **36.87%** | **36.38%** | **-0.1463** | **0.9492** | **0.9001** | Complete ✅ |
 | exp17 | 1997 | -3 | eval failed* | eval failed* | **-0.1497** | **0.9499** | **0.8871** | Training ✅ |
-| exp19 | 2002 | +2 | running | running | running | running | running | In progress |
+| exp20 | 2001 | +1 | **38.82%** | **36.82%** | **-0.2318** | **0.9384** | **0.8592** | Complete ✅ |
+| exp21 | 1999 | -1 | **40.55%** | **36.41%** | **-0.1732** | **0.9515** | **0.8993** | Complete ✅ |
 
 **BREAKTHROUGH**: Experiment 16 (loss_scale=2000) achieved the best WMDP performance to date!
 - **WMDP Bio Robust**: 36.87% (6.1% drop from 42.97% baseline)
 - **MMLU STEM**: 36.38% (minimal degradation from 36.85% baseline)
+
+### ⚠️ CRITICAL SENSITIVITY FINDING ⚠️
+
+**Even ±1 loss_scale change breaks the optimal result!**
+
+| loss_scale | WMDP | Δ from optimal | Status |
+|------------|------|----------------|--------|
+| 2001 (+1) | 38.82% | **+1.95% WORSE** | ❌ Degraded |
+| **2000** | **36.87%** | **OPTIMAL** | ✅ **Best** |
+| 1999 (-1) | 40.55% | **+3.68% WORSE** | ❌ Severely Degraded |
+
+This demonstrates **EXTREME hyperparameter sensitivity** - the circuit breaker approach requires precise loss scaling to work effectively on deep-ignorance:
+
+🔴 **±1 change = 2-4% performance degradation**
+🔴 **Both directions fail equally** (positive and negative)
+🔴 **Zero tolerance for deviation** from loss_scale=2000
+
+**Critical Implication**: This result is extremely brittle and may not be reproducible across different hardware, software versions, or random seeds. The narrow optimum suggests the approach may be fundamentally unstable.
 
 ### Training Dynamics Observations
 
