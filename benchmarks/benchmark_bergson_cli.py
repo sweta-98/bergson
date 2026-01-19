@@ -278,7 +278,9 @@ class Run:
         with open(query_index_path / "index_config.json", "r") as f:
             query_cfg = IndexConfig(**json.load(f))
             determined_batch_size = query_cfg.token_batch_size
-        print(f"Using token_batch_size: {determined_batch_size} (determined before timing)")
+        print(
+            f"Using token_batch_size: {determined_batch_size} (determined before timing)"
+        )
 
         # Common args for timed commands - use explicit batch size
         common_args = [
