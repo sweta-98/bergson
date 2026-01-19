@@ -34,9 +34,13 @@ Do not write lines longer than 88 characters.
 
 Never use try/except blocks or fallbacks. Fail fast, fail explicitly.
 
+Don't use ALL CAPS unless it's proper English (e.g. an acronym).
+
 ### Documentation
 
 Do not mark documentation for code that has been removed as deprecated - simply remove the documentation.
+
+No context leakage: do not write code or comments that link features to the specific experiment for which the feature was developed, unless it's only useful for that particular experiment. Be as generic as is correctly possible and not more.
 
 ### Tests
 

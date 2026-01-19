@@ -12,7 +12,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from dattri.algorithm.base import BaseInnerProductAttributor
 from dattri.task import AttributionTask
 from simple_parsing import ArgumentParser
@@ -166,21 +166,23 @@ class Run:
         tokenizer = AutoTokenizer.from_pretrained(spec.hf_id)
         tokenizer.pad_token = tokenizer.eos_token
 
-        def tokenize(batch):
-            return tokenizer.batch_encode_plus(
-                batch["text"],
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.run_cfg.max_length,
+        # Load datasets - use load_from_disk for local paths
+        dataset_path = Path(self.run_cfg.dataset)
+        if dataset_path.exists():
+            # Local dataset saved with save_to_disk
+            full_dataset = load_from_disk(str(dataset_path))
+            if isinstance(full_dataset, dict):
+                train_dataset = assert_type(
+                    Dataset, full_dataset[self.run_cfg.train_split]
+                )
+            else:
+                train_dataset = assert_type(Dataset, full_dataset)
+        else:
+            # HuggingFace Hub dataset
+            train_dataset = assert_type(
+                Dataset,
+                load_dataset(self.run_cfg.dataset, split=self.run_cfg.train_split),
             )
-
-        # Load datasets
-        train_dataset = assert_type(
-            Dataset,
-            load_dataset(self.run_cfg.dataset, split=self.run_cfg.train_split),
-        )
-        train_dataset = train_dataset.map(tokenize, batched=True)
 
         # Estimate examples needed based on token count
         # We'll sample until we have enough tokens
@@ -188,11 +190,39 @@ class Run:
         train_examples_needed = max(1, train_tokens // max_length)
         eval_examples_needed = 1
 
-        # Select enough examples
+        # Select enough examples first to avoid mapping entire dataset
         total_needed = train_examples_needed + eval_examples_needed
         train_dataset = train_dataset.select(
             range(min(total_needed, len(train_dataset)))
         )
+
+        # Check if dataset is already tokenized or needs tokenization
+        if "input_ids" in train_dataset.column_names:
+            # Dataset is pretokenized - add attention_mask if missing
+            def add_attention_mask(example):
+                input_ids = example["input_ids"]
+                # Truncate to max_length
+                if len(input_ids) > self.run_cfg.max_length:
+                    input_ids = input_ids[: self.run_cfg.max_length]
+                attention_mask = [1] * len(input_ids)
+                return {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                }
+
+            train_dataset = train_dataset.map(add_attention_mask)
+        else:
+            # Dataset needs tokenization
+            def tokenize(batch):
+                return tokenizer.batch_encode_plus(
+                    batch["text"],
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=self.run_cfg.max_length,
+                )
+
+            train_dataset = train_dataset.map(tokenize, batched=True)
 
         eval_dataset = train_dataset.select(
             range(train_examples_needed, train_examples_needed + eval_examples_needed)
@@ -206,7 +236,17 @@ class Run:
             # Dattri expects tuples of (input_ids, labels) where
             # labels = input_ids for language modeling
             # Keep on CPU - dattri will handle device placement
-            input_ids = torch.stack([item["input_ids"] for item in batch])
+            # Pad sequences to same length
+            max_len = max(len(item["input_ids"]) for item in batch)
+            padded_input_ids = []
+            for item in batch:
+                ids = item["input_ids"]
+                if len(ids) < max_len:
+                    # Pad with tokenizer.pad_token_id (same as eos for GPT-2)
+                    padding = torch.zeros(max_len - len(ids), dtype=ids.dtype)
+                    ids = torch.cat([ids, padding])
+                padded_input_ids.append(ids)
+            input_ids = torch.stack(padded_input_ids)
             labels = (
                 input_ids.clone()
             )  # For language modeling, labels are the same as input_ids

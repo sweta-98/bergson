@@ -9,7 +9,7 @@ set -e
 source .venv/bin/activate
 
 # Token scales to test (up to 100M, 1B commented out - too slow)
-TOKEN_SCALES=("10K" "100K" "1M" "10M" "100M") # "1B"
+TOKEN_SCALES=("10K" "100K" "1M") # capped at 1M for speed
 MODELS=("pythia-6.9b" "pythia-12b")
 DATASET="data/EleutherAI/SmolLM2-135M-10B-tokenized"
 BATCH_SIZE=32768

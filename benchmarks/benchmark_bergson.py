@@ -110,6 +110,9 @@ class RunConfig:
     auto_batch_size: bool = True
     """Automatically determine optimal token_batch_size for hardware."""
 
+    skip_preconditioners: bool = True
+    """Skip preconditioners."""
+
     run_path: str | None = None
     """Explicit run path (overrides auto-generated path)."""
 
@@ -217,6 +220,7 @@ class Run:
             token_batch_size=self.run_cfg.max_length,
             max_tokens=train_tokens,
             precision=precision,
+            skip_preconditioners=self.run_cfg.skip_preconditioners,
         )
 
         model, _ = setup_model_and_peft(index_cfg, device_map_auto=True)
@@ -229,9 +233,13 @@ class Run:
             }
         )
 
+        # Get batch size BEFORE timing (this is setup overhead, not benchmark time)
+        print("Determining optimal batch size (not timed)...")
         optimal_token_batch_size = get_token_batch_size(model, index_cfg, eval_ds)
         index_cfg.token_batch_size = optimal_token_batch_size
+        print(f"Using batch size: {optimal_token_batch_size}")
 
+        # NOW start timing
         query_collector = InMemoryCollector(
             model=model.base_model,  # type: ignore
             processor=GradientProcessor(projection_dim=16),

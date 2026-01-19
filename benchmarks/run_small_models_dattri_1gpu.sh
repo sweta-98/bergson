@@ -1,20 +1,23 @@
 #!/bin/bash
 
+# Dattri benchmark for small models (1 GPU)
+# Tests dattri in-memory influence computation
+
 set -e
 
 source .venv/bin/activate
 
 TOKEN_SCALES=("10K" "100K" "1M") # capped at 1M for speed
-MODELS=("pythia-14m" "pythia-70m" "pythia-160m" "pythia-1b")
+MODELS=("pythia-70m" "pythia-160m" "pythia-1b")
 DATASET="data/EleutherAI/SmolLM2-135M-10B-tokenized"
 
 # Create runs/benchmarks directory if it doesn't exist
 mkdir -p runs/benchmarks
 
 echo "=========================================="
-echo "CLI BENCHMARK FOR SMALL MODELS"
+echo "DATTRI BENCHMARK FOR SMALL MODELS"
 echo "=========================================="
-echo "Dataset: $DATASET (streaming, unlimited tokens)"
+echo "Dataset: $DATASET"
 echo "Models: ${MODELS[@]}"
 echo "Token scales: ${TOKEN_SCALES[@]}"
 echo ""
@@ -33,28 +36,25 @@ for model in "${MODELS[@]}"; do
 
         START_TIME=$(date +%s)
 
-        python -m benchmarks.benchmark_bergson_cli \
-            "$model" \
-            "$tokens" \
-            "runs/bergson_cli_benchmark_2" \
+        python -m benchmarks.benchmark_dattri \
+            --model "$model" \
+            --train_tokens "$tokens" \
+            --run_root "runs/dattri_benchmark" \
             --dataset "$DATASET" \
-            2>&1 | tee "runs/benchmarks/small_models_cli_benchmark_${model}_${tokens}.log"
+            --max_length 1024 \
+            2>&1 | tee "runs/benchmarks/dattri_${model}_${tokens}.log"
 
         EXIT_CODE=$?
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
 
         if [ $EXIT_CODE -eq 0 ]; then
-            echo "✓ Success: $model with $tokens tokens (${DURATION}s)"
+            echo "Success: $model with $tokens tokens (${DURATION}s)"
         else
-            echo "✗ Failed: $model with $tokens tokens (after ${DURATION}s)"
+            echo "Failed: $model with $tokens tokens (after ${DURATION}s)"
         fi
 
         echo ""
-
-        # Update plot after each completion
-        echo "Updating plot..."
-        python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models_cli_benchmark.csv" --output_plot "figures/small_models_cli_benchmark.png"
     done
 
     echo ""
@@ -65,6 +65,3 @@ done
 echo "=========================================="
 echo "COMPLETE!"
 echo "=========================================="
-
-python -m benchmarks.plot_cli_benchmark --run_root "runs/bergson_cli_benchmark_2" --output_csv "runs/benchmarks/small_models_cli_benchmark.csv" --output_plot "figures/small_models_cli_benchmark.png"
-echo "Final plot saved to figures/small_models_cli_benchmark.png"
