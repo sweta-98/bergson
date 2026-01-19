@@ -18,23 +18,25 @@ Put imports at the top of the file unless you have a good reason to do otherwise
 
 # Development
 
+Never use try/except blocks - fail fast, fail explicitly.
+
+Never use "fallbacks".
+
+Do not write lines longer than 88 characters.
+
+Don't use ALL CAPS unless it's proper English (e.g. an acronym).
+
+Don't keep default run path values inside low level code - if a module calls another module, the higher level module should always pass through inject a base path.
+
+Don't save data to a directory that is not in the .gitignore - especially the data/ directory.
+
+Don't remove large datasets from the HF cache without asking.
+
 You can call CLI commands without prefixing `python -m`, like `bergson build`.
 
 Use `pre-commit run --all-files` if you forget to install pre-commit and it doesn't run in the hook.
 
 Run bash commands in the dedicated tmux pane named "claude" if it is available.
-
-Don't keep default run path values inside low level code - if a module calls another module, the higher level module should always pass through inject a base path.
-
-Don't save data to a directory that is not in the gitignore - especially the data/ directory.
-
-Don't remove large datasets from the HF cache without asking.
-
-Do not write lines longer than 88 characters.
-
-Never use try/except blocks or fallbacks. Fail fast, fail explicitly.
-
-Don't use ALL CAPS unless it's proper English (e.g. an acronym).
 
 ### Documentation
 

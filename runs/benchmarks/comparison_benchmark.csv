@@ -1,43 +1,21 @@
-method,model_key,model_params,train_tokens,eval_tokens,runtime_seconds,num_gpus,hardware,projection_dim
-bergson-cli,pythia-1b,1000000000,1000000,1,56.496753496991005,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (1x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-1b,1000000000,10000000,1,398.5565110919997,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (1x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-1b,1000000000,10000,1,22.19476714200573,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (1x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-1b,1000000000,100000,1,23.51638521795394,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (1x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-70m,70000000,10000,1,15.811740808014292,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-70m,70000000,100000000,1,1674.738479527994,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-70m,70000000,10000000,1,176.7551769290003,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-70m,70000000,1000000,1,36.544693302945234,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-70m,70000000,100000,1,18.560580317978747,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-160m,160000000,1000000,1,48.37983238499146,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-160m,160000000,10000,1,16.53398362902226,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-160m,160000000,100000,1,19.77809633500874,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-cli,pythia-160m,160000000,10000000,1,294.5689847699832,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-1b,1000000000,10000,1024,2.2391766459913924,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-1b,1000000000,100000,1024,9.789048906008247,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-1b,1000000000,1000000,1024,81.36713000090094,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-1b,1000000000,10000000,1024,948.85426167096,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-70m,70000000,1000000,1024,18.76857458800077,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-70m,70000000,10000000,1024,158.57650382304564,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-70m,70000000,10000,1024,0.6796538160415366,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-70m,70000000,100000,1024,2.501759480976034,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-160m,160000000,10000,1024,0.9879822850343772,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-160m,160000000,10000000,1024,328.313983385975,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-160m,160000000,1000000,1024,30.808168447052594,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-160m,160000000,100000,1024,4.219266940024681,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-14m,14000000,10000,1024,0.3725859269616194,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-14m,14000000,10000,1024,0.6372510690125637,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-14m,14000000,10000000,1024,156.9132360110525,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-14m,14000000,1000000,1024,17.4295633630245,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-bergson-inmem,pythia-14m,14000000,100000,1024,2.298401991953142,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),16
-dattri,pythia-70m,70000000,10000,1024,0.645690849982202,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-70m,70000000,100000,1024,3.1584161579958163,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-70m,70000000,1000000,1024,27.37838508497225,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-70m,70000000,10000000,1024,261.2540375200333,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-160m,160000000,1000000,1024,93.03054471395444,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-160m,160000000,10000,1024,1.2801422229968011,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-160m,160000000,10000000,1024,940.7376612109948,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-160m,160000000,100000,1024,9.665515472996049,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-14m,14000000,100000,1024,1.7896527250413783,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-14m,14000000,1000000,1024,13.296661593019962,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-14m,14000000,10000,1024,0.5491591040045023,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
-dattri,pythia-14m,14000000,10000000,1024,127.08273925300456,1,eleuther-group-49m9.us-central1-c.c.aisquared-1738.internal (8x NVIDIA H100 80GB HBM3),0
+method,model_key,model_params,train_tokens,eval_tokens,num_gpus,runtime_seconds,reduce_seconds,score_seconds
+dattri,pythia-14m,14000000.0,100000,1024,1,128.33659801800968,,
+dattri,pythia-14m,14000000.0,200000,1024,1,7.121381861972623,,
+dattri,pythia-14m,14000000.0,500000,1024,1,14.674468000011984,,
+bergson-inmem,pythia-1b,1000000000.0,10000,1024,1,2.2391766459913924,,0.7560424080002122
+bergson-inmem,pythia-1b,1000000000.0,100000,1024,1,9.789048906008247,,4.890010559000075
+bergson-inmem,pythia-1b,1000000000.0,1000000,1024,1,81.36713000090094,,43.12210319295991
+bergson-inmem,pythia-1b,1000000000.0,10000000,1024,1,948.8542616709601,,581.3254873999977
+bergson-inmem,pythia-70m,70000000.0,1000000,1024,1,18.768574588000774,,10.79562532901764
+bergson-inmem,pythia-70m,70000000.0,10000000,1024,1,158.57650382304564,,85.2115539520164
+bergson-inmem,pythia-70m,70000000.0,10000,1024,1,0.6796538160415365,,0.2240451330435462
+bergson-inmem,pythia-70m,70000000.0,100000,1024,1,2.501759480976034,,1.388887403998524
+bergson-inmem,pythia-160m,160000000.0,10000,1024,1,0.9879822850343769,,0.3599972029915079
+bergson-inmem,pythia-160m,160000000.0,10000000,1024,1,328.313983385975,,169.80084095097845
+bergson-inmem,pythia-160m,160000000.0,1000000,1024,1,30.808168447052594,,16.958421930030454
+bergson-inmem,pythia-160m,160000000.0,100000,1024,1,4.219266940024681,,2.218476055015344
+bergson-inmem,pythia-14m,14000000.0,10000,1024,1,0.3725859269616192,,0.1688945889472961
+bergson-inmem,pythia-14m,14000000.0,10000,1024,1,0.6372510690125636,,0.1903701749979518
+bergson-inmem,pythia-14m,14000000.0,10000000,1024,1,156.9132360110525,,82.68348086299375
+bergson-inmem,pythia-14m,14000000.0,1000000,1024,1,17.4295633630245,,9.81672946503386
+bergson-inmem,pythia-14m,14000000.0,100000,1024,1,2.298401991953142,,1.1865169910015538

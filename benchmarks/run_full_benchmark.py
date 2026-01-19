@@ -126,22 +126,35 @@ def create_comparison_dataframe(
 
     # Add bergson records
     for r in bergson_records:
-        if r.status == "success" and r.total_runtime_seconds is not None:
-            # Handle records that may not have num_gpus (backwards compatibility)
-            num_gpus = getattr(r, "num_gpus", 1)
-            rows.append(
-                {
-                    "method": "bergson",
-                    "model_key": r.model_key,
-                    "model_params": r.params,
-                    "train_tokens": r.train_tokens,
-                    "eval_tokens": r.eval_tokens,
-                    "num_gpus": num_gpus,
-                    "runtime_seconds": r.total_runtime_seconds,
-                    "reduce_seconds": r.reduce_seconds,
-                    "score_seconds": r.score_seconds,
-                }
-            )
+        if r.status == "success":
+            # Calculate total runtime for in-memory bergson (query + build + score)
+            total_runtime = None
+            if all(
+                x is not None
+                for x in [r.query_seconds, r.build_seconds, r.score_seconds]
+            ):
+                total_runtime = (
+                    (r.query_seconds or 0)
+                    + (r.build_seconds or 0)
+                    + (r.score_seconds or 0)
+                )
+
+            if total_runtime is not None:
+                # Handle records that may not have num_gpus (backwards compatibility)
+                num_gpus = getattr(r, "num_gpus", 1)
+                rows.append(
+                    {
+                        "method": "bergson-inmem",
+                        "model_key": r.model_key,
+                        "model_params": r.params,
+                        "train_tokens": r.train_tokens,
+                        "eval_tokens": r.eval_tokens,
+                        "num_gpus": num_gpus,
+                        "runtime_seconds": total_runtime,
+                        "reduce_seconds": None,  # No separate reduce step in in-memory
+                        "score_seconds": r.score_seconds,
+                    }
+                )
 
     return pd.DataFrame(rows)
 
@@ -214,15 +227,6 @@ def plot_comparison(
             subset = bergson_df[bergson_df["model_key"] == model_key].sort_values(
                 "train_tokens"
             )
-            if subset["reduce_seconds"].notna().any():
-                ax3.plot(
-                    subset["train_tokens"],
-                    subset["reduce_seconds"],
-                    marker="s",
-                    label=f"{model_key} (reduce)",
-                    linewidth=1.5,
-                    linestyle="-",
-                )
             if subset["score_seconds"].notna().any():
                 ax3.plot(
                     subset["train_tokens"],
@@ -236,7 +240,7 @@ def plot_comparison(
     ax3.set_yscale("log")
     ax3.set_xlabel("Training Tokens")
     ax3.set_ylabel("Runtime (seconds)")
-    ax3.set_title(f"Bergson: Reduce vs Score Breakdown{title_suffix}")
+    ax3.set_title(f"Bergson: Score Breakdown{title_suffix}")
     ax3.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     ax3.legend(fontsize="small")
 
@@ -464,7 +468,7 @@ class Plot:
     def execute(self) -> None:
         """Generate comparison plots from existing benchmark results."""
         dattri_root = Path(self.plot_cfg.run_root) / "dattri-scaling"
-        bergson_root = Path(self.plot_cfg.run_root) / "bergson-scaling"
+        bergson_root = Path(self.plot_cfg.run_root) / "bergson_inmem_benchmark"
 
         dattri_records, bergson_records = load_all_records(dattri_root, bergson_root)
 

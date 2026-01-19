@@ -120,15 +120,6 @@ def plot_cli_benchmark(
                 linewidth=2,
                 linestyle="-",
             )
-        if not subset.empty and subset["reduce_seconds"].notna().any():  # type: ignore
-            ax3.plot(
-                subset["train_tokens"],
-                subset["reduce_seconds"],
-                marker="^",
-                label=f"{model_key} (reduce)",
-                linewidth=2,
-                linestyle="--",
-            )
         if not subset.empty and subset["score_seconds"].notna().any():  # type: ignore
             ax3.plot(
                 subset["train_tokens"],
@@ -143,7 +134,7 @@ def plot_cli_benchmark(
     ax3.set_xlabel("Training Tokens", fontsize=12)
     ax3.set_ylabel("Runtime (seconds)", fontsize=12)
     ax3.set_title(
-        "Bergson CLI: Build vs Reduce vs Score Breakdown",
+        "Bergson CLI: Build vs Score Breakdown",
         fontsize=14,
         fontweight="bold",
     )
@@ -164,15 +155,13 @@ def plot_cli_benchmark(
             x_pos = range(len(x_labels))
 
             build_times = subset["build_seconds"].fillna(0).astype(float).values
-            reduce_times = subset["reduce_seconds"].fillna(0).astype(float).values
             score_times = subset["score_seconds"].fillna(0).astype(float).values
 
             ax4.bar(x_pos, build_times, label="Build", alpha=0.8)
-            ax4.bar(x_pos, reduce_times, bottom=build_times, label="Reduce", alpha=0.8)
             ax4.bar(
                 x_pos,
                 score_times,
-                bottom=build_times + reduce_times,  # type: ignore
+                bottom=build_times,  # type: ignore
                 label="Score",
                 alpha=0.8,
             )
