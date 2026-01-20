@@ -13,10 +13,9 @@ accelerate launch --num_processes 4 -m bergson.unlearn.circuit_breaker.cas_faste
     --num_train_examples 256 --save_name fast
 
 OUTPUT_DIR="./models/EleutherAI/deep-ignorance-unfiltered_fast"
-INCLUDE_PATH="bergson/unlearn/lm_eval_tasks"
 
 echo "Running MMLU STEM evaluation..."
-python scripts/eval_mmlu_stem.py --model_path $OUTPUT_DIR --include_path $INCLUDE_PATH --batch_size 8
+python scripts/eval_mmlu_stem.py --model_path $OUTPUT_DIR --batch_size 8
 
 echo "Running WMDP Robust evaluation..."
-python scripts/eval_wmdp_robust.py --model_path $OUTPUT_DIR --include_path $INCLUDE_PATH --batch_size 8
+python scripts/eval_wmdp_robust.py --model_path $OUTPUT_DIR --batch_size 8

@@ -26,7 +26,7 @@ def main():
     )
     args = parser.parse_args()
 
-    include_path = "/home/luciarosequirke/bergson/bergson/unlearn/lm_eval_tasks"
+    include_path = "bergson/unlearn/lm_eval_tasks"
     tm = TaskManager(verbosity="INFO", include_path=include_path)
 
     print(f"Loading model from {args.model_path}")
