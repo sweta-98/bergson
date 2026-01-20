@@ -530,10 +530,17 @@ if __name__ == "__main__":
     if args.alg == 'rr' or args.alg == 'rr-lat':
         lora_layers_to_transform = [i for i in range(max(args.layers) + 1)]
         if args.lora:
+            if 'OLMo' in args.model_name:
+                target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+            elif 'ignorance' in args.model_name.lower():
+                target_modules = ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"]
+            else:
+                target_modules = None
+                
             lora_config = LoraConfig(
                     r=args.lora_r,
                     lora_alpha=16,
-                    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"] if 'OLMo' in args.model_name else None,
+                    target_modules=target_modules,
                     lora_dropout=0.05,
                     bias='none',
                     layers_to_transform=lora_layers_to_transform,
@@ -560,10 +567,14 @@ if __name__ == "__main__":
     elif args.alg == 'lat':
         lora_layers_to_transform = [i for i in range(max(args.layers) + 1)]
         if args.lora:
+            if 'OLMo' in args.model_name:
+                target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+            else:
+                target_modules = ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"]
             lora_config = LoraConfig(
                     r=args.lora_r,
                     lora_alpha=16,
-                    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"] if 'OLMo' in args.model_name else None,
+                    target_modules=target_modules,
                     lora_dropout=0.05,
                     bias='none',
                     layers_to_transform=lora_layers_to_transform,
