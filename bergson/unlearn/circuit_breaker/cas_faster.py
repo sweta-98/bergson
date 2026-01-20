@@ -431,7 +431,7 @@ class RRTrainer(UnlearningTrainer):
         
         self.current_training_step += 1
         return (loss, ) if return_outputs else loss
-        
+
 if __name__ == "__main__":
 
     assert torch.cuda.is_available(), "CUDA is not available"
@@ -605,15 +605,14 @@ if __name__ == "__main__":
     print(f"rank: {rank}")
     
     if rank == 0:
-        print('FINAL MODEL:')
-        mmlu_acc = lm_eval_model(model, task='mmlu', limit=args.mmlu_agieval_limit, revision=args.revision, tokenizer=tokenizer)
-        
-        if 'smollm2' not in args.model_name:
-            wmdp_acc = lm_eval_model(model, task='wmdp_bio_robust', limit=args.wmdp_eval_limit, revision=args.revision, tokenizer=tokenizer)
-            print(f'***\nFinal wmdp_acc: {wmdp_acc}, final mmlu_acc {mmlu_acc}\n***')
-        else:
-            jailbreak_score = jailbreak_eval_model(model, tokenizer, num_examples=500, pfx=None, num_fs=0)
-            print(f'***\nFinal jailbreak_score: {jailbreak_score}, final mmlu_acc {mmlu_acc}\n***')
+        # if 'smollm2' not in args.model_name:
+        #     # mmlu_acc = lm_eval_model(model, task='mmlu', limit=args.mmlu_eval_limit, revision=args.revision, tokenizer=tokenizer)
+        #     wmdp_acc = lm_eval_model(model, task='wmdp_bio_robust', limit=args.wmdp_eval_limit, revision=args.revision, tokenizer=tokenizer)
+        #     # print(f'***\nFinal wmdp_acc: {wmdp_acc}, final mmlu_acc {mmlu_acc}\n***')
+        #     print(wmdp_acc)
+        # else:
+        #     jailbreak_score = jailbreak_eval_model(model, tokenizer, num_examples=500, pfx=None, num_fs=0)
+        #     print(f'***\nFinal jailbreak_score: {jailbreak_score}, final mmlu_acc {mmlu_acc}\n***')
 
         if args.lora:
             # Merge LoRA before saving
@@ -628,6 +627,15 @@ if __name__ == "__main__":
             print(f"Saving model to {save_dir}")
             model.save_pretrained(save_dir)
             tokenizer.save_pretrained(save_dir)
+
+            # print('FINAL MODEL:')
+            # # Launch the eval as a subprocess - python -m scripts.eval_mmlu_stem --model_path $OUTPUT_DIR --batch_size 8
+            # # python -m scripts.eval_wmdp_robust --model_path $OUTPUT_DIR --batch_size 8
+            # import subprocess
+            # subprocess.run(['python', '-m', 'scripts.eval_mmlu_stem', '--model_path', save_dir, '--batch_size', '8'])
+            # subprocess.run(['python', '-m', 'scripts.eval_wmdp_robust', '--model_path', save_dir, '--batch_size', '8'])
+        
+        # mmlu_acc = lm_eval_model(model, task='mmlu', limit=args.mmlu_agieval_limit, revision=args.revision, tokenizer=tokenizer)
             
     # Optional: Barrier at the very end to prevent premature exit of non-zero ranks
     if dist.is_initialized():
