@@ -210,36 +210,45 @@ class RRTrainer(UnlearningTrainer):
         else:
             retain_loss = 0
 
-        ### Forget loss - entropy maximization via tuned lens
+        ### Forget loss - entropy maximization via tuned lens (memory-efficient CE proxy)
         if circuit_breaker_coeff > 0:
             lora_circuit_breaker_outputs = unwrapped_model(**cb_inputs_dict)[module]
 
-            # Compute entropy at each target layer via the frozen lens
-            layer_entropies = []
+            # Use cross-entropy with random targets as memory-efficient entropy proxy
+            # Minimizing CE against random tokens spreads probability mass -> maximizes entropy
+            layer_losses = []
+            lens_device = next(self.lens.parameters()).device
             for layer_idx in self.lora_target_layers:
                 hidden = lora_circuit_breaker_outputs[layer_idx]  # [batch, seq, hidden]
+                hidden_bf16 = hidden.to(device=lens_device, dtype=torch.bfloat16)
 
-                # Convert hidden states to match lens dtype (bfloat16)
-                hidden_bf16 = hidden.to(dtype=torch.bfloat16)
-
-                # Get lens logits for this layer
                 lens_logits = self.lens(hidden_bf16, idx=layer_idx)  # [batch, seq, vocab]
+                batch_size, seq_len, vocab_size = lens_logits.shape
 
-                # Compute entropy: H = -sum(p * log(p))
-                log_probs = F.log_softmax(lens_logits.float(), dim=-1)
-                probs = log_probs.exp()
-                entropy = -(probs * log_probs).sum(dim=-1)  # [batch, seq]
+                # Random target tokens
+                random_targets = torch.randint(
+                    0, vocab_size, (batch_size, seq_len), device=lens_logits.device
+                )
 
-                # Apply attention mask - only consider non-padded tokens
-                mask = circuit_breaker_attention_mask.float()
-                masked_entropy = entropy * mask
-                avg_entropy = masked_entropy.sum() / (mask.sum() + 1e-6)
+                # Compute CE loss only on non-padded tokens
+                mask = circuit_breaker_attention_mask.bool()
+                logits_flat = lens_logits[mask]  # [num_valid_tokens, vocab]
+                targets_flat = random_targets[mask]  # [num_valid_tokens]
 
-                layer_entropies.append(avg_entropy)
+                if logits_flat.numel() > 0:
+                    ce_loss = F.cross_entropy(logits_flat.float(), targets_flat, reduction='mean')
+                    layer_losses.append(ce_loss)
 
-            # Negative entropy loss (minimize this to maximize entropy)
-            mean_entropy = torch.stack(layer_entropies).mean()
-            circuit_breaker_loss = -mean_entropy  # Negative because we want to maximize entropy
+            # Minimize CE against random targets to maximize entropy
+            # Normalize by ln(vocab_size) to keep loss in similar scale
+            log_vocab = torch.log(torch.tensor(float(vocab_size), device=target_device))
+            if layer_losses:
+                mean_ce = torch.stack(layer_losses).mean()
+                circuit_breaker_loss = mean_ce / log_vocab
+                mean_entropy = -mean_ce  # For logging compatibility (approx)
+            else:
+                circuit_breaker_loss = torch.tensor(0.0, device=target_device)
+                mean_entropy = torch.tensor(0.0)
         else:
             circuit_breaker_loss = torch.tensor(0.0, device=target_device)
             mean_entropy = torch.tensor(0.0)
@@ -275,10 +284,11 @@ if __name__ == "__main__":
     parser.add_argument('--lora_r', type=float, default=16)
     parser.add_argument('--lora', type=bool, default=True)
     parser.add_argument('--layers', type=int, nargs='+', default=[5, 10, 15, 20, 25, 30], help="List of layers to target")
-    parser.add_argument('--model_name', type=str, default='allenai/OLMo-2-1124-7B-Instruct')
+    parser.add_argument('--model_name', type=str, default='EleutherAI/deep-ignorance-unfiltered')
     parser.add_argument('--save_name', type=str, default='')
     parser.add_argument('--revision', type=str, default='main')
     parser.add_argument('--lens_path', type=str, required=True, help="Path to tuned lens weights")
+    parser.add_argument('--skip_eval', action='store_true', help="Skip final evaluation (for faster tuning)")
     
     args = parser.parse_args()
 
@@ -318,6 +328,12 @@ if __name__ == "__main__":
             mapped_state_dict[key] = current_state[key]
 
     lens.load_state_dict(mapped_state_dict)
+
+    # Remove accelerate hooks from lens submodules (they get copied via deepcopy)
+    from accelerate.hooks import remove_hook_from_module
+    for submodule in lens.modules():
+        remove_hook_from_module(submodule)
+
     lens = lens.to(device=device, dtype=torch.bfloat16)
     lens.eval()
     for param in lens.parameters():
@@ -393,14 +409,15 @@ if __name__ == "__main__":
 
     training_args = TrainingArguments(
         output_dir="./results",
-        learning_rate=args.lr, 
-        gradient_accumulation_steps=grad_acc_steps,  
-        per_device_train_batch_size=args.pdbs,  
+        learning_rate=args.lr,
+        gradient_accumulation_steps=grad_acc_steps,
+        per_device_train_batch_size=args.pdbs,
         per_device_eval_batch_size=args.pdbs,
-        num_train_epochs=1, 
+        num_train_epochs=1,
         weight_decay=0.01,
         gradient_checkpointing=True,
-        fp16=True,
+        bf16=True,
+        max_grad_norm=1.0,
         save_strategy="no",
         ddp_find_unused_parameters=False # Required for Custom loops + PEFT usually
     )
@@ -411,14 +428,15 @@ if __name__ == "__main__":
     trainer.train()
     clear_hooks(model)
 
-    # Final Evaluation (retained, as this measures the resulting model)
-    mmlu_acc = lm_eval_model(model, task='mmlu', limit=args.mmlu_agieval_limit, revision=args.revision, tokenizer=tokenizer)
-    if 'smollm2' not in args.model_name:
-        wmdp_acc = lm_eval_model(model, task='wmdp_bio_robust', limit=args.wmdp_eval_limit, revision=args.revision, tokenizer=tokenizer)
-        print(f'***\nFinal wmdp_acc: {wmdp_acc}, final mmlu_acc {mmlu_acc}\n***')
-    else:
-        jailbreak_score = jailbreak_eval_model(model, tokenizer, num_examples=500, pfx=None, num_fs=0)
-        print(f'***\nFinal jailbreak_score: {jailbreak_score}, final mmlu_acc {mmlu_acc}\n***')
+    # Final Evaluation
+    if not args.skip_eval:
+        mmlu_acc = lm_eval_model(model, task='mmlu', limit=args.mmlu_agieval_limit, revision=args.revision, tokenizer=tokenizer)
+        if 'smollm2' not in args.model_name:
+            wmdp_acc = lm_eval_model(model, task='wmdp_bio_robust', limit=args.wmdp_eval_limit, revision=args.revision, tokenizer=tokenizer)
+            print(f'***\nFinal wmdp_acc: {wmdp_acc}, final mmlu_acc {mmlu_acc}\n***')
+        else:
+            jailbreak_score = jailbreak_eval_model(model, tokenizer, num_examples=500, pfx=None, num_fs=0)
+            print(f'***\nFinal jailbreak_score: {jailbreak_score}, final mmlu_acc {mmlu_acc}\n***')
 
     if args.lora:
         model = model.merge_and_unload()
