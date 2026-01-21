@@ -404,7 +404,6 @@ if __name__ == "__main__":
     parser.add_argument('--checkpoint_revision', type=str, default='global_step38144', help="Revision/commit of checkpoint model")
     parser.add_argument('--use_affine', action='store_true', help="Use affine transform between checkpoint and target model")
     parser.add_argument('--affine_num_examples', type=int, default=100000, help="Number of examples for affine transform training")
-    parser.add_argument('--no_checkpoint', action='store_true', help="Skip checkpoint model loading, use original disable_adapter approach")
 
     args = parser.parse_args()
 
@@ -481,41 +480,37 @@ if __name__ == "__main__":
     # Load checkpoint model for ckpt_deep transfer
     checkpoint_model = None
     affine_transforms = {}
-    if not args.no_checkpoint:
-        print(f"Loading checkpoint model: {args.checkpoint_name} @ {args.checkpoint_revision}")
-        checkpoint_model = AutoModelForCausalLM.from_pretrained(
-            args.checkpoint_name,
-            revision=args.checkpoint_revision,
-            device_map="auto",
-            torch_dtype=torch.float16,
-        )
-        checkpoint_model.eval()
-        for param in checkpoint_model.parameters():
-            param.requires_grad = False
+    print(f"Loading checkpoint model: {args.checkpoint_name} @ {args.checkpoint_revision}")
+    checkpoint_model = AutoModelForCausalLM.from_pretrained(
+        args.checkpoint_name,
+        revision=args.checkpoint_revision,
+        device_map="auto",
+        torch_dtype=torch.float16,
+    )
+    checkpoint_model.eval()
+    for param in checkpoint_model.parameters():
+        param.requires_grad = False
 
-        # Train affine transforms if requested
-        if args.use_affine:
-            print("Training affine transforms...")
-            affine_transforms = train_affine_transform(
-                source_model=checkpoint_model,
-                target_model=model,
-                tokenizer=tokenizer,
-                dataset=train_dataset,
-                target_layers=args.layers,
-                num_examples=args.affine_num_examples,
-                device=model.device if hasattr(model, 'device') else 'cuda',
-            )
-            for idx, transform in affine_transforms.items():
-                affine_transforms[idx] = transform.to(model.device if hasattr(model, 'device') else 'cuda')
-                affine_transforms[idx].requires_grad_(False)
-    else:
-        print("Skipping checkpoint model loading (--no_checkpoint specified)")
+    # Train affine transforms if requested
+    if args.use_affine:
+        print("Training affine transforms...")
+        affine_transforms = train_affine_transform(
+            source_model=checkpoint_model,
+            target_model=model,
+            tokenizer=tokenizer,
+            dataset=train_dataset,
+            target_layers=args.layers,
+            num_examples=args.affine_num_examples,
+            device=model.device if hasattr(model, 'device') else 'cuda',
+        )
+        for idx, transform in affine_transforms.items():
+            affine_transforms[idx] = transform.to(model.device if hasattr(model, 'device') else 'cuda')
+            affine_transforms[idx].requires_grad_(False)
 
     # Note: gradient_checkpointing=True saves memory but slows down training (~20-30%).
     # If you have enough VRAM, set this to False for further speedup.
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     global_batch_size = 32
-    # Ensure accumulation is at least 1
     grad_acc_steps = max(1, global_batch_size // (args.pdbs * world_size))
 
     print(f"Running with {world_size} GPUs. Per device batch: {args.pdbs}. Grad Acc steps: {grad_acc_steps}.")

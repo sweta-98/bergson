@@ -6,7 +6,7 @@
 set -e
 
 REMOVE_COEF=${1:-50}
-NUM_TRAIN_EXAMPLES=${2:-256}
+NUM_TRAIN_EXAMPLES=${2:-2048}
 
 export HF_TOKEN=$(cat ~/.cache/huggingface/token)
 export WANDB_MODE=offline
@@ -25,10 +25,10 @@ echo "============================================="
 CMD="python /home/luciarosequirke/lucia/bergson/bergson/unlearn/ckpt_deep.py \
     --num_train_examples ${NUM_TRAIN_EXAMPLES} \
     --remove_coef ${REMOVE_COEF} \
-    --retain_coef 5 \
+    --retain_coef 2 \
     --lr 1e-3 \
     --pdbs 4 \
-    --layers 5 10 15 20 25 30 \
+    --layers 3 6 9 12 15 18 21 24 27 30 \
     --save_name ${SAVE_NAME}"
 
 echo "Executing: $CMD"
