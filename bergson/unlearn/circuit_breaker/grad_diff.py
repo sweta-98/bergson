@@ -39,11 +39,11 @@ class GradDiffArguments:
     """Arguments for gradient difference unlearning."""
 
     alpha: float = field(
-        default=1.0,
+        default=0.9,
         metadata={"help": "Weight for forget loss (gradient ascent strength)"},
     )
     gamma: float = field(
-        default=0.0,
+        default=1.0,
         metadata={"help": "Weight for KL divergence regularization (0 to disable)"},
     )
     num_forget_examples: int = field(
