@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from dataclasses import asdict
 
+from huggingface_hub import HfApi
 import wandb
 import torch
 import torch.nn.functional as F
@@ -49,6 +50,11 @@ class TunedLensTrainConfig:
     wandb_project: str = "tuned-lens"
     wandb_run_name: str = ""
     use_wandb: bool = True
+
+    # HuggingFace Hub upload
+    upload_to_hf: bool = False
+    hf_repo_id: str = ""
+    hf_private: bool = False
 
     # Random seed
     seed: int = 42
@@ -172,6 +178,42 @@ def prepare_bio_dataset(
     )
     ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
     return ds
+
+
+def upload_lens_to_hf(
+    lens_path: Path,
+    repo_id: str,
+    private: bool = False,
+) -> str:
+    """
+    Upload a trained Tuned Lens to HuggingFace Hub.
+
+    Args:
+        lens_path: Path to the saved lens directory.
+        repo_id: HuggingFace repo ID (e.g., "EleutherAI/tuned-lens-llama-3.2-1b").
+        private: Whether the repo should be private.
+
+    Returns:
+        URL of the uploaded repo.
+    """
+    api = HfApi()
+
+    api.create_repo(
+        repo_id=repo_id,
+        repo_type="model",
+        private=private,
+        exist_ok=True,
+    )
+
+    api.upload_folder(
+        folder_path=str(lens_path),
+        repo_id=repo_id,
+        repo_type="model",
+    )
+
+    repo_url = f"https://huggingface.co/{repo_id}"
+    print(f"Uploaded lens to: {repo_url}")
+    return repo_url
 
 
 def train_tuned_lens(train_cfg: TunedLensTrainConfig) -> TunedLens:
@@ -367,6 +409,16 @@ def train_tuned_lens(train_cfg: TunedLensTrainConfig) -> TunedLens:
         wandb.save(str(final_path / "*.pt"))
         wandb.save(str(final_path / "*.json"))
         wandb.finish()
+
+    # Upload to HuggingFace Hub
+    if train_cfg.upload_to_hf:
+        if not train_cfg.hf_repo_id:
+            raise ValueError("hf_repo_id must be set when upload_to_hf is True")
+        upload_lens_to_hf(
+            lens_path=final_path,
+            repo_id=train_cfg.hf_repo_id,
+            private=train_cfg.hf_private,
+        )
 
     print("Training complete!")
     return lens
