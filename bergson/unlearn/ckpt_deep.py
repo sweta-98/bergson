@@ -141,7 +141,7 @@ class UnlearningTrainer(Trainer):
         if not os.path.exists(self.metrics_log_file):
             with open(self.metrics_log_file, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['step', 'forget_argmax_accuracy', 'retain_argmax_accuracy', 'retain_loss', 'circuit_breaker_loss', 'total_loss'])
+                writer.writerow(['step', 'forget_argmax_accuracy', 'retain_argmax_accuracy', 'retain_kl_loss', 'circuit_breaker_loss', 'total_loss'])
             print(f"Metrics will be logged to: {self.metrics_log_file}")
 
     def _log_metrics(self, step, forget_argmax=None, retain_argmax=None, retain_loss=None, cb_loss=None, total_loss=None):
@@ -202,7 +202,7 @@ class RRTrainer(UnlearningTrainer):
         circuit_breaker_coeff = self.remove_coef * (1 - 0.25 * scheduled_coeff)
 
         # ========================================================================
-        # 1. RETAIN CONTROL
+        # 1. RETAIN CONTROL (KL divergence on logits)
         # ========================================================================
         retain_loss = torch.tensor(0.0, device=target_device)
         self._last_retain_argmax = None
@@ -211,15 +211,9 @@ class RRTrainer(UnlearningTrainer):
             with unwrapped_model.disable_adapter():
                 unwrapped_model.eval()
                 with torch.no_grad():
-                    orig_retain_outputs = unwrapped_model(**retain_inputs_dict)[module]
-                    orig_retain_hidden = torch.stack(orig_retain_outputs).detach()
                     orig_retain_logits = unwrapped_model(**retain_inputs_dict).logits
-                    del orig_retain_outputs
-                    gc.collect()
 
             unwrapped_model.train()
-            lora_retain_outputs = unwrapped_model(**retain_inputs_dict)[module]
-            lora_retain_hidden = torch.stack(lora_retain_outputs)
             lora_retain_logits = unwrapped_model(**retain_inputs_dict).logits
 
             # Argmax matching accuracy for retain
@@ -234,13 +228,20 @@ class RRTrainer(UnlearningTrainer):
                         retain_matching_accuracy = masked_matches_retain.sum() / valid_tokens_retain
                         self._last_retain_argmax = retain_matching_accuracy.item()
 
-            # Retain loss: L2 norm across all layers
-            broadcast_retain_mask = retain_attention_mask.unsqueeze(0).unsqueeze(-1)
-            orig_retain_hidden = orig_retain_hidden * broadcast_retain_mask
-            lora_retain_hidden = lora_retain_hidden * broadcast_retain_mask
-            retain_loss = torch.norm(lora_retain_hidden - orig_retain_hidden, dim=-1, p=2, dtype=torch.float).nanmean()
+            # Retain loss: KL divergence on logits
+            orig_log_probs = F.log_softmax(orig_retain_logits.float(), dim=-1)
+            lora_log_probs = F.log_softmax(lora_retain_logits.float(), dim=-1)
 
-            del orig_retain_hidden, lora_retain_outputs, lora_retain_hidden
+            # KL divergence per token
+            kl_per_token = F.kl_div(lora_log_probs, orig_log_probs, reduction='none', log_target=True).sum(dim=-1)
+
+            # Mask and average
+            masked_kl = kl_per_token * retain_attention_mask.float()
+            valid_tokens = retain_attention_mask.sum().float()
+            if valid_tokens > 0:
+                retain_loss = masked_kl.sum() / valid_tokens
+
+            del orig_log_probs, lora_log_probs, kl_per_token, masked_kl
             gc.collect()
 
         # ========================================================================
@@ -356,7 +357,7 @@ class RRTrainer(UnlearningTrainer):
             loss_val = loss.item() if isinstance(loss, torch.Tensor) else loss
 
             print(f"\nStep {self.current_training_step}: retain_coeff: {retain_coeff:.4f} || cb_coeff: {circuit_breaker_coeff:.4f}")
-            print(f"retain_loss: {retain_loss_val:.4f} || cb_loss: {cb_loss_val:.4f}")
+            print(f"retain_kl_loss: {retain_loss_val:.4f} || cb_loss: {cb_loss_val:.4f}")
             if self._last_retain_argmax is not None:
                 print(f"retain_argmax_accuracy: {self._last_retain_argmax:.4f}")
             if self._last_forget_argmax is not None:
@@ -390,7 +391,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--pdbs', type=int, default=None)
     parser.add_argument('--alg', type=str, choices=['rr', 'lat', 'rr-lat'], default='rr')
-    parser.add_argument('--retain_coef', type=float, default=None)
+    parser.add_argument('--retain_coef', type=float, default=None, help="Coefficient for KL divergence retain loss on logits")
     parser.add_argument('--remove_coef', type=float, default=None)
     parser.add_argument('--lora_r', type=float, default=16)
     parser.add_argument('--adv_lr', type=float, default=2e-3)
