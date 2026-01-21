@@ -32,7 +32,7 @@ CMD="python /home/luciarosequirke/lucia/bergson/bergson/unlearn/ckpt_deep.py \
     --remove_coef ${REMOVE_COEF} \
     --retain_coef ${RETAIN_COEF} \
     --lr 1e-3 \
-    --pdbs 4 \
+    --pdbs 8 \
     --layers 3 6 9 12 15 18 21 24 27 30 \
     --save_name ${SAVE_NAME}"
 
