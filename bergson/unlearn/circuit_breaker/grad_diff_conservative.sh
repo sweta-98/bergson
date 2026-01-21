@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Conservative Gradient Difference Unlearning
-# Uses lower alpha and KL regularization to prevent capability collapse
+# Uses KL regularization to prevent capability collapse
 
 export WANDB_MODE=offline
 export MASTER_PORT=$((29000 + RANDOM % 1000))
@@ -12,9 +12,8 @@ CIRCUIT_BREAKER_PATH=$CIRCUIT_BREAKER_CUDA_HOME/bin:$PATH
 
 model_name_or_path=EleutherAI/deep-ignorance-unfiltered
 
-# Conservative hyperparameters
-alpha=0.1              # Much lower forget weight
-gamma=1.0              # Strong KL regularization to stay close to original
+alpha=0.9
+gamma=1.0
 num_forget=5000
 num_retain=5000
 
