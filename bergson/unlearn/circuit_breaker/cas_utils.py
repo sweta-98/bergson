@@ -357,14 +357,30 @@ def cb_papers_tokenize_function(examples, tokenizer, max_length=MAX_LENGTH, trun
 def get_model_and_tokenizer(model_name, revision='main', dm='auto'):
     # Check if running in distributed mode (accelerate/torchrun sets LOCAL_RANK)
     local_rank = os.environ.get('LOCAL_RANK')
+    
     if local_rank is not None:
-        # Distributed mode: load model to specific GPU
+        # DDP Mode: We must NOT use device_map="auto" because DDP replicates the model.
+        # We map the model strictly to the current process's GPU.
+        print(f"DDP detected: mapping model to cuda:{local_rank}")
         device = f'cuda:{local_rank}'
-        model = AutoModelForCausalLM.from_pretrained(model_name, revision=revision, torch_dtype=torch.bfloat16, use_cache=False)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, 
+            revision=revision, 
+            torch_dtype=torch.bfloat16, 
+            use_cache=False,
+            device_map=None  # Important: Disable auto map for DDP
+        )
         model = model.to(device)
     else:
-        # Single process: use device_map for model parallelism
-        model = AutoModelForCausalLM.from_pretrained(model_name, revision=revision, device_map=dm, use_cache=False)
+        # Single Process / Model Parallel: Use the requested device map (usually 'auto')
+        print(f"Single process detected: using device_map='{dm}'")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, 
+            revision=revision, 
+            device_map=dm, 
+            use_cache=False
+        )
+        
     tokenizer = AutoTokenizer.from_pretrained(model_name, revision=revision)
     if 'Unlearning' in model_name:
         tokenizer.add_special_tokens({ 'pad_token': '<|padding|>', 'eos_token': '<|endoftext|>', 'bos_token': '<|startoftext|>'})
@@ -372,8 +388,7 @@ def get_model_and_tokenizer(model_name, revision='main', dm='auto'):
     else:
         tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token
     return model, tokenizer
-
-
+    
 # import sys
 # import torch
 # sys.path.append('./lm-evaluation-harness')
