@@ -443,7 +443,7 @@ if __name__ == "__main__":
     retain_datasets = [concatenate_datasets(retain_datasets).shuffle(seed=42).select(range(args.num_train_examples))]
 
     num_remove_to_take = args.num_train_examples if not args.unlearn_corrupt else int(args.num_train_examples * (1+args.corrupt_ratio))
-    bio_remove_dataset = load_dataset(BIO_REMOVE_DS_NAME, token=hf_token)
+    bio_remove_dataset = load_dataset('cais/wmdp-bio-forget-corpus', token=hf_token)
     bio_remove_dataset = bio_remove_dataset['train'].select(range(num_remove_to_take))
     tokenized_remove_dataset = bio_remove_dataset.map(lambda x: cb_tokenize_function(x, tokenizer), batched=True, num_proc=NUM_PROC)
     remove_datasets = [tokenized_remove_dataset]
@@ -541,13 +541,13 @@ if __name__ == "__main__":
     clear_hooks(model)
 
     # Final Evaluation (retained, as this measures the resulting model)
-    mmlu_acc = lm_eval_model(model, task='mmlu', limit=args.mmlu_agieval_limit, revision=args.revision, tokenizer=tokenizer)
-    if 'smollm2' not in args.model_name:
-        wmdp_acc = lm_eval_model(model, task='wmdp_bio_robust', limit=args.wmdp_eval_limit, revision=args.revision, tokenizer=tokenizer)
-        print(f'***\nFinal wmdp_acc: {wmdp_acc}, final mmlu_acc {mmlu_acc}\n***')
-    else:
-        jailbreak_score = jailbreak_eval_model(model, tokenizer, num_examples=500, pfx=None, num_fs=0)
-        print(f'***\nFinal jailbreak_score: {jailbreak_score}, final mmlu_acc {mmlu_acc}\n***')
+    # mmlu_acc = lm_eval_model(model, task='mmlu', limit=args.mmlu_agieval_limit, revision=args.revision, tokenizer=tokenizer)
+    # if 'smollm2' not in args.model_name:
+    #     wmdp_acc = lm_eval_model(model, task='wmdp_bio_robust', limit=args.wmdp_eval_limit, revision=args.revision, tokenizer=tokenizer)
+    #     print(f'***\nFinal wmdp_acc: {wmdp_acc}, final mmlu_acc {mmlu_acc}\n***')
+    # else:
+    #     jailbreak_score = jailbreak_eval_model(model, tokenizer, num_examples=500, pfx=None, num_fs=0)
+    #     print(f'***\nFinal jailbreak_score: {jailbreak_score}, final mmlu_acc {mmlu_acc}\n***')
 
     if args.lora:
         model = model.merge_and_unload()

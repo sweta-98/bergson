@@ -191,6 +191,5 @@ uv.lock
 tmp_score/
 logs/
 retain_set_1024/
-scripts/
 
 models/
