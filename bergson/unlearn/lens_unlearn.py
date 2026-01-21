@@ -1,17 +1,20 @@
+"""Unlearning via entropy maximization at frozen tuned lens layers."""
+
 import sys
 import os
 from typing import Any, Callable, List, Tuple, Union
 import argparse
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import Trainer, TrainingArguments
 from transformers.trainer_utils import seed_worker
 from datasets import concatenate_datasets, load_dataset
 from peft import LoraConfig, get_peft_model
-# Assuming this import exists in your environment
 from bergson.unlearn.circuit_breaker.cas_utils import *
 from transformers.modeling_utils import unwrap_model
+from tuned_lens import TunedLens
 
 
 class UnlearningDataset(Dataset):
@@ -107,7 +110,7 @@ def add_hooks(
     return adversaries, hooks
 
 class UnlearningTrainer(Trainer):
-    def __init__(self, run_args, model, args, train_dataset, tokenizer, lora_target_layers, **kwargs):
+    def __init__(self, run_args, model, args, train_dataset, tokenizer, lora_target_layers, lens=None, **kwargs):
         super().__init__(model=model, args=args, train_dataset=train_dataset, eval_dataset=train_dataset)
         self.run_args = run_args
         self.num_training_steps = self.args.max_steps
@@ -118,6 +121,7 @@ class UnlearningTrainer(Trainer):
         self.retain_coef = self.run_args.retain_coef
         self.remove_coef = self.run_args.remove_coef
         self.trainer_tokenizer = tokenizer
+        self.lens = lens
 
     def get_train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
@@ -191,33 +195,6 @@ class RRTrainer(UnlearningTrainer):
                     orig_retain_hidden *= broadcast_retain_mask
                     del orig_retain_outputs
 
-                ### Circuit Breaker control
-                if circuit_breaker_coeff > 0:
-                    circuit_breaker_outputs = unwrapped_model(**cb_inputs_dict)[module]
-                    circuit_breaker_hidden = torch.stack([circuit_breaker_outputs[l].detach() for l in self.lora_target_layers])
-                    del circuit_breaker_outputs
-
-        if self.run_args.alg == 'rr-lat':
-            num_attack = 2  
-            cb_inputs_dict_lat = dict(input_ids=circuit_breaker_input_ids[:num_attack], attention_mask=circuit_breaker_attention_mask[:num_attack], labels=circuit_breaker_input_ids[:num_attack])
-            mlm = 'model.gpt_neox.layers' if 'Unlearning' in self.run_args.model_name else 'model.layers'
-            if self.run_args.lora and 'Unlearning' in self.run_args.model_name:
-                mlm = 'base_model.' + mlm
-            elif self.run_args.lora:
-                mlm = 'base_model.model.' + mlm
-            
-            # Use unwrapped_model for attack to avoid DDP sync overhead during attack steps
-            losses, wrappers = gradient_descent_attack(
-                batch=cb_inputs_dict_lat,
-                model=unwrapped_model, 
-                model_layers_module=mlm,
-                layers=["embedding"] + args.layers,
-                learning_rate=self.run_args.adv_lr,
-                iterations=self.run_args.attack_iters,
-                device=target_device,
-                hidden_dim=args.hidden_dim,
-            )
-            
         unwrapped_model.train()
 
         ### Retain control
@@ -233,28 +210,45 @@ class RRTrainer(UnlearningTrainer):
         else:
             retain_loss = 0
 
-        ### Circuit Breaker control
+        ### Forget loss - entropy maximization via tuned lens
         if circuit_breaker_coeff > 0:
             lora_circuit_breaker_outputs = unwrapped_model(**cb_inputs_dict)[module]
-            lora_circuit_breaker_hidden = torch.stack([lora_circuit_breaker_outputs[l] for l in self.lora_target_layers])
-            
-            normalized_lora_circuit_breaker_outputs = lora_circuit_breaker_hidden / (torch.norm(lora_circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float))
-            normalized_circuit_breaker_outputs = circuit_breaker_hidden / (torch.norm(circuit_breaker_hidden, dim=-1, keepdim=True, dtype=torch.float))
-            
-            inner_product = (normalized_lora_circuit_breaker_outputs * normalized_circuit_breaker_outputs) * broadcast_cb_mask
-            
-            denom = circuit_breaker_attention_mask.sum() * len(self.lora_target_layers)
-            circuit_breaker_loss = torch.relu(inner_product.nansum(dim=-1)).nansum() / (denom + 1e-6)
+
+            # Compute entropy at each target layer via the frozen lens
+            layer_entropies = []
+            for layer_idx in self.lora_target_layers:
+                hidden = lora_circuit_breaker_outputs[layer_idx]  # [batch, seq, hidden]
+
+                # Convert hidden states to match lens dtype (bfloat16)
+                hidden_bf16 = hidden.to(dtype=torch.bfloat16)
+
+                # Get lens logits for this layer
+                lens_logits = self.lens(hidden_bf16, idx=layer_idx)  # [batch, seq, vocab]
+
+                # Compute entropy: H = -sum(p * log(p))
+                log_probs = F.log_softmax(lens_logits.float(), dim=-1)
+                probs = log_probs.exp()
+                entropy = -(probs * log_probs).sum(dim=-1)  # [batch, seq]
+
+                # Apply attention mask - only consider non-padded tokens
+                mask = circuit_breaker_attention_mask.float()
+                masked_entropy = entropy * mask
+                avg_entropy = masked_entropy.sum() / (mask.sum() + 1e-6)
+
+                layer_entropies.append(avg_entropy)
+
+            # Negative entropy loss (minimize this to maximize entropy)
+            mean_entropy = torch.stack(layer_entropies).mean()
+            circuit_breaker_loss = -mean_entropy  # Negative because we want to maximize entropy
         else:
-            circuit_breaker_loss = 0
+            circuit_breaker_loss = torch.tensor(0.0, device=target_device)
+            mean_entropy = torch.tensor(0.0)
 
         loss = retain_coeff * retain_loss + circuit_breaker_coeff * circuit_breaker_loss
-        
-        if self.run_args.alg == 'rr-lat':
-            clear_hooks(unwrapped_model)
 
         if self.current_training_step % 32 == 0 and int(os.environ.get("LOCAL_RANK", 0)) == 0:
-            print(f"retain_coeff: {retain_coeff:.4f} || cb_coeff: {circuit_breaker_coeff:.4f} || retain_loss: {retain_loss:.4f} || cb_loss: {circuit_breaker_loss:.4f}")
+            entropy_val = mean_entropy.item() if isinstance(mean_entropy, torch.Tensor) else mean_entropy
+            print(f"retain_coeff: {retain_coeff:.4f} || forget_coeff: {circuit_breaker_coeff:.4f} || retain_loss: {retain_loss:.4f} || forget_loss: {circuit_breaker_loss:.4f} || mean_entropy: {entropy_val:.4f}")
         
         # Optimization: Moved heavy eval out of loop
         
@@ -275,37 +269,20 @@ if __name__ == "__main__":
     parser.add_argument('--wmdp_eval_limit', type=int, default=None)
     parser.add_argument('--mmlu_agieval_limit', type=int, default=None)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--pdbs', type=int, default=None)
-    parser.add_argument('--alg', type=str, choices=['rr', 'lat', 'rr-lat'], default='rr')
-    parser.add_argument('--retain_coef', type=float, default=None) 
-    parser.add_argument('--remove_coef', type=float, default=None)  
-    parser.add_argument('--lora_r', type=float, default=16)  
-    parser.add_argument('--adv_lr', type=float, default=2e-3) 
-    parser.add_argument('--attack_iters', type=int, default=8) 
+    parser.add_argument('--pdbs', type=int, default=4)
+    parser.add_argument('--retain_coef', type=float, default=5.0)
+    parser.add_argument('--remove_coef', type=float, default=5.0)
+    parser.add_argument('--lora_r', type=float, default=16)
     parser.add_argument('--lora', type=bool, default=True)
     parser.add_argument('--layers', type=int, nargs='+', default=[5, 10, 15, 20, 25, 30], help="List of layers to target")
     parser.add_argument('--model_name', type=str, default='allenai/OLMo-2-1124-7B-Instruct')
     parser.add_argument('--save_name', type=str, default='')
     parser.add_argument('--revision', type=str, default='main')
+    parser.add_argument('--lens_path', type=str, required=True, help="Path to tuned lens weights")
     
     args = parser.parse_args()
-    if args.alg == 'rr':
-        args.pdbs = 4 if args.pdbs is None else args.pdbs
-        args.retain_coef = 5 if args.retain_coef is None else args.retain_coef
-        args.remove_coef = 5 if args.remove_coef is None else args.remove_coef
-    elif args.alg == 'rr-lat':
-        args.pdbs = 1 if args.pdbs is None else args.pdbs
-        args.retain_coef = 5 if args.retain_coef is None else args.retain_coef
-        args.remove_coef = 5 if args.remove_coef is None else args.remove_coef
-    else:  
-        args.pdbs = 1 if args.pdbs is None else args.pdbs
-        args.retain_coef = 1 if args.retain_coef is None else args.retain_coef
-        args.remove_coef = 5 if args.remove_coef is None else args.remove_coef
 
-    if 'smollm2' not in args.model_name:
-        args.hidden_dim = 4096
-    else:
-        args.hidden_dim = 2048
+    if 'smollm2' in args.model_name:
         args.layers = [l for l in args.layers if l < 24]
 
     print("Parsed arguments:")
@@ -314,6 +291,38 @@ if __name__ == "__main__":
     print()
 
     model, tokenizer = get_model_and_tokenizer(args.model_name, revision=args.revision)
+
+    # Load frozen tuned lens
+    print(f"Loading tuned lens from: {args.lens_path}")
+    device = next(model.parameters()).device
+    lens = TunedLens.from_model(model, bias=True)
+    lens_state_dict = torch.load(f"{args.lens_path}/params.pt", map_location=device)
+
+    # Map saved keys (e.g., "0.weight") to expected keys (e.g., "layer_translators.0.weight")
+    mapped_state_dict = {}
+    num_layers = len(lens)
+    for i in range(num_layers):
+        src_weight_key = f"{i}.weight"
+        src_bias_key = f"{i}.bias"
+        dst_weight_key = f"layer_translators.{i}.weight"
+        dst_bias_key = f"layer_translators.{i}.bias"
+        if src_weight_key in lens_state_dict:
+            mapped_state_dict[dst_weight_key] = lens_state_dict[src_weight_key]
+        if src_bias_key in lens_state_dict:
+            mapped_state_dict[dst_bias_key] = lens_state_dict[src_bias_key]
+
+    # Copy unembed params from initialized lens
+    current_state = lens.state_dict()
+    for key in current_state:
+        if key.startswith("unembed"):
+            mapped_state_dict[key] = current_state[key]
+
+    lens.load_state_dict(mapped_state_dict)
+    lens = lens.to(device=device, dtype=torch.bfloat16)
+    lens.eval()
+    for param in lens.parameters():
+        param.requires_grad = False
+    print(f"Loaded lens with {len(lens)} layer translators (frozen)")
 
     # Load retain_examples
     retain_text_dataset = load_dataset(RETAIN_TEXT_DS_NAME, 'wikitext-103-raw-v1')['train']
@@ -396,7 +405,7 @@ if __name__ == "__main__":
         ddp_find_unused_parameters=False # Required for Custom loops + PEFT usually
     )
 
-    trainer = RRTrainer(args, model, training_args, train_dataset, tokenizer, args.layers)
+    trainer = RRTrainer(args, model, training_args, train_dataset, tokenizer, args.layers, lens=lens)
 
     model.train()
     trainer.train()

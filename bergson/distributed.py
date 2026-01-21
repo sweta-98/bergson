@@ -10,7 +10,7 @@ import torch.multiprocessing as mp
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
 
 # #region agent log
-DEBUG_LOG_PATH = "/home/a5k/lucia.a5k/bergson/.cursor/debug.log"
+DEBUG_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".cursor", "debug.log")
 # #endregion
 
 

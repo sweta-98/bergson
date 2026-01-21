@@ -48,6 +48,7 @@ class TunedLensTrainConfig:
     save_every: int = 100
     wandb_project: str = "tuned-lens"
     wandb_run_name: str = ""
+    use_wandb: bool = True
 
     # Random seed
     seed: int = 42
@@ -142,11 +143,16 @@ def prepare_bio_dataset(
     ds = load_from_disk(bio_forget_path)
 
     def tokenize_fn(examples):
-        # Combine title and text for training
-        texts = []
-        for title, text in zip(examples["title"], examples["text"]):
-            combined = f"{title}\n\n{text}" if title else text
-            texts.append(combined)
+        # Handle datasets with either "text" only or "title" + "text"
+        if "title" in examples and "text" in examples:
+            texts = []
+            for title, text in zip(examples["title"], examples["text"]):
+                combined = f"{title}\n\n{text}" if title else text
+                texts.append(combined)
+        elif "text" in examples:
+            texts = examples["text"]
+        else:
+            raise ValueError(f"Dataset must have 'text' column. Found: {list(examples.keys())}")
 
         tokenized = tokenizer(
             texts,
@@ -183,14 +189,17 @@ def train_tuned_lens(train_cfg: TunedLensTrainConfig) -> TunedLens:
     output_dir = Path(train_cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize wandb
-    run_name = train_cfg.wandb_run_name or f"tuned-lens-{train_cfg.model_name.split('/')[-1]}"
-    wandb.init(
-        project=train_cfg.wandb_project,
-        name=run_name,
-        config=asdict(train_cfg),
-    )
-    print(f"Wandb run: {wandb.run.url}")
+    # Initialize wandb (optional)
+    if train_cfg.use_wandb:
+        run_name = train_cfg.wandb_run_name or f"tuned-lens-{train_cfg.model_name.split('/')[-1]}"
+        wandb.init(
+            project=train_cfg.wandb_project,
+            name=run_name,
+            config=asdict(train_cfg),
+        )
+        print(f"Wandb run: {wandb.run.url}")
+    else:
+        print("Wandb disabled")
 
     # Set up dtype
     dtype_map = {
@@ -313,7 +322,7 @@ def train_tuned_lens(train_cfg: TunedLensTrainConfig) -> TunedLens:
             total_loss += batch_loss
 
             # Log per-layer losses occasionally
-            if (batch_idx + 1) % train_cfg.gradient_accumulation_steps == 0:
+            if (batch_idx + 1) % train_cfg.gradient_accumulation_steps == 0 and train_cfg.use_wandb:
                 layer_loss_dict = {f"layer/{i}": l.item() for i, l in enumerate(layer_losses)}
                 wandb.log(layer_loss_dict, step=global_step + 1)
 
@@ -331,11 +340,12 @@ def train_tuned_lens(train_cfg: TunedLensTrainConfig) -> TunedLens:
                 # Logging
                 if global_step % train_cfg.log_every == 0:
                     print(f"Step {global_step}: loss = {avg_loss:.4f}")
-                    wandb.log({
-                        "train/loss": avg_loss,
-                        "train/step": global_step,
-                        "train/epoch": epoch + (batch_idx + 1) / len(dataloader),
-                    }, step=global_step)
+                    if train_cfg.use_wandb:
+                        wandb.log({
+                            "train/loss": avg_loss,
+                            "train/step": global_step,
+                            "train/epoch": epoch + (batch_idx + 1) / len(dataloader),
+                        }, step=global_step)
 
                 # Checkpoint
                 if global_step % train_cfg.save_every == 0:
@@ -353,9 +363,10 @@ def train_tuned_lens(train_cfg: TunedLensTrainConfig) -> TunedLens:
     lens.save(final_path)
 
     # Log final model artifact
-    wandb.save(str(final_path / "*.pt"))
-    wandb.save(str(final_path / "*.json"))
-    wandb.finish()
+    if train_cfg.use_wandb:
+        wandb.save(str(final_path / "*.pt"))
+        wandb.save(str(final_path / "*.json"))
+        wandb.finish()
 
     print("Training complete!")
     return lens
