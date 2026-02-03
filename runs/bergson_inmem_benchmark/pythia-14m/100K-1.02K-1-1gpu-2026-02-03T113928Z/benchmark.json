@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "status": "success",
+  "model_key": "pythia-14m",
+  "model_name": "EleutherAI/pythia-14m",
+  "params": 14000000,
+  "train_tokens": 100000,
+  "eval_tokens": 1024,
+  "dataset": "/projects/a6a/public/lucia/SmolLM2-135M-10B-tokenized",
+  "train_split": "train",
+  "eval_split": "validation",
+  "batch_size": 4,
+  "max_length": 1024,
+  "query_seconds": 0.16418729070574045,
+  "build_seconds": 1.452143578324467,
+  "score_seconds": 1.5794596248306334,
+  "run_path": "/home/a6a/lucia.a6a/bergson/runs/bergson_inmem_benchmark/pythia-14m/100K-1.02K-1-1gpu-2026-02-03T113928Z",
+  "notes": null,
+  "error": null,
+  "num_gpus": 1,
+  "token_batch_size": 2048,
+  "projection_dim": 16
+}
