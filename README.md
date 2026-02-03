@@ -163,6 +163,14 @@ Where a reward signal is available we compute gradients using a weighted advanta
 bergson build <output_path> --model <model_name> --dataset <dataset_name> --reward_column <reward_column_name>
 ```
 
+# Benchmarks
+
+![CLI Benchmark (1x H100)](docs/benchmarks/cli_benchmark_1x_NVIDIA_H100_80GB_HBM3.png)
+
+![CLI Benchmark (8x H100)](docs/benchmarks/cli_benchmark_8x_NVIDIA_H100_80GB_HBM3.png)
+
+See `benchmarks/` for scripts and raw data.
+
 # Development
 
 ```bash

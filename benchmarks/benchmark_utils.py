@@ -87,9 +87,7 @@ def get_run_path(
 def timestamp() -> str:
     return (
         datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
+        .strftime("%Y-%m-%dT%H%M%SZ")
     )
 
 
@@ -159,7 +157,7 @@ def extract_gpu_info(hardware_string: str | None) -> str | None:
 
 
 def load_benchmark_dataset(
-    path: str | Path = prepare_benchmark_ds_path(),
+    path: str | Path | None = None,
     min_length: int = MAX_BENCHMARK_LENGTH,
 ) -> Dataset:
     """
@@ -180,6 +178,8 @@ def load_benchmark_dataset(
     Dataset
         Filtered dataset with only sequences >= min_length.
     """
+    if path is None:
+        path = prepare_benchmark_ds_path()
     path = Path(path)
 
     print(f"Loading tokenized dataset from {path}...")
