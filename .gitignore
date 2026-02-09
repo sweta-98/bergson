@@ -190,3 +190,4 @@ tmp/
 uv.lock
 out/
 data/EleutherAI/SmolLM2-135M-10B-tokenized/
+docs/benchmarks/archive/
