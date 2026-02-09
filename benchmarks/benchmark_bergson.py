@@ -15,7 +15,7 @@ from simple_parsing import ArgumentParser, ConflictResolution, field
 
 from benchmarks.benchmark_utils import (
     MODEL_SPECS,
-    get_hardware_info,
+    get_hardware_details,
     get_run_path,
     parse_tokens,
     prepare_benchmark_ds_path,
@@ -70,6 +70,9 @@ class RunRecord:
     token_batch_size: int | None = None
     projection_dim: int | None = None
     hardware: str | None = None
+    gpu_name: str | None = None
+    num_gpus_available: int | None = None
+    gpu_vram_gb: float | None = None
 
 
 @dataclass
@@ -365,7 +368,7 @@ class Run:
             error=error_message,
             token_batch_size=optimal_token_batch_size,
             projection_dim=self.run_cfg.projection_dim,
-            hardware=get_hardware_info(),
+            **vars(get_hardware_details()),
         )
         save_record(run_path, record)
 

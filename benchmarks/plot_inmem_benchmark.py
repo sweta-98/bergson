@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import socket
-import subprocess
 import sys
 from pathlib import Path
 
@@ -12,38 +10,24 @@ import pandas as pd
 from matplotlib import pyplot as plt
 
 from benchmarks.benchmark_bergson import RunRecord, load_records
-from benchmarks.benchmark_utils import extract_gpu_info, format_tokens
+from benchmarks.benchmark_utils import (
+    extract_gpu_info,
+    format_tokens,
+    get_hardware_info,
+)
 
 
-def get_gpu_info() -> str:
-    """Get GPU info string for hardware identification."""
-    result = subprocess.run(
-        ["nvidia-smi", "--query-gpu=count,name", "--format=csv,noheader"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        lines = result.stdout.strip().split("\n")
-        if lines:
-            count, name = lines[0].split(", ", 1)
-            return f"{count}x {name}"
-    return "Unknown GPU"
-
-
-def get_hardware_string() -> str:
-    """Get a string identifying the current hardware."""
-    hostname = socket.gethostname()
-    gpu_info = get_gpu_info()
-    return f"{hostname} ({gpu_info})"
-
-
-def create_inmem_dataframe(records: list[RunRecord]) -> pd.DataFrame:
+def create_inmem_dataframe(
+    records: list[RunRecord],
+) -> pd.DataFrame:
     """Create a dataframe from in-memory benchmark records."""
     rows = []
-    hardware = get_hardware_string()
 
     for r in records:
         if r.status == "success":
+            # Prefer hardware from the record; fall back to
+            # current machine for old records without it.
+            hw = getattr(r, "hardware", None) or get_hardware_info()
             rows.append(
                 {
                     "model_key": r.model_key,
@@ -57,7 +41,10 @@ def create_inmem_dataframe(records: list[RunRecord]) -> pd.DataFrame:
                     "score_seconds": r.score_seconds,
                     "run_path": r.run_path,
                     "num_gpus": r.num_gpus,
-                    "hardware": hardware,
+                    "hardware": hw,
+                    "gpu_name": getattr(r, "gpu_name", None),
+                    "num_gpus_available": getattr(r, "num_gpus_available", None),
+                    "gpu_vram_gb": getattr(r, "gpu_vram_gb", None),
                     "token_batch_size": r.token_batch_size,
                     "projection_dim": r.projection_dim,
                 }

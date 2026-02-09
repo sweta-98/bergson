@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from benchmarks.benchmark_utils import (
     MODEL_SPECS,
-    get_hardware_info,
+    get_hardware_details,
     get_run_path,
     parse_tokens,
     prepare_benchmark_ds_path,
@@ -168,6 +168,9 @@ class RunRecord:
     num_gpus: int = 1
     projection_dim: int | None = None
     hardware: str | None = None
+    gpu_name: str | None = None
+    num_gpus_available: int | None = None
+    gpu_vram_gb: float | None = None
 
 
 @dataclass
@@ -405,7 +408,7 @@ class Run:
             notes=self.run_cfg.notes,
             error=error_message,
             projection_dim=self.run_cfg.projection_dim,
-            hardware=get_hardware_info(),
+            **vars(get_hardware_details()),
         )
         save_record(run_path, record)
 

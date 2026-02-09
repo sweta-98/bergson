@@ -448,19 +448,30 @@ class Plot:
                 num_gpus = self.plot_cfg.num_gpus or 1
 
                 # Extract GPU tag from data if available
-                all_dfs = list(loaded.values())
-                hw_col = pd.concat(all_dfs).get("hardware")
-                if hw_col is not None:
-                    hw_values = hw_col.dropna().unique()
-                    if len(hw_values) == 1:
-                        gpu_info = extract_gpu_info(hw_values[0])
-                        gpu_tag = gpu_info or f"{num_gpus} GPU"
-                    elif len(hw_values) > 1:
+                combined = pd.concat(loaded.values())
+                gpu_names = combined.get("gpu_name")
+                if gpu_names is not None:
+                    names = gpu_names.dropna().unique()
+                    if len(names) == 1:
+                        gpu_tag = f"{num_gpus}x {names[0]}"
+                    elif len(names) > 1:
                         gpu_tag = "mixed hardware"
                     else:
                         gpu_tag = f"{num_gpus} GPU"
                 else:
-                    gpu_tag = f"{num_gpus} GPU"
+                    # Fallback to hardware string
+                    hw_col = combined.get("hardware")
+                    if hw_col is not None:
+                        hw_vals = hw_col.dropna().unique()
+                        if len(hw_vals) == 1:
+                            info = extract_gpu_info(hw_vals[0])
+                            gpu_tag = info or f"{num_gpus} GPU"
+                        elif len(hw_vals) > 1:
+                            gpu_tag = "mixed hardware"
+                        else:
+                            gpu_tag = f"{num_gpus} GPU"
+                    else:
+                        gpu_tag = f"{num_gpus} GPU"
 
                 panels = []
                 for proj_type, _ in projection_types:

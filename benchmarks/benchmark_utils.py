@@ -1,8 +1,9 @@
 import json
+import platform
+import subprocess
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import platform
 
 from datasets import Dataset, load_from_disk
 
@@ -12,16 +13,63 @@ from bergson.utils.worker_utils import setup_data_pipeline
 MAX_BENCHMARK_LENGTH = 1024
 
 
+@dataclass
+class HardwareInfo:
+    """Structured hardware information for benchmark records."""
+
+    hardware: str
+    gpu_name: str | None = None
+    num_gpus_available: int | None = None
+    gpu_vram_gb: float | None = None
+
+
 def get_hardware_info() -> str:
     """Get hardware information string."""
-    try:
-        import torch
+    info = get_hardware_details()
+    return info.hardware
 
-        gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
-        gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-        return f"{platform.node()} ({gpu_count}x {gpu_name})"
-    except Exception:
-        return f"{platform.node()} (unknown)"
+
+def get_hardware_details() -> HardwareInfo:
+    """Get structured hardware information.
+
+    Uses nvidia-smi for total GPU count (unaffected by
+    CUDA_VISIBLE_DEVICES) and torch for GPU name and VRAM.
+    """
+    gpu_name: str | None = None
+    num_gpus_available: int | None = None
+    gpu_vram_gb: float | None = None
+
+    # nvidia-smi for total GPU count on machine
+    result = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=count,name,memory.total",
+            "--format=csv,noheader,nounits",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        lines = result.stdout.strip().split("\n")
+        if lines:
+            parts = lines[0].split(", ")
+            if len(parts) >= 3:
+                num_gpus_available = int(parts[0])
+                gpu_name = parts[1].strip()
+                gpu_vram_gb = round(float(parts[2]) / 1024, 1)
+
+    hw_str = platform.node()
+    if num_gpus_available and gpu_name:
+        hw_str += f" ({num_gpus_available}x {gpu_name})"
+    else:
+        hw_str += " (unknown)"
+
+    return HardwareInfo(
+        hardware=hw_str,
+        gpu_name=gpu_name,
+        num_gpus_available=num_gpus_available,
+        gpu_vram_gb=gpu_vram_gb,
+    )
 
 
 def prepare_benchmark_ds_path():
@@ -98,10 +146,7 @@ def get_run_path(
 
 
 def timestamp() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .strftime("%Y-%m-%dT%H%M%SZ")
-    )
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
 
 
 def format_tokens(tokens: int) -> str:

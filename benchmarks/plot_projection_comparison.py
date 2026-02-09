@@ -15,6 +15,16 @@ from benchmarks.benchmark_dattri import load_records as load_dattri_records
 from benchmarks.benchmark_utils import format_tokens
 
 
+def _hw_fields(r: object) -> dict:
+    """Extract hardware fields from a record."""
+    return {
+        "hardware": getattr(r, "hardware", None),
+        "gpu_name": getattr(r, "gpu_name", None),
+        "num_gpus_available": getattr(r, "num_gpus_available", None),
+        "gpu_vram_gb": getattr(r, "gpu_vram_gb", None),
+    }
+
+
 def create_dataframe(
     bergson_proj: list[InMemRecord],
     bergson_noproj: list[InMemRecord],
@@ -38,7 +48,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": total,
-                    "hardware": getattr(r, "hardware", None),
+                    **_hw_fields(r),
                 }
             )
 
@@ -56,7 +66,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": total,
-                    "hardware": getattr(r, "hardware", None),
+                    **_hw_fields(r),
                 }
             )
 
@@ -71,7 +81,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": r.runtime_seconds,
-                    "hardware": getattr(r, "hardware", None),
+                    **_hw_fields(r),
                 }
             )
 
@@ -86,7 +96,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": r.runtime_seconds,
-                    "hardware": getattr(r, "hardware", None),
+                    **_hw_fields(r),
                 }
             )
 
