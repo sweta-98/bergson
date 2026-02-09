@@ -19,6 +19,17 @@ from dattri.task import AttributionTask
 from simple_parsing import ArgumentParser
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from benchmarks.benchmark_utils import (
+    MODEL_SPECS,
+    get_hardware_info,
+    get_run_path,
+    parse_tokens,
+    prepare_benchmark_ds_path,
+    save_record,
+    timestamp,
+)
+from bergson.utils.utils import assert_type
+
 
 # Dattri implements projections in the TrakAttributor
 # but it doesn't work with GPT-NeoX models due to rotary
@@ -77,17 +88,6 @@ class ProjectedInnerProductAttributor(BaseInnerProductAttributor):
         self._ensure_projector(test_rep.shape[-1])
         return self.projector.project(test_rep, ensemble_id=ckpt_idx)
 
-
-# Import from same directory
-from benchmarks.benchmark_utils import (
-    MODEL_SPECS,
-    get_run_path,
-    parse_tokens,
-    prepare_benchmark_ds_path,
-    save_record,
-    timestamp,
-)
-from bergson.utils.utils import assert_type
 
 SCHEMA_VERSION = 1
 DEFAULT_TRAIN_SPLIT = "train"
@@ -167,6 +167,7 @@ class RunRecord:
     error: str | None
     num_gpus: int = 1
     projection_dim: int | None = None
+    hardware: str | None = None
 
 
 @dataclass
@@ -404,6 +405,7 @@ class Run:
             notes=self.run_cfg.notes,
             error=error_message,
             projection_dim=self.run_cfg.projection_dim,
+            hardware=get_hardware_info(),
         )
         save_record(run_path, record)
 

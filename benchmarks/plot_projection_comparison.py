@@ -38,6 +38,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": total,
+                    "hardware": getattr(r, "hardware", None),
                 }
             )
 
@@ -55,6 +56,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": total,
+                    "hardware": getattr(r, "hardware", None),
                 }
             )
 
@@ -69,6 +71,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": r.runtime_seconds,
+                    "hardware": getattr(r, "hardware", None),
                 }
             )
 
@@ -83,6 +86,7 @@ def create_dataframe(
                     "model_params": r.params,
                     "train_tokens": r.train_tokens,
                     "runtime_seconds": r.runtime_seconds,
+                    "hardware": getattr(r, "hardware", None),
                 }
             )
 

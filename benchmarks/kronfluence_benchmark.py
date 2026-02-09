@@ -29,6 +29,7 @@ from benchmarks.benchmark_utils import (
     prepare_benchmark_ds_path,
     save_record,
     timestamp,
+    get_hardware_info,
 )
 from bergson.utils.utils import assert_type
 
@@ -177,6 +178,7 @@ class RunRecord:
     run_path: str
     notes: str | None
     error: str | None
+    hardware: str
 
 
 def parse_examples(value: str) -> int:
@@ -451,6 +453,7 @@ class Run:
             run_path=str(run_path),
             notes=self.run_cfg.notes,
             error=error_message,
+            hardware=get_hardware_info(),
         )
         save_record(run_path, record)
 

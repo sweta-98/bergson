@@ -17,18 +17,11 @@ This section provides indicative performance numbers for the Bergson benchmark s
    :alt: 1 GPU Benchmark
    :align: center
 
-1 GPU Configuration (Random Projection)
-~~~~~~~~~~~~~~~~~~~
+1 GPU Projection Comparison
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. image:: projection_comparison_with_projection.png
-   :alt: 1 GPU Comparison with Projection (16x16)
-   :align: center
-
-1 GPU Configuration (No Random Projection)
-~~~~~~~~~~~~~~~~~~~
-
-.. image:: projection_comparison_without_projection.png
-   :alt: 1 GPU Comparison without Projection
+.. image:: projection_comparison.png
+   :alt: 1 GPU Projection Comparison
    :align: center
 
 1 GPU In-Memory Benchmark

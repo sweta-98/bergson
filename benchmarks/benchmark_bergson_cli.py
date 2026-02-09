@@ -20,6 +20,7 @@ from benchmarks.benchmark_utils import (
     prepare_benchmark_ds_path,
     save_record,
     timestamp,
+    get_hardware_info
 )
 from bergson.config import IndexConfig
 
@@ -97,18 +98,6 @@ class RunConfig:
 
     projection_dim: int = 16
     """Dimension to project gradients to. Matches bergson default."""
-
-
-def get_hardware_info() -> str:
-    """Get hardware information string."""
-    try:
-        import torch
-
-        gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
-        gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-        return f"{platform.node()} ({gpu_count}x {gpu_name})"
-    except Exception:
-        return f"{platform.node()} (unknown)"
 
 
 def run_cli_command(cmd: list[str], description: str) -> tuple[bool, float, str]:

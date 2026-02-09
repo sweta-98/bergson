@@ -18,7 +18,12 @@ from benchmarks.benchmark_bergson import RunRecord as BergsonRecord
 from benchmarks.benchmark_bergson import load_records as load_bergson_records
 from benchmarks.benchmark_dattri import RunRecord as DattriRecord
 from benchmarks.benchmark_dattri import load_records as load_dattri_records
-from benchmarks.benchmark_utils import MODEL_SPECS, format_tokens, parse_tokens
+from benchmarks.benchmark_utils import (
+    MODEL_SPECS,
+    extract_gpu_info,
+    format_tokens,
+    parse_tokens,
+)
 
 
 def run_benchmark(
@@ -160,66 +165,57 @@ def create_comparison_dataframe(
     return pd.DataFrame(rows)
 
 
-def plot_comparison(
-    df: pd.DataFrame, output_path: Path, title_suffix: str = ""
+def plot_comparison_ax(
+    df: pd.DataFrame,
+    ax: plt.Axes,
+    title_suffix: str = "",
+    color_map: dict[str, str] | None = None,
 ) -> None:
-    """Create comparison plots."""
-    if df.empty:
-        print("No data to plot")
-        return
-
-    # Filter successful runs
+    """Plot runtime vs training tokens onto a given axes."""
     df = df[df["runtime_seconds"].notna()].copy()
-
-    # Create figure with subplots
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-    # Plot 1: Runtime vs train tokens (by model)
-    ax1 = axes[0]
     for method in df["method"].unique():
         for model_key in df["model_key"].unique():
             subset = df[(df["method"] == method) & (df["model_key"] == model_key)]
             if not subset.empty:
                 subset = subset.sort_values("train_tokens")
-                ax1.plot(
+                label = f"{method}-{model_key}"
+                kwargs: dict = {}
+                if color_map and label in color_map:
+                    kwargs["color"] = color_map[label]
+                ax.plot(
                     subset["train_tokens"],
                     subset["runtime_seconds"],
                     marker="o",
-                    label=f"{method}-{model_key}",
+                    label=label,
                     linewidth=1.5,
+                    **kwargs,
                 )
-    ax1.set_xscale("log")
-    ax1.set_yscale("log")
-    ax1.set_xlabel("Training Tokens")
-    ax1.set_ylabel("Score Runtime (seconds)")
-    ax1.set_title(f"Score Runtime by Training Tokens{title_suffix}")
-    ax1.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-    ax1.legend(fontsize="small", ncol=2)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Training Tokens")
+    ax.set_ylabel("Score Runtime (seconds)")
+    ax.set_title(f"Score Runtime by Training Tokens{title_suffix}")
+    ax.grid(
+        True,
+        which="both",
+        linestyle="--",
+        linewidth=0.5,
+        alpha=0.6,
+    )
+    ax.legend(fontsize="small", ncol=2)
 
-    # Plot 2: Runtime vs model params (by token scale)
-    ax2 = axes[1]
-    for method in df["method"].unique():
-        for train_tokens in sorted(df["train_tokens"].unique())[
-            :5
-        ]:  # Top 5 token scales
-            subset = df[(df["method"] == method) & (df["train_tokens"] == train_tokens)]
-            if not subset.empty:
-                subset = subset.sort_values("model_params")
-                ax2.plot(
-                    subset["model_params"],
-                    subset["runtime_seconds"],
-                    marker="o",
-                    label=f"{method}-{format_tokens(train_tokens)}",
-                    linewidth=1.5,
-                )
-    ax2.set_xscale("log")
-    ax2.set_yscale("log")
-    ax2.set_xlabel("Model Parameters")
-    ax2.set_ylabel("Score Runtime (seconds)")
-    ax2.set_title(f"Score Runtime by Model Size{title_suffix}")
-    ax2.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-    ax2.legend(fontsize="small", ncol=2)
 
+def plot_comparison(
+    df: pd.DataFrame,
+    output_path: Path,
+    title_suffix: str = "",
+) -> None:
+    """Create standalone comparison plot."""
+    if df.empty:
+        print("No data to plot")
+        return
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plot_comparison_ax(df, ax, title_suffix)
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=200)
@@ -428,63 +424,83 @@ class Plot:
         projection_csv = Path("runs/benchmarks/projection_comparison_1gpu.csv")
 
         if projection_csv.exists():
-            # Generate both with and without projection plots
             projection_types = [
-                ("without", "without_projection"),
                 ("with", "with_projection"),
+                ("without", "without_projection"),
             ]
 
+            # Load and save CSVs for each projection type
+            loaded: dict[str, pd.DataFrame] = {}
+            out = Path(self.plot_cfg.output_path)
             for proj_type, file_suffix in projection_types:
                 df = self.load_projection_comparison_data(projection_csv, proj_type)
-
                 if df.empty:
-                    print(f"No data for {proj_type} projection, skipping")
+                    print(f"No data for {proj_type} projection, " "skipping")
                     continue
-
-                # Save CSV
-                csv_path = (
-                    Path(self.plot_cfg.output_path) / f"{file_suffix}_comparison.csv"
-                )
-                plot_path = (
-                    Path(self.plot_cfg.output_path) / f"{file_suffix}_comparison.png"
-                )
-
+                csv_path = out / f"{file_suffix}_comparison.csv"
                 csv_path.parent.mkdir(parents=True, exist_ok=True)
                 df.to_csv(csv_path, index=False)
-                print(f"Saved {proj_type} projection comparison data to " f"{csv_path}")
+                print(f"Saved {proj_type} projection data to " f"{csv_path}")
+                loaded[proj_type] = df
 
-                # Create plots
-                if not self.plot_cfg.skip_plots:
-                    # Get unique GPU counts in the data
-                    gpu_counts = (
-                        sorted(df["num_gpus"].unique())
-                        if "num_gpus" in df.columns
-                        else [1]
-                    )
+            # Combined plot with both projection types
+            if not self.plot_cfg.skip_plots and loaded:
+                num_gpus = self.plot_cfg.num_gpus or 1
 
-                    if self.plot_cfg.num_gpus is not None:
-                        # Filter to specific GPU count
-                        gpu_counts = [self.plot_cfg.num_gpus]
+                # Extract GPU tag from data if available
+                all_dfs = list(loaded.values())
+                hw_col = pd.concat(all_dfs).get("hardware")
+                if hw_col is not None:
+                    hw_values = hw_col.dropna().unique()
+                    if len(hw_values) == 1:
+                        gpu_info = extract_gpu_info(hw_values[0])
+                        gpu_tag = gpu_info or f"{num_gpus} GPU"
+                    elif len(hw_values) > 1:
+                        gpu_tag = "mixed hardware"
+                    else:
+                        gpu_tag = f"{num_gpus} GPU"
+                else:
+                    gpu_tag = f"{num_gpus} GPU"
 
-                    for num_gpus in gpu_counts:
-                        if "num_gpus" in df.columns:
-                            gpu_df = df[df["num_gpus"] == num_gpus]
-                        else:
-                            gpu_df = df
+                panels = []
+                for proj_type, _ in projection_types:
+                    if proj_type not in loaded:
+                        continue
+                    df = loaded[proj_type]
+                    if "num_gpus" in df.columns:
+                        df = df[df["num_gpus"] == num_gpus]
+                    if not df.empty:
+                        suffix = f" ({proj_type} projection," f" {gpu_tag})"
+                        panels.append((df, suffix))
 
-                        if gpu_df.empty:
-                            print(f"No data for {num_gpus} GPU(s), skipping")
-                            continue
+                if panels:
+                    # Build a shared color map so the same
+                    # series gets the same color in each panel.
+                    all_labels: list[str] = []
+                    for pdf, _ in panels:
+                        for method in pdf["method"].unique():
+                            for mk in pdf["model_key"].unique():
+                                label = f"{method}-{mk}"
+                                if label not in all_labels:
+                                    all_labels.append(label)
+                    prop_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+                    color_map = {
+                        label: prop_cycle[i % len(prop_cycle)]
+                        for i, label in enumerate(all_labels)
+                    }
 
-                        plot_path = (
-                            Path(self.plot_cfg.output_path)
-                            / f"projection_comparison_{file_suffix}.png"
-                        )
-                        title_suffix = (
-                            f" ({proj_type} projection, {num_gpus} "
-                            f"GPU{'s' if num_gpus > 1 else ''})"
-                        )
-                        plot_comparison(gpu_df, plot_path, title_suffix)
+                    n = len(panels)
+                    fig, axes = plt.subplots(1, n, figsize=(8 * n, 6))
+                    if n == 1:
+                        axes = [axes]
+                    for ax, (pdf, suffix) in zip(axes, panels):
+                        plot_comparison_ax(pdf, ax, suffix, color_map)
+                    plt.tight_layout()
+                    plot_path = out / "projection_comparison.png"
+                    plot_path.parent.mkdir(parents=True, exist_ok=True)
+                    plt.savefig(plot_path, dpi=200)
+                    plt.close()
+                    print(f"Saved projection comparison to " f"{plot_path}")
 
         else:
             # Fallback to directory loading (original behavior)
