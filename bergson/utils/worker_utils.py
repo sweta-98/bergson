@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import cast
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,7 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     PreTrainedModel,
+    AutoConfig,
 )
 
 from bergson.config import DataConfig, IndexConfig
@@ -250,7 +252,27 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
     # In many cases the token_batch_size may be smaller than the max length allowed by
     # the model. If cfg.data.truncation is True, we use the tokenizer to truncate
     tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer or cfg.model)
-    tokenizer.model_max_length = min(tokenizer.model_max_length, cfg.token_batch_size)
+    
+    default_model_max_len = getattr(tokenizer, "model_max_length", None)
+    if (
+        default_model_max_len is not None
+        and cfg.token_batch_size > default_model_max_len
+    ):
+        raise ValueError(
+            f"Token batch size {cfg.token_batch_size} exceeds model_max_length "
+            f"({default_model_max_len}). "
+            f"Use --token_batch_size {default_model_max_len} or smaller."
+        )
+
+    max_pos_emb = getattr(
+        AutoConfig.from_pretrained(cfg.model, revision=cfg.revision),
+        "max_position_embeddings",
+        None,
+    )
+    if max_pos_emb is not None:
+        max_length = min(max_pos_emb, cfg.token_batch_size)
+    else:
+        max_length = cfg.token_batch_size
 
     remove_columns = ds.column_names if cfg.drop_columns else None
 
@@ -258,8 +280,23 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
         ds = ds.map(
             tokenize,
             batched=True,
-            fn_kwargs=dict(args=cfg.data, tokenizer=tokenizer),
+            fn_kwargs=dict(args=cfg.data, tokenizer=tokenizer, max_length=max_length),
         )
+    
+    if not cfg.data.truncation and isinstance(ds, Dataset):
+        max_doc_len = max(ds["length"])
+        if max_pos_emb is not None and max_doc_len > max_pos_emb:
+            warnings.warn(
+                f"Dataset contains a document longer than max_position_embeddings "
+                f"({max_doc_len} > {max_pos_emb}). "
+                f"Consider using --truncation."
+            )
+        elif max_doc_len > cfg.token_batch_size:
+            warnings.warn(
+                f"Dataset contains a document longer than token_batch_size "
+                f"({max_doc_len} > {cfg.token_batch_size}). "
+                f"Consider increasing --token_batch_size or using --truncation."
+            )
 
     if cfg.data.reward_column:
         assert isinstance(ds, Dataset), "Dataset required for advantage estimation"

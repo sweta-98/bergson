@@ -29,7 +29,10 @@ from benchmarks.benchmark_dattri import (
 from benchmarks.benchmark_dattri import (
     load_records as load_dattri_records,
 )
-from benchmarks.benchmark_utils import format_tokens
+from benchmarks.benchmark_utils import (
+    extract_gpu_info,
+    format_tokens,
+)
 
 BENCH_ROOT = Path("/projects/a6a/public/lucia/proj_bench")
 FIXED_BERGSON_ROOT = Path("/projects/a6a/public/lucia/proj_bench_bergson_fixedbatch")
@@ -226,12 +229,8 @@ def main(argv: list[str] | None = None) -> None:
         description="Generate projection comparison plots",
     )
     parser.add_argument(
-        "--output_csv",
-        default="docs/benchmarks/projection_comparison.csv",
-    )
-    parser.add_argument(
-        "--output_plot",
-        default="docs/benchmarks/projection_comparison.png",
+        "--output_dir",
+        default="docs/benchmarks",
     )
     args = parser.parse_args(argv)
 
@@ -277,7 +276,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"    Models: {models}")
                 print(f"    Tokens:" f" {[format_tokens(t) for t in tokens]}")
 
-    # Save combined CSV
+    # Derive hardware suffix from data
     combined = pd.concat(
         [
             fixed_df.assign(batch_strategy="fixed"),
@@ -285,13 +284,21 @@ def main(argv: list[str] | None = None) -> None:
         ],
         ignore_index=True,
     )
-    csv_path = Path(args.output_csv)
+    hw_sample = combined["hardware"].dropna().iloc[0]
+    gpu_info = extract_gpu_info(hw_sample)
+    hw_suffix = f"_{gpu_info.replace(' ', '_')}" if gpu_info else ""
+
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    # Save combined CSV
+    csv_path = out / "archive" / f"projection_comparison{hw_suffix}.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(csv_path, index=False)
     print(f"\nSaved CSV to {csv_path}")
 
     # Plot
-    plot_path = Path(args.output_plot)
+    plot_path = out / f"projection_comparison{hw_suffix}.png"
     plot_comparison(fixed_df, optimal_df, plot_path)
 
 

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -89,6 +90,171 @@ class ProjectedInnerProductAttributor(BaseInnerProductAttributor):
         return self.projector.project(test_rep, ensemble_id=ckpt_idx)
 
 
+def _get_dattri_metadata(
+    model_name: str,
+    projection_dim: int | None,
+    max_length: int,
+) -> Dict[str, Any]:
+    """Cache key metadata for dattri batch size tuning."""
+    gpu_name = "cpu"
+    gpu_mem = 0.0
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        props = torch.cuda.get_device_properties(0)
+        gpu_mem = props.total_memory / 1e9
+    return {
+        "model": model_name,
+        "projection_dim": projection_dim or 0,
+        "max_length": max_length,
+        "gpu_name": gpu_name,
+        "gpu_memory_gb": round(gpu_mem, 1),
+    }
+
+
+def _check_bs_cache(cache_file: Path, meta: Dict[str, Any]) -> int | None:
+    """Look up a cached batch size."""
+    if not cache_file.exists():
+        return None
+    with open(cache_file, "r") as f:
+        for line in f:
+            row = json.loads(line)
+            if all(row.get(k) == v for k, v in meta.items()):
+                return row.get("batch_size")
+    return None
+
+
+def _append_bs_cache(cache_file: Path, meta: Dict[str, Any], bs: int) -> None:
+    """Append a batch size to the cache."""
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    entry = {**meta, "batch_size": bs}
+    with open(cache_file, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    print(f"Cached batch_size {bs} to {cache_file}")
+
+
+def _try_dattri_batch(
+    attributor: BaseInnerProductAttributor,
+    batch_size: int,
+    seq_len: int,
+    collate_fn,
+) -> bool:
+    """Test whether a given batch size fits in memory.
+
+    Runs attributor.cache() + attribute() on a small dataset
+    to test the actual per-sample gradient computation memory.
+    """
+    gc.collect()
+
+    # Train set: batch_size examples in one batch.
+    # Test set: 1 example (minimal query).
+    train_ds = Dataset.from_dict(
+        {
+            "input_ids": [list(range(seq_len)) for _ in range(batch_size)],
+            "attention_mask": [[1] * seq_len for _ in range(batch_size)],
+        }
+    )
+    train_ds.set_format(
+        type="torch",
+        columns=["input_ids", "attention_mask"],
+    )
+    test_ds = Dataset.from_dict(
+        {
+            "input_ids": [list(range(seq_len))],
+            "attention_mask": [[1] * seq_len],
+        }
+    )
+    test_ds.set_format(
+        type="torch",
+        columns=["input_ids", "attention_mask"],
+    )
+    train_loader = torch.utils.data.DataLoader(
+        train_ds,  # type: ignore
+        batch_size=batch_size,
+        collate_fn=collate_fn,
+    )
+    test_loader = torch.utils.data.DataLoader(
+        test_ds,  # type: ignore
+        batch_size=1,
+        collate_fn=collate_fn,
+    )
+
+    try:
+        attributor.cache(train_loader)
+        with torch.no_grad():
+            attributor.attribute(train_loader, test_loader)
+        return True
+    except (
+        RuntimeError,
+        torch.cuda.OutOfMemoryError,
+    ):
+        return False
+    finally:
+        if hasattr(attributor, "full_train_rep"):
+            attributor.full_train_rep = None
+        gc.collect()
+
+
+def determine_dattri_batch_size(
+    cache_root: Path,
+    model_name: str,
+    projection_dim: int | None,
+    max_length: int,
+    attributor: BaseInnerProductAttributor,
+    collate_fn,
+    starting_batch_size: int = 128,
+    max_batch_size: int = 1024,
+) -> int:
+    """Find the largest batch size that fits in memory.
+
+    Binary search: grow until OOM or max_batch_size,
+    then use the last working size.
+    """
+    cache_file = cache_root / "dattri_batch_size_cache.jsonl"
+    meta = _get_dattri_metadata(model_name, projection_dim, max_length)
+
+    cached = _check_bs_cache(cache_file, meta)
+    if cached is not None:
+        print("Loaded optimal batch_size from" f" cache: {cached}")
+        return cached
+
+    print("Determining optimal batch size...")
+
+    current = starting_batch_size
+    last_working = None
+
+    while True:
+        if current < 1:
+            if last_working is not None:
+                current = last_working
+                break
+            raise RuntimeError("Could not fit batch_size=1 in memory.")
+
+        print(
+            f"Testing batch_size={current}...",
+            end=" ",
+            flush=True,
+        )
+        fits = _try_dattri_batch(attributor, current, max_length, collate_fn)
+
+        if fits:
+            print("fits", flush=True)
+            last_working = current
+            if current >= max_batch_size:
+                break
+            current = min(current * 2, max_batch_size)
+        else:
+            print("OOM", flush=True)
+            if last_working is not None:
+                current = last_working
+                break
+            else:
+                current = current // 2
+
+    print(f"Optimal batch_size: {current}", flush=True)
+    _append_bs_cache(cache_file, meta, current)
+    return current
+
+
 SCHEMA_VERSION = 1
 DEFAULT_TRAIN_SPLIT = "train"
 DEFAULT_EVAL_SPLIT = "validation"
@@ -111,8 +277,8 @@ class RunConfig:
     eval_sequences: int = 1
     """Target evaluation sequences."""
 
-    batch_size: int = 4
-    """Batch size for training."""
+    batch_size: int | None = None
+    """Batch size for training. Auto-tuned if not set."""
 
     max_length: int = 512
     """Maximum sequence length."""
@@ -301,72 +467,50 @@ class Run:
         eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
 
         def collate_fn(batch):
-            # Dattri expects tuples of (input_ids, labels) where
-            # labels = input_ids for language modeling
-            # Keep on CPU - dattri will handle device placement
-            # Pad sequences to same length
             max_len = max(len(item["input_ids"]) for item in batch)
             padded_input_ids = []
             for item in batch:
                 ids = item["input_ids"]
                 if len(ids) < max_len:
-                    # Pad with tokenizer.pad_token_id (same as eos for GPT-2)
                     padding = torch.zeros(max_len - len(ids), dtype=ids.dtype)
                     ids = torch.cat([ids, padding])
                 padded_input_ids.append(ids)
             input_ids = torch.stack(padded_input_ids)
-            labels = (
-                input_ids.clone()
-            )  # For language modeling, labels are the same as input_ids
+            labels = input_ids.clone()
             return (input_ids, labels)
-
-        train_loader = torch.utils.data.DataLoader(
-            train_dataset,  # type: ignore
-            batch_size=self.run_cfg.batch_size,
-            collate_fn=collate_fn,
-        )
-        test_loader = torch.utils.data.DataLoader(
-            eval_dataset,  # type: ignore
-            batch_size=self.run_cfg.batch_size,
-            collate_fn=collate_fn,
-        )
 
         # Get model device
         model_device = next(model.parameters()).device
 
         def loss_func(params, data_target_pair):
             x, y = data_target_pair
-            # Ensure data is on the same device as model
             if isinstance(x, torch.Tensor) and x.device != model_device:
                 x = x.to(model_device)
             if isinstance(y, torch.Tensor) and y.device != model_device:
                 y = y.to(model_device)
-            # functional_call returns a tuple for transformers models,
-            # extract logits
             output = torch.func.functional_call(model, params, (x,))
             if isinstance(output, tuple):
-                logits = output[0]  # First element is logits
+                logits = output[0]
             else:
                 logits = output.logits if hasattr(output, "logits") else output
             shift_logits = logits[:, :-1].contiguous()
             shift_labels = y[:, 1:].contiguous()
             loss = nn.CrossEntropyLoss()(
-                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
             )
             return loss
 
-        # Create task
         task = AttributionTask(
             loss_func=loss_func,
             model=model,
             checkpoints=model.state_dict(),
         )
 
-        # Create attributor and cache
         if self.run_cfg.projection_dim is not None:
-            print(f"Using projected attributor with dim={self.run_cfg.projection_dim}")
-            # Note: This still computes full gradients then projects, so it doesn't
-            # provide the same speedup as Bergson which projects inside the hook.
+            print(
+                "Using projected attributor with" f" dim={self.run_cfg.projection_dim}"
+            )
             attributor = ProjectedInnerProductAttributor(
                 task=task,
                 proj_dim=self.run_cfg.projection_dim,
@@ -375,11 +519,35 @@ class Run:
         else:
             attributor = BaseInnerProductAttributor(task=task, device="cuda")
 
+        # Determine batch size (not timed)
+        if self.run_cfg.batch_size is not None:
+            batch_size = self.run_cfg.batch_size
+            print(f"Using fixed batch_size: {batch_size}")
+        else:
+            batch_size = determine_dattri_batch_size(
+                cache_root=Path(".cache"),
+                model_name=spec.hf_id,
+                projection_dim=self.run_cfg.projection_dim,
+                max_length=max_length,
+                attributor=attributor,
+                collate_fn=collate_fn,
+            )
+
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,  # type: ignore
+            batch_size=batch_size,
+            collate_fn=collate_fn,
+        )
+        test_loader = torch.utils.data.DataLoader(
+            eval_dataset,  # type: ignore
+            batch_size=batch_size,
+            collate_fn=collate_fn,
+        )
+
         start_time = timestamp()
         start = time.perf_counter()
         attributor.cache(train_loader)
 
-        # Compute attributions
         print("Computing attributions...")
         with torch.no_grad():
             attributor.attribute(train_loader, test_loader)
@@ -398,7 +566,7 @@ class Run:
             dataset=self.run_cfg.dataset,
             train_split=self.run_cfg.train_split,
             eval_split=self.run_cfg.eval_split,
-            batch_size=self.run_cfg.batch_size,
+            batch_size=batch_size,
             max_length=self.run_cfg.max_length or 1024,
             num_gpus=num_gpus,
             runtime_seconds=runtime,
@@ -412,7 +580,7 @@ class Run:
         )
         save_record(run_path, record)
 
-        print(json.dumps(asdict(record), indent=2))
+        print(json.dumps(asdict(record), indent=2), flush=True)
 
         if status != "success":
             sys.exit(1)

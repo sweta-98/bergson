@@ -488,13 +488,16 @@ def pad_and_tensor(
     return padded_tokens, padded_labels
 
 
-def tokenize(batch: dict, *, args: DataConfig, tokenizer):
+def tokenize(batch: dict, *, args: DataConfig, tokenizer, max_length: int | None = None):
     """Tokenize a batch of data with `tokenizer` according to `args`."""
     kwargs = dict(
         return_attention_mask=False,
         return_length=True,
         truncation=args.truncation,
     )
+    if args.truncation and max_length is not None:
+        kwargs["max_length"] = max_length
+
     if args.completion_column:
         # We're dealing with a prompt-completion dataset
         convos = [

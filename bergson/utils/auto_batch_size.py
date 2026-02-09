@@ -31,9 +31,9 @@ def _get_system_metadata(cfg: IndexConfig) -> Dict[str, Any]:
     return {
         "model": cfg.model,
         "fsdp": cfg.fsdp,
-        "precision": getattr(cfg, "precision", "fp32"),
-        "projection_dim": getattr(cfg, "projection_dim", 0),
-        "reshape_to_square": getattr(cfg, "reshape_to_square", False),
+        "precision": cfg.precision,
+        "projection_dim": cfg.projection_dim,
+        "reshape_to_square": cfg.reshape_to_square,
         "gpu_name": gpu_name,
         "gpu_memory_gb": round(gpu_mem, 1),
     }
@@ -75,28 +75,50 @@ def _append_to_cache(
 
 
 def _try_validate(
-    model: PreTrainedModel, size: int, collector: "HookCollectorBase"
+    model: PreTrainedModel,
+    token_budget: int,
+    collector: "HookCollectorBase",
 ) -> bool:
     """
-    Returns True if the batch size fits, False otherwise.
-    Wraps the user-provided logic to handle cleanup and error catching.
+    Returns True if the token budget fits, False otherwise.
+
+    The token budget is split into multiple sequences of
+    at most max_position_embeddings tokens, matching how
+    batches are actually packed at runtime.
     """
     _clear_cache()
 
-    # Check model max length constraint immediately
     max_seq_len = getattr(model.config, "max_position_embeddings", None)
-    if max_seq_len is not None and size > max_seq_len:
-        return False
+    if max_seq_len is not None and max_seq_len > 0:
+        seq_len = min(token_budget, max_seq_len)
+    else:
+        seq_len = token_budget
+    num_seqs = max(1, token_budget // seq_len)
 
     try:
-        # Create random tokens
-        random_tokens = torch.randint(
-            0, 10, (1, size), device=model.device, dtype=torch.long
+        input_ids = torch.randint(
+            0,
+            10,
+            (num_seqs, seq_len),
+            device=model.device,
+            dtype=torch.long,
+        )
+        labels = torch.randint(
+            0,
+            10,
+            (num_seqs, seq_len),
+            device=model.device,
+            dtype=torch.long,
         )
 
-        # Run the collector pass
         with collector:
-            loss = model(random_tokens).logits[0, 0, 0].float()
+            logits = model(input_ids).logits
+            shift_logits = logits[:, :-1].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
+            loss = torch.nn.functional.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+            )
             loss.backward()
             model.zero_grad()
 
@@ -105,7 +127,6 @@ def _try_validate(
     except (RuntimeError, ValueError, torch.cuda.OutOfMemoryError):
         return False
     finally:
-        # Ensure gradients/graphs are wiped before next attempt
         model.zero_grad(set_to_none=True)
         _clear_cache()
 
@@ -136,11 +157,6 @@ def determine_batch_size(
 
     print("Determining optimal batch size via binary search...")
 
-    # Setup Bounds
-    max_pos = getattr(model.config, "max_position_embeddings", None)
-    if max_pos and starting_batch_size > max_pos:
-        starting_batch_size = max_pos
-
     current_size = starting_batch_size
     last_working_size = None
 
@@ -150,33 +166,26 @@ def determine_batch_size(
             if last_working_size is not None:
                 current_size = last_working_size
                 break
-            raise RuntimeError("Could not fit even token_batch_size=16 in memory.")
+            raise RuntimeError("Could not fit even token_batch_size=16" " in memory.")
 
-        print(f"Testing batch size: {current_size}...", end=" ", flush=True)
+        print(
+            f"Testing batch size: {current_size}...",
+            end=" ",
+            flush=True,
+        )
         is_success = _try_validate(model, current_size, collector)
 
         if is_success:
             print("✓ Fits")
             last_working_size = current_size
-
-            # Growth Phase: Try next power of 2
-            next_size = current_size * 2
-
-            # Stop if we exceed model max length
-            if max_pos and next_size > max_pos:
-                break
-
-            current_size = next_size
+            current_size = current_size * 2
         else:
             print("✗ OOM / Too Large")
 
             if last_working_size is not None:
-                # We were growing and just hit the ceiling,
-                # so the last one was the winner.
                 current_size = last_working_size
                 break
             else:
-                # We haven't found a working size yet (Shrink Phase)
                 current_size = current_size // 2
 
     print(f"Largest viable batch size found: {current_size}")
