@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import platform
 import subprocess
 import sys
 import time
@@ -15,12 +14,12 @@ from simple_parsing import ArgumentParser, ConflictResolution, field
 
 from benchmarks.benchmark_utils import (
     MODEL_SPECS,
+    get_hardware_info,
     get_run_path,
     parse_tokens,
     prepare_benchmark_ds_path,
     save_record,
     timestamp,
-    get_hardware_info
 )
 from bergson.config import IndexConfig
 
@@ -268,7 +267,8 @@ class Run:
             query_cfg = IndexConfig(**json.load(f))
             determined_batch_size = query_cfg.token_batch_size
         print(
-            f"Using token_batch_size: {determined_batch_size} (determined before timing)"
+            f"Using token_batch_size: {determined_batch_size}"
+            " (determined before timing)"
         )
 
         # Common args for timed commands - use explicit batch size

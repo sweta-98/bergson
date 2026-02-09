@@ -12,7 +12,6 @@ from matplotlib import pyplot as plt
 from benchmarks.benchmark_bergson import RunRecord, load_records
 from benchmarks.benchmark_utils import (
     extract_gpu_info,
-    format_tokens,
     get_hardware_info,
 )
 
@@ -60,7 +59,7 @@ def plot_inmem_benchmark(df: pd.DataFrame, output_path: Path, config_str: str) -
         return
 
     # Create figure with subplots
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     fig.suptitle(
         f"Bergson In-Memory Benchmark ({config_str})",
         fontsize=16,
@@ -93,33 +92,8 @@ def plot_inmem_benchmark(df: pd.DataFrame, output_path: Path, config_str: str) -
     ax1.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
     ax1.legend(fontsize=10)
 
-    # Plot 2: Score runtime vs model params (by token scale)
-    ax2 = axes[1]
-    for train_tokens in sorted(df["train_tokens"].unique())[:5]:
-        subset = df[df["train_tokens"] == train_tokens]
-        subset = subset.sort_values("model_params")
-        if not subset.empty:
-            ax2.plot(
-                subset["model_params"],
-                subset["score_seconds"],
-                marker="o",
-                label=format_tokens(train_tokens),
-                linewidth=2,
-            )
-    ax2.set_xscale("log")
-    ax2.set_yscale("log")
-    ax2.set_xlabel("Model Parameters", fontsize=12)
-    ax2.set_ylabel("Score Runtime (seconds)", fontsize=12)
-    ax2.set_title(
-        "In-Memory: Score Runtime Scaling by Model Size",
-        fontsize=14,
-        fontweight="bold",
-    )
-    ax2.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-    ax2.legend(fontsize=10)
-
-    # Plot 3: Build vs Score breakdown
-    ax3 = axes[2]
+    # Plot 2: Build vs Score breakdown
+    ax3 = axes[1]
     for model_key in df["model_key"].unique():
         subset = df[df["model_key"] == model_key]
         subset = subset.sort_values("train_tokens")
