@@ -1,6 +1,6 @@
+import warnings
 from pathlib import Path
 from typing import cast
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -12,11 +12,11 @@ from datasets import (
 from peft import PeftConfig, PeftModel, get_peft_model_state_dict
 from torch.distributed.fsdp import fully_shard
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
     PreTrainedModel,
-    AutoConfig,
 )
 
 from bergson.config import DataConfig, IndexConfig
@@ -216,29 +216,63 @@ def filter_by_max_tokens(
     ds: Dataset | IterableDataset, cfg: IndexConfig
 ) -> Dataset | IterableDataset:
     """Filter the dataset by the max tokens limit. This is an experimental
-    benchmarking feature that may be removed in the future."""
+    benchmarking feature that may be removed in the future.
+
+    If the dataset has fewer tokens than ``max_tokens``, rows are
+    repeated (tiled) until the budget is met so that benchmarks
+    always process the requested number of tokens regardless of
+    the on-disk dataset size.
+    """
     if cfg.max_tokens is None:
         return ds
 
     if isinstance(ds, IterableDataset):
         raise ValueError("max_tokens is not supported for IterableDataset")
 
-    total_tokens = 0
-    indices_to_keep = []
-    for idx, length in enumerate(ds["length"]):
-        if total_tokens + length > cfg.max_tokens:
-            break
-        indices_to_keep.append(idx)
-        total_tokens += length
+    lengths = ds["length"]
+    dataset_tokens = sum(lengths)
 
-    if indices_to_keep:
-        ds = ds.select(indices_to_keep)
-        print(
-            f"Filtered dataset to {len(indices_to_keep)} examples "
-            f"({total_tokens} tokens) due to max_tokens limit."
-        )
+    if dataset_tokens >= cfg.max_tokens:
+        # Dataset is large enough: take a prefix.
+        total_tokens = 0
+        indices_to_keep: list[int] = []
+        for idx, length in enumerate(lengths):
+            if total_tokens + length > cfg.max_tokens:
+                break
+            indices_to_keep.append(idx)
+            total_tokens += length
+
+        if indices_to_keep:
+            ds = ds.select(indices_to_keep)
+            print(
+                f"Filtered dataset to "
+                f"{len(indices_to_keep)} examples "
+                f"({total_tokens} tokens) "
+                f"due to max_tokens limit."
+            )
+        else:
+            print("Warning: No examples fit within " "max_tokens limit.")
     else:
-        print("Warning: No examples fit within max_tokens limit.")
+        # Dataset is too small: tile rows to fill budget.
+        n = len(ds)
+        full_repeats = cfg.max_tokens // dataset_tokens
+        indices = list(range(n)) * full_repeats
+        total_tokens = dataset_tokens * full_repeats
+
+        # Fill the remainder with a partial pass.
+        for idx in range(n):
+            if total_tokens + lengths[idx] > cfg.max_tokens:
+                break
+            indices.append(idx)
+            total_tokens += lengths[idx]
+
+        ds = ds.select(indices)
+        print(
+            f"Tiled dataset ~{full_repeats}x to "
+            f"{len(indices)} examples "
+            f"({total_tokens} tokens) "
+            f"to reach max_tokens={cfg.max_tokens}."
+        )
 
     return ds
 
@@ -252,7 +286,7 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
     # In many cases the token_batch_size may be smaller than the max length allowed by
     # the model. If cfg.data.truncation is True, we use the tokenizer to truncate
     tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer or cfg.model)
-    
+
     default_model_max_len = getattr(tokenizer, "model_max_length", None)
     if (
         default_model_max_len is not None
@@ -282,7 +316,7 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
             batched=True,
             fn_kwargs=dict(args=cfg.data, tokenizer=tokenizer, max_length=max_length),
         )
-    
+
     if not cfg.data.truncation and isinstance(ds, Dataset):
         max_doc_len = max(ds["length"])
         if max_pos_emb is not None and max_doc_len > max_pos_emb:

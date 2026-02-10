@@ -30,6 +30,8 @@ Don't keep default run path values inside low level code - if a module calls ano
 
 Don't save data to a directory that is not in the .gitignore - especially the data/ directory.
 
+Save large output/run directories to `/projects/a6a/public/lucia` to avoid running out of disk space on the home filesystem.
+
 Don't remove large datasets from the HF cache without asking.
 
 You can call CLI commands without prefixing `python -m`, like `bergson build`.

@@ -10,7 +10,7 @@ from torch import Tensor, nn
 from transformers import PreTrainedModel
 
 if TYPE_CHECKING:
-    from bergson.collector.gradient_collectors import GradientCollector
+    pass
 
 
 T = TypeVar("T")

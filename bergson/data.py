@@ -488,7 +488,9 @@ def pad_and_tensor(
     return padded_tokens, padded_labels
 
 
-def tokenize(batch: dict, *, args: DataConfig, tokenizer, max_length: int | None = None):
+def tokenize(
+    batch: dict, *, args: DataConfig, tokenizer, max_length: int | None = None
+):
     """Tokenize a batch of data with `tokenizer` according to `args`."""
     kwargs = dict(
         return_attention_mask=False,

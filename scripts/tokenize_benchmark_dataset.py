@@ -11,9 +11,7 @@ from datasets import load_dataset
 from bergson.config import DataConfig, IndexConfig
 from bergson.utils.worker_utils import setup_data_pipeline
 
-OUTPUT_PATH = Path(
-    "/projects/a6a/public/lucia/SmolLM2-135M-10B-tokenized"
-)
+OUTPUT_PATH = Path("/projects/a6a/public/lucia/SmolLM2-135M-10B-tokenized")
 NUM_EXAMPLES = 100_000
 
 
@@ -52,12 +50,8 @@ def main():
     ds.save_to_disk(str(OUTPUT_PATH))
 
     total_tokens = sum(len(tokens) for tokens in ds["input_ids"])
-    num_long = sum(
-        1 for length in ds["length"] if length >= 1024
-    )
-    long_tokens = sum(
-        length for length in ds["length"] if length >= 1024
-    )
+    num_long = sum(1 for length in ds["length"] if length >= 1024)
+    long_tokens = sum(length for length in ds["length"] if length >= 1024)
     print(f"\nTokenized dataset saved to {OUTPUT_PATH}")
     print(f"  Total examples: {len(ds):,}")
     print(f"  Total tokens: {total_tokens:,}")

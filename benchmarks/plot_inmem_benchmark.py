@@ -1,4 +1,9 @@
-"""Generate plots from Bergson in-memory benchmark results."""
+"""Generate a combined plot from Bergson in-memory benchmarks.
+
+Produces a single 1xN figure where each subplot shows build and
+score runtime by training tokens, broken down by model. One
+subplot per GPU/hardware configuration.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +31,10 @@ def create_inmem_dataframe(
         if r.status == "success":
             # Prefer hardware from the record; fall back to
             # current machine for old records without it.
-            hw = getattr(r, "hardware", None) or get_hardware_info()
+            hw = (
+                getattr(r, "hardware", None)
+                or get_hardware_info()
+            )
             rows.append(
                 {
                     "model_key": r.model_key,
@@ -41,9 +49,15 @@ def create_inmem_dataframe(
                     "run_path": r.run_path,
                     "num_gpus": r.num_gpus,
                     "hardware": hw,
-                    "gpu_name": getattr(r, "gpu_name", None),
-                    "num_gpus_available": getattr(r, "num_gpus_available", None),
-                    "gpu_vram_gb": getattr(r, "gpu_vram_gb", None),
+                    "gpu_name": getattr(
+                        r, "gpu_name", None
+                    ),
+                    "num_gpus_available": getattr(
+                        r, "num_gpus_available", None
+                    ),
+                    "gpu_vram_gb": getattr(
+                        r, "gpu_vram_gb", None
+                    ),
                     "token_batch_size": r.token_batch_size,
                     "projection_dim": r.projection_dim,
                 }
@@ -52,53 +66,17 @@ def create_inmem_dataframe(
     return pd.DataFrame(rows)
 
 
-def plot_inmem_benchmark(df: pd.DataFrame, output_path: Path, config_str: str) -> None:
-    """Create plots for in-memory benchmark results."""
-    if df.empty:
-        print("No data to plot")
-        return
-
-    # Create figure with subplots
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    fig.suptitle(
-        f"Bergson In-Memory Benchmark ({config_str})",
-        fontsize=16,
-        fontweight="bold",
-        y=0.995,
-    )
-
-    # Plot 1: Score runtime vs train tokens (by model)
-    ax1 = axes[0]
-    for model_key in df["model_key"].unique():
+def _plot_build_score(
+    ax: plt.Axes,
+    df: pd.DataFrame,
+    title: str,
+) -> None:
+    """Plot build and score runtime on a single axes."""
+    for model_key in sorted(df["model_key"].unique()):
         subset = df[df["model_key"] == model_key]
         subset = subset.sort_values("train_tokens")
-        if not subset.empty:
-            ax1.plot(
-                subset["train_tokens"],
-                subset["score_seconds"],
-                marker="o",
-                label=model_key,
-                linewidth=2,
-            )
-    ax1.set_xscale("log")
-    ax1.set_yscale("log")
-    ax1.set_xlabel("Training Tokens", fontsize=12)
-    ax1.set_ylabel("Score Runtime (seconds)", fontsize=12)
-    ax1.set_title(
-        "In-Memory: Score Runtime vs Training Tokens",
-        fontsize=14,
-        fontweight="bold",
-    )
-    ax1.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-    ax1.legend(fontsize=10)
-
-    # Plot 2: Build vs Score breakdown
-    ax3 = axes[1]
-    for model_key in df["model_key"].unique():
-        subset = df[df["model_key"] == model_key]
-        subset = subset.sort_values("train_tokens")
-        if not subset.empty and subset["build_seconds"].notna().any():
-            ax3.plot(
+        if subset["build_seconds"].notna().any():
+            ax.plot(
                 subset["train_tokens"],
                 subset["build_seconds"],
                 marker="^",
@@ -106,8 +84,8 @@ def plot_inmem_benchmark(df: pd.DataFrame, output_path: Path, config_str: str) -
                 linewidth=2,
                 linestyle="--",
             )
-        if not subset.empty and subset["score_seconds"].notna().any():
-            ax3.plot(
+        if subset["score_seconds"].notna().any():
+            ax.plot(
                 subset["train_tokens"],
                 subset["score_seconds"],
                 marker="D",
@@ -115,127 +93,213 @@ def plot_inmem_benchmark(df: pd.DataFrame, output_path: Path, config_str: str) -
                 linewidth=2,
                 linestyle=":",
             )
-    ax3.set_xscale("log")
-    ax3.set_yscale("log")
-    ax3.set_xlabel("Training Tokens", fontsize=12)
-    ax3.set_ylabel("Runtime (seconds)", fontsize=12)
-    ax3.set_title(
-        "In-Memory: Build vs. Score",
-        fontsize=14,
-        fontweight="bold",
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Training Tokens", fontsize=12)
+    ax.set_ylabel("Runtime (seconds)", fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.grid(
+        True,
+        which="both",
+        linestyle="--",
+        linewidth=0.5,
+        alpha=0.6,
     )
-    ax3.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
-    ax3.legend(fontsize=9, ncol=2)
+    ax.legend(fontsize=8, ncol=2)
+
+
+def plot_inmem_benchmark(
+    panels: list[tuple[pd.DataFrame, str]],
+    figure_path: Path,
+    suptitle: str,
+) -> None:
+    """Create a combined 1xN plot, one subplot per config."""
+    if not panels:
+        print("No data to plot")
+        return
+
+    ncols = len(panels)
+    fig, axes = plt.subplots(
+        1, ncols, figsize=(7 * ncols, 6)
+    )
+    if ncols == 1:
+        axes = [axes]
+
+    fig.suptitle(
+        suptitle,
+        fontsize=16,
+        fontweight="bold",
+        y=0.995,
+    )
+
+    for ax, (df, title) in zip(axes, panels):
+        _plot_build_score(ax, df, title)
 
     plt.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    figure_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(figure_path, dpi=200, bbox_inches="tight")
     plt.close()
+    print(f"Saved in-memory benchmark plot to {figure_path}")
+
+
+def _gpu_name_from_df(
+    df: pd.DataFrame | None,
+) -> str:
+    """Extract GPU name (without Nx prefix) from a df."""
+    if df is None or df.empty:
+        return "unknown"
+    hw_col = df["hardware"].dropna()
+    if hw_col.empty:
+        return "unknown"
+    gpu_info = extract_gpu_info(hw_col.iloc[0])
+    if gpu_info:
+        parts = gpu_info.split(" ", 1)
+        if len(parts) == 2 and parts[0].endswith("x"):
+            return parts[1]
+        return gpu_info
+    return "unknown"
+
+
+def _load_csv(path: Path) -> pd.DataFrame:
+    """Load a CSV file into a dataframe."""
+    if not path.exists():
+        print(f"CSV not found: {path}", file=sys.stderr)
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    print(f"Loaded {len(df)} rows from {path}")
+    return df
+
+
+def _load_run_root(
+    run_root: Path, num_gpus: int | None = None
+) -> pd.DataFrame:
+    """Load records from a run root directory."""
+    if not run_root.exists():
+        print(
+            f"Run root not found: {run_root}",
+            file=sys.stderr,
+        )
+        return pd.DataFrame()
+    records = load_records(run_root)
+    if not records:
+        print(
+            f"No records in {run_root}", file=sys.stderr
+        )
+        return pd.DataFrame()
+    df = create_inmem_dataframe(records)
+    if num_gpus is not None:
+        df = df[df["num_gpus"] == num_gpus]
+    print(f"Loaded {len(df)} runs from {run_root}")
+    return df
+
+
+def _parse_source(
+    value: str,
+) -> tuple[str, int | None, Path]:
+    """Parse a SOURCE argument: 'NUM_GPUS:PATH'.
+
+    Returns (type, num_gpus, path) where type is
+    'csv' or 'dir'.
+    """
+    if ":" not in value:
+        raise argparse.ArgumentTypeError(
+            f"Expected NUM_GPUS:PATH, got '{value}'"
+        )
+    gpu_str, path_str = value.split(":", 1)
+    num_gpus = int(gpu_str)
+    path = Path(path_str)
+    return (
+        "csv" if path.suffix == ".csv" else "dir",
+        num_gpus,
+        path,
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Generate plots from Bergson in-memory benchmark results",
+        description="Generate combined in-memory "
+        "benchmark plot. Each --source is NUM_GPUS:PATH "
+        "where PATH is a CSV or run root directory.",
     )
     parser.add_argument(
-        "--run_root",
+        "--source",
+        action="append",
         required=True,
-        help="Root directory containing in-memory benchmark results",
+        help=(
+            "GPU count and data source as NUM_GPUS:PATH. "
+            "PATH can be a .csv file or a run root dir. "
+            "Repeat for multiple GPU configs."
+        ),
     )
     parser.add_argument(
         "--output_path",
         required=True,
-        help="Path to save CSV data",
-    )
-    parser.add_argument(
-        "--filter_num_gpus",
-        type=int,
-        default=None,
-        help="Filter to only include runs with this GPU count",
+        help="Directory to save figure and CSVs",
     )
 
     args = parser.parse_args(argv)
-
-    # Load records
-    run_root = Path(args.run_root)
-    if not run_root.exists():
-        print(
-            f"Error: Run root directory does not exist: {run_root}, not plotting",
-            file=sys.stderr,
-        )
-        return
-
-    records = load_records(run_root)
-
-    if not records:
-        print(f"Warning: No benchmark records found in {run_root}", file=sys.stderr)
-        return
-
-    print(f"Found {len(records)} benchmark records")
-
-    # Create dataframe
-    df = create_inmem_dataframe(records)
-
-    if df.empty:
-        print("Warning: No successful benchmark runs found", file=sys.stderr)
-        return
-
-    print(f"Loaded {len(df)} successful benchmark runs")
-
-    # Filter by GPU count if specified
-    if args.filter_num_gpus is not None:
-        df = df[df["num_gpus"] == args.filter_num_gpus]
-        print(f"Filtered to {len(df)} runs with {args.filter_num_gpus} GPU(s)")
-        if df.empty:
-            print(
-                f"Warning: No runs found with {args.filter_num_gpus} GPU(s)",
-                file=sys.stderr,
-            )
-            return
-
-    # Group by (num_gpus, hardware) and create separate plots
-    groups = df.groupby(["num_gpus", "hardware"], dropna=False)
-
-    if len(groups) == 0:
-        print("Warning: No data to plot after grouping", file=sys.stderr)
-        return
-
-    print(f"\nFound {len(groups)} different GPU/hardware configurations:")
-    for (num_gpus, hardware), group_df in groups:
-        print(f"  - {num_gpus} GPU(s), {hardware}: {len(group_df)} runs")
-
-    # Generate plots for each group
     output_path = Path(args.output_path)
 
-    for (num_gpus, hardware), group_df in groups:
-        # Create title suffix with GPU/hardware info
-        gpu_info = extract_gpu_info(hardware)
-        print(f"GPU info: {gpu_info}")
-        print(f"Num GPUs: {num_gpus}")
-        if gpu_info and gpu_info.startswith("8x") and num_gpus != 8:
-            gpu_info = gpu_info.replace("8x", f"{num_gpus}x")
-        print(f"GPU info: {gpu_info}")
+    # Load data for each GPU config
+    gpu_data: dict[int, pd.DataFrame] = {}
+    for source in args.source:
+        src_type, num_gpus, path = _parse_source(source)
+        if src_type == "csv":
+            df = _load_csv(path)
+        else:
+            df = _load_run_root(path, num_gpus=num_gpus)
+        if df is not None and not df.empty:
+            gpu_data[num_gpus] = df
 
-        config_str = gpu_info or f"{num_gpus} GPU{'s' if num_gpus > 1 else ''}"
+    if not gpu_data:
+        print("No data loaded.", file=sys.stderr)
+        sys.exit(1)
 
-        plot_path = output_path / f"inmem_benchmark_{config_str.replace(' ', '_')}.png"
+    # Save CSVs and build panels
+    panels: list[tuple[pd.DataFrame, str]] = []
+    hw_names: set[str] = set()
+
+    for num_gpus in sorted(gpu_data):
+        df = gpu_data[num_gpus]
+        hw = _gpu_name_from_df(df)
+        if hw != "unknown":
+            hw_names.add(hw)
+
+        label = hw.replace(" ", "_")
         csv_path = (
             output_path
             / "archive"
-            / f"inmem_benchmark_{config_str.replace(' ', '_')}.csv"
+            / f"inmem_benchmark_{num_gpus}x_{label}.csv"
         )
-
-        # Save CSV for this group
         csv_path.parent.mkdir(parents=True, exist_ok=True)
-        group_df.to_csv(csv_path, index=False)
-        print(f"\nSaved CSV for {num_gpus} GPU(s) to {csv_path}")
+        df.to_csv(csv_path, index=False)
+        print(f"Saved {num_gpus}-GPU CSV to {csv_path}")
 
-        # Create plot for this group
-        plot_inmem_benchmark(group_df, plot_path, config_str)
-        print(f"Saved in-memory benchmark plot to {plot_path}")
+        gpu_tag = (
+            f"{num_gpus}x {hw}"
+            if hw != "unknown"
+            else f"{num_gpus} GPU"
+        )
+        title = f"{gpu_tag}: Build vs Score"
+        panels.append((df, title))
 
-    print(
-        f"\nGenerated {len(groups)} separate plots (one per GPU/hardware configuration)"
+    # Figure title
+    title_hw = (
+        " & ".join(sorted(hw_names))
+        if hw_names
+        else "unknown"
+    )
+    file_hw = (
+        "_".join(sorted(hw_names)).replace(" ", "_")
+    )
+
+    figure_path = (
+        output_path / f"inmem_benchmark_{file_hw}.png"
+    )
+    plot_inmem_benchmark(
+        panels,
+        figure_path,
+        f"Bergson In-Memory Benchmark ({title_hw})",
     )
 
 

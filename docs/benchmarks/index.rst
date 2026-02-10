@@ -3,18 +3,11 @@ Benchmarks
 
 This section provides indicative performance numbers for the Bergson benchmark suite. Performance will vary based on your hardware configuration and choice of hyperparameters. Indicative performance for dattri provided where possible.
 
-8 GPU Configuration (CLI)
-~~~~~~~~~~~~~~~~~~~~~~~~~
+CLI Benchmark
+~~~~~~~~~~~~~
 
-.. image:: cli_benchmark_8x_NVIDIA_H100_80GB_HBM3.png
-   :alt: 8 GPU Benchmark
-   :align: center
-
-1 GPU Configuration (CLI)
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. image:: cli_benchmark_1x_NVIDIA_H100_80GB_HBM3.png
-   :alt: 1 GPU Benchmark
+.. image:: cli_benchmark_NVIDIA_GH200_120GB.png
+   :alt: CLI Benchmark
    :align: center
 
 1 GPU Projection Comparison
@@ -24,11 +17,11 @@ This section provides indicative performance numbers for the Bergson benchmark s
    :alt: 1 GPU Projection Comparison
    :align: center
 
-1 GPU In-Memory Benchmark
-~~~~~~~~~~~~~~~~~~~~~~~~~
+In-Memory Benchmark
+~~~~~~~~~~~~~~~~~~~
 
-.. image:: inmem_benchmark_1x_NVIDIA_H100_80GB_HBM3.png
-   :alt: 1 GPU In-Memory Benchmark
+.. image:: inmem_benchmark_NVIDIA_GH200_120GB_NVIDIA_H100_80GB_HBM3.png
+   :alt: In-Memory Benchmark
    :align: center
 
 Running Your Own Benchmarks

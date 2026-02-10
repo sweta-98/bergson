@@ -1,7 +1,8 @@
-"""Generate a combined 1-GPU vs 8-GPU plot from CLI benchmarks.
+"""Generate a combined multi-GPU plot from CLI benchmarks.
 
-Produces a single 1x2 figure where each subplot shows build and
-score runtime by training tokens, broken down by model.
+Produces a single 1xN figure where each subplot shows build and
+score runtime by training tokens, broken down by model. One
+subplot per GPU count.
 """
 
 from __future__ import annotations
@@ -91,29 +92,24 @@ def _plot_build_score(
 
 
 def plot_cli_benchmark(
-    df_1gpu: pd.DataFrame | None,
-    df_8gpu: pd.DataFrame | None,
+    panels: list[tuple[pd.DataFrame, str]],
     figure_path: Path,
-    hardware_str: str,
+    suptitle: str,
 ) -> None:
-    """Create a combined 1x2 plot (1-GPU left, 8-GPU right)."""
-    panels: list[tuple[pd.DataFrame, str]] = []
-    if df_1gpu is not None and not df_1gpu.empty:
-        panels.append((df_1gpu, "1 GPU: Build vs Score"))
-    if df_8gpu is not None and not df_8gpu.empty:
-        panels.append((df_8gpu, "8 GPU: Build vs Score"))
-
+    """Create a combined 1xN plot, one subplot per GPU count."""
     if not panels:
         print("No data to plot")
         return
 
     ncols = len(panels)
-    fig, axes = plt.subplots(1, ncols, figsize=(7 * ncols, 6))
+    fig, axes = plt.subplots(
+        1, ncols, figsize=(7 * ncols, 6), sharey=True,
+    )
     if ncols == 1:
         axes = [axes]
 
     fig.suptitle(
-        f"Bergson CLI Benchmark ({hardware_str})",
+        suptitle,
         fontsize=16,
         fontweight="bold",
         y=0.995,
@@ -150,10 +146,7 @@ def _gpu_name_from_df(
 def _load_csv(path: Path) -> pd.DataFrame:
     """Load a CSV file into a dataframe."""
     if not path.exists():
-        print(
-            f"CSV not found: {path}",
-            file=sys.stderr,
-        )
+        print(f"CSV not found: {path}", file=sys.stderr)
         return pd.DataFrame()
     df = pd.read_csv(path)
     print(f"Loaded {len(df)} rows from {path}")
@@ -175,33 +168,52 @@ def _load_run_root(run_root: Path, num_gpus: int | None = None) -> pd.DataFrame:
     df = create_cli_dataframe(records)
     if num_gpus is not None:
         df = df[df["num_gpus"] == num_gpus]
+
+    # Keep only the latest run per (model, train_tokens)
+    if not df.empty:
+        df = df.sort_values("run_path").drop_duplicates(
+            subset=["model_key", "train_tokens"],
+            keep="last",
+        )
+
     print(f"Loaded {len(df)} runs from {run_root}")
     return df
 
 
+def _parse_source(
+    value: str,
+) -> tuple[str, int | None, Path]:
+    """Parse a SOURCE argument: 'NUM_GPUS:PATH'.
+
+    Returns (type, num_gpus, path) where type is 'csv' or 'dir'.
+    """
+    if ":" not in value:
+        raise argparse.ArgumentTypeError(f"Expected NUM_GPUS:PATH, got '{value}'")
+    gpu_str, path_str = value.split(":", 1)
+    num_gpus = int(gpu_str)
+    path = Path(path_str)
+    return (
+        "csv" if path.suffix == ".csv" else "dir",
+        num_gpus,
+        path,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description=("Generate combined 1-GPU vs 8-GPU CLI " "benchmark plot"),
+        description="Generate combined multi-GPU CLI "
+        "benchmark plot. Each --source is NUM_GPUS:PATH "
+        "where PATH is a CSV or run root directory.",
     )
     parser.add_argument(
-        "--csv_1gpu",
-        default=None,
-        help="CSV file with 1-GPU benchmark data",
-    )
-    parser.add_argument(
-        "--csv_8gpu",
-        default=None,
-        help="CSV file with 8-GPU benchmark data",
-    )
-    parser.add_argument(
-        "--run_root_1gpu",
-        default=None,
-        help=("Run root directory for 1-GPU data " "(alternative to --csv_1gpu)"),
-    )
-    parser.add_argument(
-        "--run_root_8gpu",
-        default=None,
-        help=("Run root directory for 8-GPU data " "(alternative to --csv_8gpu)"),
+        "--source",
+        action="append",
+        required=True,
+        help=(
+            "GPU count and data source as NUM_GPUS:PATH. "
+            "PATH can be a .csv file or a run root dir. "
+            "Repeat for multiple GPU configs."
+        ),
     )
     parser.add_argument(
         "--output_path",
@@ -212,52 +224,49 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     output_path = Path(args.output_path)
 
-    # Load 1-GPU data
-    df_1gpu: pd.DataFrame | None = None
-    if args.csv_1gpu:
-        df_1gpu = _load_csv(Path(args.csv_1gpu))
-    elif args.run_root_1gpu:
-        df_1gpu = _load_run_root(Path(args.run_root_1gpu), num_gpus=1)
+    # Load data for each GPU config
+    gpu_data: dict[int, pd.DataFrame] = {}
+    for source in args.source:
+        src_type, num_gpus, path = _parse_source(source)
+        if src_type == "csv":
+            df = _load_csv(path)
+        else:
+            df = _load_run_root(path, num_gpus=num_gpus)
+        if df is not None and not df.empty:
+            gpu_data[num_gpus] = df
 
-    # Load 8-GPU data
-    df_8gpu: pd.DataFrame | None = None
-    if args.csv_8gpu:
-        df_8gpu = _load_csv(Path(args.csv_8gpu))
-    elif args.run_root_8gpu:
-        df_8gpu = _load_run_root(Path(args.run_root_8gpu), num_gpus=8)
-
-    if (df_1gpu is None or df_1gpu.empty) and (df_8gpu is None or df_8gpu.empty):
-        print(
-            "No data loaded. Provide --csv_1gpu/--csv_8gpu "
-            "or --run_root_1gpu/--run_root_8gpu.",
-            file=sys.stderr,
-        )
+    if not gpu_data:
+        print("No data loaded.", file=sys.stderr)
         sys.exit(1)
 
-    # Derive hardware per dataset
-    hw_1gpu = _gpu_name_from_df(df_1gpu)
-    hw_8gpu = _gpu_name_from_df(df_8gpu)
+    # Save CSVs and build panels
+    panels: list[tuple[pd.DataFrame, str]] = []
+    hw_names: set[str] = set()
 
-    # Save CSVs with per-dataset hardware names
-    if df_1gpu is not None and not df_1gpu.empty:
-        label = hw_1gpu.replace(" ", "_")
-        csv_1 = output_path / f"cli_benchmark_1x_{label}.csv"
-        df_1gpu.to_csv(csv_1, index=False)
-        print(f"Saved 1-GPU CSV to {csv_1}")
+    for num_gpus in sorted(gpu_data):
+        df = gpu_data[num_gpus]
+        hw = _gpu_name_from_df(df)
+        if hw != "unknown":
+            hw_names.add(hw)
 
-    if df_8gpu is not None and not df_8gpu.empty:
-        label = hw_8gpu.replace(" ", "_")
-        csv_8 = output_path / f"cli_benchmark_8x_{label}.csv"
-        df_8gpu.to_csv(csv_8, index=False)
-        print(f"Saved 8-GPU CSV to {csv_8}")
+        label = hw.replace(" ", "_")
+        csv_path = output_path / f"cli_benchmark_{num_gpus}x_{label}.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"Saved {num_gpus}-GPU CSV to {csv_path}")
 
-    # Figure title: combine hardware names if different
-    hw_names = sorted({n for n in (hw_1gpu, hw_8gpu) if n != "unknown"})
-    title_hw = " & ".join(hw_names) if hw_names else "unknown"
-    file_hw = "_".join(hw_names).replace(" ", "_")
+        title = f"{num_gpus} GPU: Build vs Score"
+        panels.append((df, title))
+
+    # Figure title
+    title_hw = " & ".join(sorted(hw_names)) if hw_names else "unknown"
+    file_hw = "_".join(sorted(hw_names)).replace(" ", "_")
 
     figure_path = output_path / f"cli_benchmark_{file_hw}.png"
-    plot_cli_benchmark(df_1gpu, df_8gpu, figure_path, title_hw)
+    plot_cli_benchmark(
+        panels,
+        figure_path,
+        f"Bergson CLI Benchmark ({title_hw})",
+    )
 
 
 if __name__ == "__main__":

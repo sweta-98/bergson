@@ -25,11 +25,11 @@ from transformers import AutoModelForCausalLM
 
 from benchmarks.benchmark_utils import (
     MODEL_SPECS,
+    get_hardware_info,
     get_run_path,
     prepare_benchmark_ds_path,
     save_record,
     timestamp,
-    get_hardware_info,
 )
 from bergson.utils.utils import assert_type
 
