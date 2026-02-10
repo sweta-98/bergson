@@ -206,7 +206,7 @@ def plot_comparison(
         ),
     ]
 
-    fig, axes = plt.subplots(1, 4, figsize=(24, 6))
+    fig, axes = plt.subplots(1, 4, figsize=(24, 6), sharey=True)
     fig.suptitle(
         "Projection Comparison: Bergson vs Dattri",
         fontsize=16,
