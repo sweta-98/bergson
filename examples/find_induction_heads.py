@@ -37,17 +37,13 @@ from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 import wandb
-from bergson import (
-    Attributor,
-    FaissConfig,
-    GradientProcessor,
-    HeadConfig,
-    collect_gradients,
-)
+from bergson import HeadConfig
+from bergson.config import DataConfig, IndexConfig, ReduceConfig
 from bergson.huggingface import (
     GradientCollectorCallback,
     prepare_for_gradient_collection,
 )
+from bergson.reduce import reduce
 from bergson.utils import assert_type
 
 HEAD_CFGS = {
@@ -686,49 +682,31 @@ def setup_training(
     return trainer
 
 
-def mean_query_gradients(
-    model,
+def build_query_index(
     induction_dataset,
     output_dir,
     projection_dim,
-    unit_norm,
 ):
-    """Build on-disk Bergson index using synthetic induction head data."""
-    # Create gradient processor
-    processor = GradientProcessor(
-        {},
+    """Reduce induction head gradients to a single mean gradient vector."""
+    query_path = f"{output_dir}/induction_gradients"
+
+    # Save the induction dataset to disk for the reduce pipeline
+    induction_data_path = f"{output_dir}/induction_data"
+    induction_dataset.save_to_disk(induction_data_path)
+
+    index_cfg = IndexConfig(
+        run_path=query_path,
+        model=output_dir,
+        data=DataConfig(dataset=induction_data_path),
         projection_dim=projection_dim,
-        reshape_to_square=False,
-    )
-
-    # Collect gradients for the induction head dataset
-    print("Collecting gradients for induction head dataset...")
-    collect_gradients(
-        model=model,
-        data=induction_dataset,
-        processor=processor,
-        path=f"{output_dir}/induction_gradients",
         skip_preconditioners=True,
-        head_cfgs=HEAD_CFGS,
+        overwrite=True,
     )
+    reduce_cfg = ReduceConfig(method="mean")
 
-    # Build the attributor for querying
-    print("Building attributor for querying...")
-    attributor = Attributor(
-        index_path=f"{output_dir}/induction_gradients",
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype=torch.float32,
-        unit_norm=unit_norm,
-    )
-
-    # Collect mean gradient from attributor index
-    mean_module_gradients = {
-        name: attributor.grads[name].mean(dim=0, keepdim=True)
-        for name in attributor.grads.keys()
-    }
-
-    print("In-context index built successfully! Returning mean gradients...")
-    return mean_module_gradients
+    print("Reducing induction head gradients to mean query vector...")
+    reduce(index_cfg, reduce_cfg)
+    return query_path
 
 
 def upload_to_hub(model, tokenizer, model_name="2layer-transformer-tinystories"):
@@ -805,16 +783,12 @@ def main(args):
 
     # upload_to_hub(model, tokenizer)
 
-    # Get mean module gradients for induction head queries
-    model = model.to(device)  # type: ignore
-    mean_module_induction_gradients = mean_query_gradients(
-        model,
+    # Reduce induction head gradients to a mean query vector
+    query_path = build_query_index(
         induction_dataset,
         output_dir,
         projection_dim,
-        unit_norm,
     )
-    model = model.cpu()
 
     # Load parquet table containing training order
     training_order_ds = assert_type(
