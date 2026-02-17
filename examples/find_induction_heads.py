@@ -37,13 +37,14 @@ from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 import wandb
-from bergson import HeadConfig
-from bergson.config import DataConfig, IndexConfig, ReduceConfig
+from bergson import CollectorComputer, HeadConfig, InMemoryCollector
+from bergson.config import IndexConfig, ReduceConfig
+from bergson.data import allocate_batches
+from bergson.gradients import GradientProcessor
 from bergson.huggingface import (
     GradientCollectorCallback,
     prepare_for_gradient_collection,
 )
-from bergson.reduce import reduce
 from bergson.utils import assert_type
 
 HEAD_CFGS = {
@@ -682,31 +683,43 @@ def setup_training(
     return trainer
 
 
-def build_query_index(
+def reduce_query_gradients(
+    model,
     induction_dataset,
-    output_dir,
     projection_dim,
 ):
-    """Reduce induction head gradients to a single mean gradient vector."""
-    query_path = f"{output_dir}/induction_gradients"
-
-    # Save the induction dataset to disk for the reduce pipeline
-    induction_data_path = f"{output_dir}/induction_data"
-    induction_dataset.save_to_disk(induction_data_path)
-
-    index_cfg = IndexConfig(
-        run_path=query_path,
-        model=output_dir,
-        data=DataConfig(dataset=induction_data_path),
+    """Reduce induction head gradients to a mean gradient vector in memory."""
+    cfg = IndexConfig(
+        run_path="",
         projection_dim=projection_dim,
         skip_preconditioners=True,
-        overwrite=True,
     )
-    reduce_cfg = ReduceConfig(method="mean")
+    processor = GradientProcessor(
+        {},
+        projection_dim=projection_dim or None,
+    )
 
-    print("Reducing induction head gradients to mean query vector...")
-    reduce(index_cfg, reduce_cfg)
-    return query_path
+    collector = InMemoryCollector(
+        model=model.base_model,
+        data=induction_dataset,
+        cfg=cfg,
+        processor=processor,
+        reduce_cfg=ReduceConfig(method="mean"),
+    )
+
+    doc_lengths = [len(ids) for ids in induction_dataset["input_ids"]]
+    batches = allocate_batches(doc_lengths, cfg.token_batch_size)
+
+    computer = CollectorComputer(
+        model=model,
+        data=induction_dataset,
+        collector=collector,
+        batches=batches,
+        cfg=cfg,
+    )
+    computer.run_with_collector_hooks(desc="Reducing induction head gradients")
+
+    return collector.gradients
 
 
 def upload_to_hub(model, tokenizer, model_name="2layer-transformer-tinystories"):
@@ -784,11 +797,13 @@ def main(args):
     # upload_to_hub(model, tokenizer)
 
     # Reduce induction head gradients to a mean query vector
-    query_path = build_query_index(
+    model = model.to(device)  # type: ignore
+    mean_module_induction_gradients = reduce_query_gradients(
+        model,
         induction_dataset,
-        output_dir,
         projection_dim,
     )
+    model = model.cpu()
 
     # Load parquet table containing training order
     training_order_ds = assert_type(
