@@ -37,7 +37,7 @@ from bergson.huggingface import (
     prepare_for_gradient_collection,
 )
 from bergson.utils import assert_type
-from .attn_only_transformer import (  # noqa: F401
+from examples.induction.attn_only_transformer import (  # noqa: F401
     AttnOnlyConfig,
     AttnOnlyForCausalLM,
 )
@@ -603,14 +603,17 @@ def main(args):
                 )
     data = pd.DataFrame(data)
 
-    # Visualize the influence scores
+    plot_influence_scores(data, unit_norm, tag)
+
+
+def plot_influence_scores(data: pd.DataFrame, unit_norm: bool, tag: str):
+    """Plot influence scores of training examples vs training step."""
     plt.figure(figsize=(12, 8))
     plt.scatter(
         data["global_step"],
         data["score"],
         alpha=0.6,
         s=20,
-        # Use epoch for color
         c=data["epoch"],
     )
     plt.xlabel("Cumulative Training Steps")
@@ -626,9 +629,10 @@ def main(args):
         format="pdf",
         bbox_inches="tight",
     )
+    plt.close()
 
     print("Module-wise scores not yet supported for FAISS index")
-    exit()
+    return
 
     # Produce the same plot but split out by module (i.e. key in the grads mmap)
     df_path = f"figures/module_scores_{tag}{'_norm' if unit_norm else ''}.csv"
@@ -801,22 +805,6 @@ def main(args):
         f"figures/all_heads_sum_scores_bar_{tag}{'_norm' if unit_norm else ''}.pdf"
     )
     plt.close(fig)
-
-    # Step 1: pick checkpoint steps
-    # Step 2: compute a bunch of gradients at this step using the static index build
-    #   and save it
-    # Step 1.5: fix the static index build bug
-
-    # Can we use optimal transport to align the gradients?
-    # Should we transport the activations then transport the gradients in the same way?
-    # Or should we transport the gradients directly?
-
-    # To compute the optimal transport maps we just need a huge dataset of training
-    # gradients at different steps.
-
-    # Once we have optimal transport maps we can optimal transport the gradients to the
-    # trained model distribution. Then we can compute the influence of the training
-    # examples on the induction heads.
 
 
 if __name__ == "__main__":
