@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import wandb
 from datasets import Dataset, load_dataset, load_from_disk
 from transformers import (
     AutoTokenizer,
@@ -27,7 +28,6 @@ from transformers import (
     TrainingArguments,
 )
 
-import wandb
 from bergson import CollectorComputer, HeadConfig, InMemoryCollector
 from bergson.config import IndexConfig, ReduceConfig
 from bergson.data import allocate_batches
