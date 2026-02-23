@@ -13,6 +13,7 @@ class Scorer:
     def __init__(
         self,
         query_grads: dict[str, torch.Tensor],
+        preconditioner: dict[str, torch.Tensor],
         modules: list[str],
         writer: ScoreWriter,
         device: torch.device,
@@ -29,6 +30,8 @@ class Scorer:
         ----------
         query_grads : dict[str, torch.Tensor]
             Query gradients keyed by module name.
+        preconditioner : dict[str, torch.Tensor]
+            Preconditioner tensors keyed by module name.
         modules : list[str]
             List of module names to use for scoring.
         writer : ScoreWriter
@@ -51,7 +54,7 @@ class Scorer:
         self.score_mode = score_mode
         self.attribute_tokens = attribute_tokens
         self.writer = writer
-
+        self.preconditioners = preconditioner
         self.query_tensor = torch.cat(
             [query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules],
             dim=1,
@@ -73,6 +76,13 @@ class Scorer:
     @torch.inference_mode()
     def score(self, mod_grads: dict[str, torch.Tensor]) -> torch.Tensor:
         """Compute scores for a batch of gradients."""
+        if self.preconditioners:
+            mod_grads = {
+                name: grad @ self.preconditioners[name].to(self.device)
+                for name, grad in mod_grads.items()
+            }
+        # TODO: do we need to have both grads and mod_grads in memory at the same time?
+        
         grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
         if self.unit_normalize:
             grads = grads / grads.norm(dim=1, keepdim=True)
