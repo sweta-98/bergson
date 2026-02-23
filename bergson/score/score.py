@@ -25,7 +25,7 @@ from bergson.score.score_writer import (
     MemmapTokenScoreWriter,
 )
 from bergson.score.scorer import Scorer
-from bergson.utils.math import compute_damped_inverse
+from bergson.utils.math import compute_damped_inverse, psd_rsqrt
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
@@ -42,6 +42,7 @@ def create_scorer(
     path: Path,
     data: Dataset,
     query_grads: dict[str, torch.Tensor],
+    preconditioner: dict[str, torch.Tensor],
     score_cfg: ScoreConfig,
     device: torch.device,
     dtype: torch.dtype,
@@ -61,6 +62,7 @@ def create_scorer(
         writer = MemmapSequenceScoreWriter(path, len(data), num_queries, dtype=dtype)
     return Scorer(
         query_grads=query_grads,
+        preconditioner=preconditioner,
         modules=score_cfg.modules,
         writer=writer,
         device=device,
@@ -116,14 +118,8 @@ def preprocess_grads(
 
     return grads
 
-
-def precondition_grads(
-    grads: dict[str, torch.Tensor],
-    score_cfg: ScoreConfig,
-    target_modules: list[str],
-    device: torch.device,
-) -> dict[str, torch.Tensor]:
-    """Precondition query gradients with the query and/or index preconditioners."""
+def compute_preconditioner(score_cfg: ScoreConfig, device: torch.device) -> dict[str, torch.Tensor]:
+    """Compute the mixed preconditioner from the query and index preconditioners, applying mixing if necessary."""
     use_q = score_cfg.query_preconditioner_path is not None
     use_i = score_cfg.index_preconditioner_path is not None
 
@@ -150,16 +146,40 @@ def precondition_grads(
             if (q and i)
             else (q or i)
         )
+        if not score_cfg.unit_normalize:
+            # Compute H^(-1) via eigendecomposition and apply to query gradients
+            h_inv = {
+                name: compute_damped_inverse(H.to(device=device))
+                for name, H in mixed_preconditioner.items()
+            }
+        else:
+            # If we are unit normalizing, we have to multiply by H^(-1/2) instead of H^(-1) 
+            # The other half is applied on the index side.
+            h_inv = {
+                name: psd_rsqrt(H.to(device=device))
+                for name, H in mixed_preconditioner.items()
+            }
+    else:
+        h_inv = {}
+    return h_inv
 
-        # Compute H^(-1) via eigendecomposition and apply to query gradients
-        h_inv = {
-            name: compute_damped_inverse(H.to(device=device))
-            for name, H in mixed_preconditioner.items()
-        }
+def precondition_grads(
+    grads: dict[str, torch.Tensor],
+    preconditioners: dict[str, torch.Tensor],
+    score_cfg: ScoreConfig,
+    target_modules: list[str],
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    """Precondition query gradients with the query and/or index preconditioners."""
+    
+    # If preconditioners are empty, this is a no-op and we can skip the rest of the function
+    if not preconditioners:
+        return grads
 
+    else:
         grads = {
             name: (
-                grads[name].to(device=device, dtype=h_inv[name].dtype) @ h_inv[name]
+                grads[name].to(device=device, dtype=preconditioners[name].dtype) @ preconditioners[name]
             ).cpu()
             for name in target_modules
         }
@@ -215,6 +235,7 @@ def score_worker(
     score_cfg: ScoreConfig,
     ds: Dataset | IterableDataset,
     query_grads: dict[str, torch.Tensor],
+    preconditioner: dict[str, torch.Tensor],
 ):
     """
     Score worker executed per rank to produce and score gradients against a query.
@@ -236,6 +257,8 @@ def score_worker(
         The entire dataset to be indexed. A subset is assigned to each worker.
     query_grads : dict[str, torch.Tensor]
         Preprocessed query gradient tensors (often [1, grad_dim]) keyed by module name.
+    preconditioner : dict[str, torch.Tensor]
+        Preconditioner tensors keyed by module name.
     """
     torch.cuda.set_device(local_rank)
 
@@ -282,6 +305,7 @@ def score_worker(
             index_cfg.partial_run_path,
             ds,
             query_grads,
+            preconditioner,
             score_cfg,
             device=score_device,
             dtype=score_dtype,
@@ -308,6 +332,7 @@ def score_worker(
                 index_cfg.partial_run_path / f"shard-{shard_id:05d}",
                 ds_shard,
                 query_grads,
+                preconditioner,
                 score_cfg,
                 device=score_device,
                 dtype=score_dtype,
@@ -354,8 +379,9 @@ def score_dataset(
     ds = setup_data_pipeline(index_cfg)
 
     query_grads = get_query_grads(score_cfg)
+    preconditioner = compute_preconditioner(score_cfg, device=preprocess_device)
     query_grads = precondition_grads(
-        query_grads, score_cfg, score_cfg.modules, preprocess_device
+        query_grads, preconditioner, score_cfg, score_cfg.modules, preprocess_device
     )
     query_grads = preprocess_grads(
         query_grads,
@@ -365,11 +391,14 @@ def score_dataset(
         accumulate_grads="mean" if score_cfg.score == "mean" else "none",
         normalize_accumulated_grad=score_cfg.score == "mean",
     )
+    # we are unit normalizing, we need to bring the preconditioner while scoring
+    if not score_cfg.unit_normalize:
+        preconditioner = {}
 
     launch_distributed_run(
         "score",
         score_worker,
-        [index_cfg, score_cfg, ds, query_grads],
+        [index_cfg, score_cfg, ds, query_grads, preconditioner],
         index_cfg.distributed,
     )
 
