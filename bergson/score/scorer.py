@@ -79,11 +79,14 @@ class Scorer:
             mod_grads = {
                 name: (
                     mod_grads[name].to(device=self.device, dtype=self.preconditioners[name].dtype) @ self.preconditioners[name]
-                ).cpu()
+                )
                 for name in self.modules
             }
-
-        grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
+            grads = torch.cat([mod_grads[m] for m in self.modules], dim=1)
+            # TODO: should we delete mod_grads to save memory? Same thing in the line below, is it cpu or gpu?
+            # Do we need to have both grads and mod_grads?
+        else:
+            grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
         if self.unit_normalize:
             grads = grads / grads.norm(dim=1, keepdim=True)
 
