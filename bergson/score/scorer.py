@@ -78,7 +78,10 @@ class Scorer:
         if self.preconditioners:
             mod_grads = {
                 name: (
-                    mod_grads[name].to(device=self.device, dtype=self.preconditioners[name].dtype) @ self.preconditioners[name]
+                    mod_grads[name].to(
+                        device=self.device, dtype=self.preconditioners[name].dtype
+                    )
+                    @ self.preconditioners[name]
                 ).cpu()
                 for name in self.modules
             }
