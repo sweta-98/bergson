@@ -13,7 +13,6 @@ class Scorer:
     def __init__(
         self,
         query_grads: dict[str, torch.Tensor],
-        preconditioners: dict[str, torch.Tensor],
         modules: list[str],
         writer: ScoreWriter,
         device: torch.device,
@@ -52,7 +51,6 @@ class Scorer:
         self.score_mode = score_mode
         self.attribute_tokens = attribute_tokens
         self.writer = writer
-        self.preconditioners = preconditioners
 
         self.query_tensor = torch.cat(
             [query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules],
@@ -75,23 +73,7 @@ class Scorer:
     @torch.inference_mode()
     def score(self, mod_grads: dict[str, torch.Tensor]) -> torch.Tensor:
         """Compute scores for a batch of gradients."""
-        if self.preconditioners:
-            mod_grads = {
-                name: (
-                    mod_grads[name].to(
-                        device=self.device, dtype=self.preconditioners[name].dtype
-                    )
-                    @ self.preconditioners[name]
-                )
-                for name in self.modules
-            }
-            grads = torch.cat([mod_grads[m] for m in self.modules], dim=1)
-            # TODO: should we delete mod_grads to save memory? Same thing in the line below, is it cpu or gpu?
-            # Do we need to have both grads and mod_grads?
-        else:
-            grads = torch.cat(
-                [mod_grads[m].to(self.device) for m in self.modules], dim=1
-            )
+        grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
         if self.unit_normalize:
             grads = grads / grads.norm(dim=1, keepdim=True)
 
