@@ -82,7 +82,7 @@ class Scorer:
                 for name, grad in mod_grads.items()
             }
         # TODO: do we need to have both grads and mod_grads in memory at the same time?
-        
+
         grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
         if self.unit_normalize:
             grads = grads / grads.norm(dim=1, keepdim=True)
