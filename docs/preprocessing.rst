@@ -113,9 +113,9 @@ Randomly projected gradients with reduce and score
 
 **Goal:** Select training examples most similar to a query set using random projection, keeping full-batch scoring tractable for large models.
 
-Random projections (Johnson-Lindenstrauss) approximately preserve inner products and cosine similarities while reducing gradient dimensionality by orders of magnitude. For large models, full gradients may be gigabytes per example; projecting to a few thousand dimensions makes the ``reduce → score`` pipeline tractable while retaining most of the signal.
+Random projections approximately preserve inner products and cosine similarities (Johnson-Lindenstrauss) while reducing gradient dimensionality by orders of magnitude. For large models, full gradients may be gigabytes per example; projecting to a few thousand dimensions makes the ``reduce → score`` pipeline tractable while retaining most of the signal.
 
-``reduce`` aggregates all query gradients into a single vector (mean or sum) without storing any per-example gradients. ``score`` then collects each training gradient on-the-fly and scores it against the precomputed query vector, avoiding the need to build or store a full training gradient index.
+``reduce`` aggregates all query gradients into a single vector (mean or sum) without storing per-example gradients. ``score`` then collects each training gradient on-the-fly and scores it against the precomputed query vector, avoiding the need to build or store a full training gradient index.
 
 .. code-block:: bash
 
@@ -138,7 +138,7 @@ Both commands must use the same ``--projection_dim`` and identical model configu
 
 .. note::
 
-   **Preprocessing order:** Optimizer normalization must be applied during gradient collection (set ``--normalizer`` at both ``reduce`` and ``score`` time). It cannot be applied after the mean-reduction in ``reduce``, since applying the normalizer to the mean gradient is not the same as normalizing each gradient then taking the mean.
+   **Preprocessing order:** Optimizer normalization must be applied during gradient collection (set ``--normalizer`` at both ``reduce`` and ``score`` time). It cannot be applied after the mean-reduction in ``reduce`` - the normalizer is non-linear so applying it to the mean gradient is not the same as normalizing each gradient then taking the mean.
 
 Randomly projected gradients with unit normalization, preconditioners, build, and score
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -197,10 +197,10 @@ This pipeline is also available as the ``trackstar`` command, which automates th
 
 **Why** :math:`H^{-1/2}` **on both sides?** For inner product scoring, applying :math:`H^{-1}` to one side only is sufficient since the relative ordering of :math:`g_q H^{-1} g_t^T` is preserved. For cosine similarity, the unit normalization would undo a one-sided application: normalizing :math:`g_t` to unit norm discards the preconditioner's geometry. Applying :math:`H^{-1/2}` symmetrically to both sides before normalization preserves the preconditioned structure and ensures the normalization operates in the correct space.
 
-**Mixing query and index preconditioners:** When query and index datasets come from different distributions, ``--mixing_coefficient`` (default 0.99) interpolates between their second moment matrices:
+**Mixing query and index preconditioners:** When query and index datasets come from different distributions, ``--mixing_coefficient`` (default 0.99) interpolates between their second moment matrices (i.e. the empirical Fisher information matrices):
 
 .. math::
 
    H_\text{mixed} = \alpha \cdot H_\text{query} + (1 - \alpha) \cdot H_\text{index}
 
-Values close to 1.0 weight the query distribution more heavily; values close to 0.0 weight the index distribution. Adjust this when the query dataset is small (causing noisy :math:`H_\text{query}` estimates) or when the query and index distributions diverge significantly.
+Values close to 1.0 weight the query distribution more heavily; values close to 0.0 weight the index distribution. Adjust this according to the guidelines in https://arxiv.org/abs/2410.17413
