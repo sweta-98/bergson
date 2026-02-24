@@ -266,6 +266,23 @@ class QueryConfig:
 
 
 @dataclass
+class PreprocessConfig:
+    """Config for gradient preprocessing, shared across build, reduce, and score."""
+
+    unit_normalize: bool = False
+    """Whether to unit normalize the gradients."""
+
+    query_preconditioner_path: str | None = None
+    """Path to a precomputed preconditioner for query gradients."""
+
+    index_preconditioner_path: str | None = None
+    """Path to a precomputed preconditioner for index gradients."""
+
+    mixing_coefficient: float = 0.99
+    """Weight for mixing query vs index preconditioner (1.0 = query only)."""
+
+
+@dataclass
 class ScoreConfig:
     """Config for querying an index on the fly."""
 
@@ -280,25 +297,8 @@ class ScoreConfig:
             similar query gradient (the maximum score).
         `individual`: compute a separate score for each query gradient."""
 
-    query_preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner to be applied to
-    the query dataset gradients."""
-
-    index_preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner to be applied to
-    the query dataset gradients. This does not affect the
-    ability to compute a new preconditioner during the query."""
-
-    mixing_coefficient: float = 0.99
-    """Coefficient to weight the application of the query preconditioner
-    and the pre-computed index preconditioner. 0.0 means only use the
-    index preconditioner and 1.0 means only use the query preconditioner."""
-
-    modules: list[str] = field(default_factory=list)
-    """Modules to use for the query. If empty, all modules will be used."""
-
-    unit_normalize: bool = False
-    """Whether to unit normalize the gradients before computing the scores."""
+    skip_query_preprocess: bool = False
+    """Skip query preprocessing if already applied during reduce."""
 
     batch_size: int = 1024
     """Batch size for processing the query dataset."""
@@ -307,16 +307,24 @@ class ScoreConfig:
     """Precision (dtype) to convert the query and index gradients to before
     computing the scores. If "auto", the model's gradient dtype is used."""
 
+    modules: list[str] = field(default_factory=list)
+    """Modules to use for the query. If empty, all modules will be used."""
+
 
 @dataclass
 class ReduceConfig:
-    """Config for reducing the gradients."""
+    """Config for reducing a dataset into a standalone query."""
 
     method: Literal["mean", "sum"] = "mean"
     """Method for reducing the gradients."""
 
-    unit_normalize: bool = False
-    """Whether to unit normalize the gradients before reducing them."""
+    modules: list[str] = field(default_factory=list)
+    """Modules to use for the query. If empty, all modules will be used."""
+
+    normalize_reduced_grad: bool = False
+    """Whether to unit normalize the reduced query gradient. This has
+    no effect on future score rankings but does affect the magnitude of
+    the scores."""
 
 
 @dataclass

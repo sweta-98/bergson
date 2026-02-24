@@ -21,6 +21,7 @@ class Scorer:
         unit_normalize: bool = False,
         score_mode: str = "inner_product",
         attribute_tokens: bool = False,
+        preconditioners: dict[str, torch.Tensor] | None = None,
     ):
         """
         Initialize the scorer.
@@ -43,6 +44,10 @@ class Scorer:
             Scoring mode: "inner_product" or "nearest".
         attribute_tokens : bool
             Whether gradients are per-token (rows = total_valid tokens).
+        preconditioners : dict[str, torch.Tensor] | None
+            Per-module preconditioner matrices to apply to index gradients
+            before scoring. Used for split preconditioning (H^(-1/2) on
+            each side) when unit_normalize=True.
         """
         self.device = device
         self.dtype = dtype
@@ -51,6 +56,7 @@ class Scorer:
         self.score_mode = score_mode
         self.attribute_tokens = attribute_tokens
         self.writer = writer
+        self.preconditioners = preconditioners
 
         self.query_tensor = torch.cat(
             [query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules],
@@ -73,6 +79,17 @@ class Scorer:
     @torch.inference_mode()
     def score(self, mod_grads: dict[str, torch.Tensor]) -> torch.Tensor:
         """Compute scores for a batch of gradients."""
+        # Apply per-module preconditioners to index grads if provided
+        if self.preconditioners:
+            mod_grads = {
+                m: (
+                    mod_grads[m].to(self.device) @ self.preconditioners[m]
+                    if m in self.preconditioners
+                    else mod_grads[m].to(self.device)
+                )
+                for m in self.modules
+            }
+
         grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
         if self.unit_normalize:
             grads = grads / grads.norm(dim=1, keepdim=True)

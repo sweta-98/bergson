@@ -10,7 +10,7 @@ from jaxtyping import Float
 from torch import Tensor
 
 from bergson.collector.collector import HookCollectorBase
-from bergson.config import IndexConfig, ReduceConfig
+from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
 from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
@@ -45,6 +45,9 @@ class GradientCollector(HookCollectorBase):
 
     reduce_cfg: ReduceConfig | None = None
     """Configuration for in-run gradient reduction."""
+
+    preprocess_cfg: PreprocessConfig | None = None
+    """Configuration for gradient preprocessing."""
 
     builder: Builder | None = None
     """Handles writing gradients to disk. Created in setup() if save_index is True."""
@@ -95,6 +98,7 @@ class GradientCollector(HookCollectorBase):
                 attribute_tokens=self.cfg.attribute_tokens,
                 path=self.cfg.partial_run_path,
                 reduce_cfg=self.reduce_cfg,
+                preprocess_cfg=self.preprocess_cfg,
             )
         else:
             self.builder = None

@@ -10,6 +10,7 @@ from .build import build
 from .config import (
     HessianConfig,
     IndexConfig,
+    PreprocessConfig,
     QueryConfig,
     ReduceConfig,
     ScoreConfig,
@@ -44,6 +45,8 @@ class Build:
 
     index_cfg: IndexConfig
 
+    preprocess_cfg: PreprocessConfig
+
     def execute(self):
         """Build the gradient index."""
         if self.index_cfg.skip_index and self.index_cfg.skip_preconditioners:
@@ -51,7 +54,7 @@ class Build:
 
         validate_run_path(self.index_cfg)
 
-        build(self.index_cfg)
+        build(self.index_cfg, self.preprocess_cfg)
 
 
 @dataclass
@@ -60,12 +63,14 @@ class Preconditioners:
 
     index_cfg: IndexConfig
 
+    preprocess_cfg: PreprocessConfig
+
     def execute(self):
         """Compute normalizers and preconditioners."""
         self.index_cfg.skip_index = True
         self.index_cfg.skip_preconditioners = False
         validate_run_path(self.index_cfg)
-        build(self.index_cfg)
+        build(self.index_cfg, self.preprocess_cfg)
 
 
 @dataclass
@@ -76,6 +81,8 @@ class Reduce:
 
     reduce_cfg: ReduceConfig
 
+    preprocess_cfg: PreprocessConfig
+
     def execute(self):
         """Reduce a gradient index."""
         if self.index_cfg.projection_dim != 0:
@@ -85,7 +92,7 @@ class Reduce:
 
         validate_run_path(self.index_cfg)
 
-        reduce(self.index_cfg, self.reduce_cfg)
+        reduce(self.index_cfg, self.reduce_cfg, self.preprocess_cfg)
 
 
 @dataclass
@@ -95,6 +102,8 @@ class Score:
     score_cfg: ScoreConfig
 
     index_cfg: IndexConfig
+
+    preprocess_cfg: PreprocessConfig
 
     def execute(self):
         """Score a dataset against an existing gradient index."""
@@ -107,7 +116,7 @@ class Score:
 
         validate_run_path(self.index_cfg)
 
-        score_dataset(self.index_cfg, self.score_cfg)
+        score_dataset(self.index_cfg, self.score_cfg, self.preprocess_cfg)
 
 
 @dataclass
@@ -144,6 +153,8 @@ class Trackstar:
 
     score_cfg: ScoreConfig
 
+    preprocess_cfg: PreprocessConfig
+
     def execute(self):
         """Run the full trackstar pipeline: preconditioners -> build -> score."""
         run_path = self.index_cfg.run_path
@@ -159,7 +170,7 @@ class Trackstar:
         value_precond_cfg.skip_index = True
         value_precond_cfg.skip_preconditioners = False
         validate_run_path(value_precond_cfg)
-        build(value_precond_cfg)
+        build(value_precond_cfg, self.preprocess_cfg)
 
         # Step 2: Compute normalizers and preconditioners on query dataset
         print("Step 2/4: Computing normalizers and preconditioners on query dataset...")
@@ -169,7 +180,7 @@ class Trackstar:
         query_precond_cfg.skip_index = True
         query_precond_cfg.skip_preconditioners = False
         validate_run_path(query_precond_cfg)
-        build(query_precond_cfg)
+        build(query_precond_cfg, self.preprocess_cfg)
 
         # Step 3: Build per-item query gradient index
         print("Step 3/4: Building query gradient index...")
@@ -179,7 +190,7 @@ class Trackstar:
         query_cfg.processor_path = query_precond_path
         query_cfg.skip_preconditioners = True
         validate_run_path(query_cfg)
-        build(query_cfg)
+        build(query_cfg, self.preprocess_cfg)
 
         # Step 4: Score value dataset against query using both preconditioners
         print("Step 4/4: Scoring value dataset...")
@@ -188,10 +199,10 @@ class Trackstar:
         score_index_cfg.processor_path = value_precond_path
         score_index_cfg.skip_preconditioners = True
         self.score_cfg.query_path = query_path
-        self.score_cfg.query_preconditioner_path = query_precond_path
-        self.score_cfg.index_preconditioner_path = value_precond_path
+        self.preprocess_cfg.query_preconditioner_path = query_precond_path
+        self.preprocess_cfg.index_preconditioner_path = value_precond_path
         validate_run_path(score_index_cfg)
-        score_dataset(score_index_cfg, self.score_cfg)
+        score_dataset(score_index_cfg, self.score_cfg, self.preprocess_cfg)
 
 
 @dataclass

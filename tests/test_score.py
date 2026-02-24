@@ -15,9 +15,9 @@ from bergson import (
     collect_gradients,
 )
 from bergson.collector.gradient_collectors import GradientCollector
-from bergson.config import IndexConfig, ScoreConfig
+from bergson.config import IndexConfig, PreprocessConfig, ScoreConfig
 from bergson.data import create_index, load_scores
-from bergson.score.score import precondition_grads
+from bergson.process_grads import precondition_grads
 from bergson.score.score_writer import MemmapSequenceScoreWriter
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import (
@@ -184,27 +184,26 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
         for module, shape in collector.shapes().items()
     }
 
+    target_modules = list(collector.shapes().keys())
+
     # Produce preconditioned query gradients
-    score_cfg = ScoreConfig(
-        query_path=str(tmp_path / "query_gradient_ds"),
-        modules=list(collector.shapes().keys()),
-        score="mean",
+    preprocess_cfg = PreprocessConfig(
         query_preconditioner_path=str(tmp_path),
     )
 
     preconditioned = precondition_grads(
-        query_grads, score_cfg, score_cfg.modules, preprocess_device
+        query_grads, preprocess_cfg, target_modules, preprocess_device
     )
 
     # Produce query gradients without preconditioning
-    score_cfg.query_preconditioner_path = None
+    preprocess_cfg_none = PreprocessConfig()
 
     vanilla = precondition_grads(
-        query_grads, score_cfg, score_cfg.modules, preprocess_device
+        query_grads, preprocess_cfg_none, target_modules, preprocess_device
     )
 
     # Compare the two
-    for name in score_cfg.modules:
+    for name in target_modules:
         assert not torch.allclose(preconditioned[name], vanilla[name])
 
 
@@ -290,3 +289,48 @@ def test_memmap_score_writer_float32(tmp_path: Path):
     np.testing.assert_array_almost_equal(
         writer.scores["score_1"][[0, 1]], np.array([2.5, 4.5], dtype=np.float32)
     )
+
+
+def test_compute_preconditioner_h_inv():
+    """Test that compute_preconditioner returns H^(-1) when unit_normalize=False."""
+    from bergson.process_grads import compute_preconditioner
+
+    # No paths → empty dict
+    result = compute_preconditioner(None, None, 0.99, False, torch.device("cpu"))
+    assert result == {}
+
+
+def test_scorer_preconditioners():
+    """Test that Scorer applies preconditioners to index grads."""
+    modules = ["mod_a"]
+    query_grads = {"mod_a": torch.randn(1, 4)}
+    precond = {"mod_a": torch.eye(4) * 2.0}
+
+    writer = MemmapSequenceScoreWriter(
+        Path("/tmp/test_scorer_precond"), 2, 1, dtype=torch.float32
+    )
+    scorer = Scorer(
+        query_grads=query_grads,
+        modules=modules,
+        writer=writer,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        preconditioners=precond,
+    )
+
+    # Score with preconditioners
+    mod_grads = {"mod_a": torch.randn(2, 4)}
+    scores_with = scorer.score(mod_grads)
+
+    # Score without preconditioners
+    scorer_no_precond = Scorer(
+        query_grads=query_grads,
+        modules=modules,
+        writer=writer,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    scores_without = scorer_no_precond.score(mod_grads)
+
+    # Preconditioner is 2*I, so scores should differ
+    assert not torch.allclose(scores_with, scores_without)

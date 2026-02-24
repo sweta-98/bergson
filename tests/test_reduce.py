@@ -10,6 +10,7 @@ from bergson import (
     DataConfig,
     IndexConfig,
     InMemoryCollector,
+    PreprocessConfig,
     ReduceConfig,
 )
 from bergson.data import allocate_batches, load_gradient_dataset
@@ -73,8 +74,9 @@ def test_programmatic_reduce(tmp_path: Path):
         token_batch_size=1024,
     )
     reduce_cfg = ReduceConfig()
+    preprocess_cfg = PreprocessConfig()
 
-    reduce(index_cfg, reduce_cfg)
+    reduce(index_cfg, reduce_cfg, preprocess_cfg)
 
     # Assert 1-row reduction exists at the tmp_path
     ds = load_gradient_dataset(Path(index_cfg.run_path), structured=False)
@@ -91,6 +93,7 @@ def test_in_memory_reduce(tmp_path: Path):
         token_batch_size=1024,
     )
     reduce_cfg = ReduceConfig()
+    preprocess_cfg = PreprocessConfig()
 
     ds = setup_data_pipeline(index_cfg)
     model, target_modules = setup_model_and_peft(index_cfg)
@@ -105,6 +108,7 @@ def test_in_memory_reduce(tmp_path: Path):
         data=ds,
         scorer=None,
         reduce_cfg=reduce_cfg,
+        preprocess_cfg=preprocess_cfg,
         attention_cfgs={},
     )
 
