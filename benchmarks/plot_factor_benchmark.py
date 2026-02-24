@@ -1,8 +1,8 @@
-"""Generate a grouped bar chart comparing factor computation times.
+"""Generate grouped bar charts comparing factor computation
+times and peak GPU memory.
 
-Loads benchmark records from a run root directory and produces a
-bar chart with one bar per method/factor_type combination,
-grouped by model.
+Loads benchmark records from a run root directory and produces
+a 1x2 panel: time on the left, peak VRAM on the right.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pandas as pd
 from matplotlib import pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.patches import Patch
 
 from benchmarks.benchmark_factors import RunRecord, load_records
 from benchmarks.benchmark_utils import (
@@ -55,11 +57,105 @@ def create_factor_dataframe(
                     "method": r.method,
                     "factor_type": r.factor_type,
                     "factor_seconds": r.factor_seconds,
+                    "peak_memory_mb": getattr(r, "peak_memory_mb", None),
                     "label": f"{r.method}/{r.factor_type}",
                     "hardware": getattr(r, "hardware", None),
                 }
             )
     return pd.DataFrame(rows)
+
+
+def _draw_bars(
+    ax: Axes,
+    df: pd.DataFrame,
+    value_col: str,
+    ylabel: str,
+    value_fmt: str,
+    groups: list[tuple],
+    labels: list[str],
+) -> None:
+    """Draw grouped bars on *ax* for *value_col*."""
+    n_groups = len(groups)
+    n_bars = len(labels)
+    bar_width = 0.7 / max(n_groups, 1)
+    x_positions = range(n_bars)
+
+    for gi, (model_key, train_tokens) in enumerate(groups):
+        subset = df[
+            (df["model_key"] == model_key) & (df["train_tokens"] == train_tokens)
+        ]
+        values = []
+        colors = []
+        hatches = []
+        for label in labels:
+            row = subset[subset["label"] == label]
+            if not row.empty and pd.notna(row[value_col].iloc[0]):
+                values.append(row[value_col].iloc[0])
+            else:
+                values.append(0)
+            method = label.split("/")[0]
+            factor = label.split("/")[1]
+            colors.append(METHOD_COLORS.get(method, "#999999"))
+            hatches.append(FACTOR_HATCHES.get(factor, ""))
+
+        offsets = [x + gi * bar_width for x in x_positions]
+        group_label = f"{model_key} ({format_tokens(train_tokens)})"
+        bars = ax.bar(
+            offsets,
+            values,
+            bar_width,
+            label=group_label,
+            color=colors,
+            edgecolor="black",
+            linewidth=0.5,
+        )
+        for bar, hatch in zip(bars, hatches):
+            bar.set_hatch(hatch)
+
+        # Value labels on top of bars
+        for offset, val in zip(offsets, values):
+            if val > 0:
+                ax.text(
+                    offset,
+                    val,
+                    value_fmt.format(val),
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                )
+
+    # X-axis labels
+    center_offsets = [x + bar_width * (n_groups - 1) / 2 for x in x_positions]
+    ax.set_xticks(center_offsets)
+    short_labels = [lb.replace("/", "\n") for lb in labels]
+    ax.set_xticklabels(short_labels, rotation=0, ha="center", fontsize=9)
+
+    ax.set_ylabel(ylabel, fontsize=11)
+    # Add headroom so value labels aren't clipped
+    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(ymin, ymax * 1.20)
+    ax.grid(
+        axis="y",
+        linestyle="--",
+        linewidth=0.5,
+        alpha=0.6,
+    )
+
+    # Legend: method colors
+    legend_handles = []
+    for method, color in METHOD_COLORS.items():
+        legend_handles.append(
+            Patch(
+                facecolor=color,
+                edgecolor="black",
+                label=method,
+            )
+        )
+    ax.legend(
+        handles=legend_handles,
+        fontsize=9,
+        loc="upper left",
+    )
 
 
 def plot_factor_comparison(
@@ -68,8 +164,8 @@ def plot_factor_comparison(
     suptitle: str,
     formats: list[str] | None = None,
 ) -> None:
-    """Create a grouped bar chart of factor computation
-    times.
+    """Create a 1x2 grouped bar chart: time (left) and
+    peak VRAM (right).
 
     Groups by model, one bar per method/factor_type. If
     multiple runs exist for the same combination, uses the
@@ -94,7 +190,6 @@ def plot_factor_comparison(
         keep="last",
     )
 
-    # Build (model, train_tokens) groups
     groups = sorted(
         df.groupby(["model_key", "train_tokens"]).groups.keys(),
         key=lambda x: (x[1], x[0]),
@@ -107,92 +202,45 @@ def plot_factor_comparison(
         print("No data to plot", file=sys.stderr)
         return
 
-    fig, ax = plt.subplots(figsize=(max(8, n_bars * 1.2), 6))
+    has_memory = "peak_memory_mb" in df.columns and df["peak_memory_mb"].notna().any()
+    if has_memory:
+        df = df.copy()
+        df["peak_memory_gb"] = df["peak_memory_mb"] / 1024
+    ncols = 2 if has_memory else 1
+    fig, axes = plt.subplots(
+        1,
+        ncols,
+        figsize=(max(8, n_bars * 1.2) * ncols, 6),
+    )
+    if ncols == 1:
+        axes = [axes]
 
-    bar_width = 0.7 / max(n_groups, 1)
-    x_positions = range(n_bars)
-
-    for gi, (model_key, train_tokens) in enumerate(groups):
-        subset = df[
-            (df["model_key"] == model_key) & (df["train_tokens"] == train_tokens)
-        ]
-        values = []
-        colors = []
-        hatches = []
-        for label in labels:
-            row = subset[subset["label"] == label]
-            if not row.empty:
-                values.append(row["factor_seconds"].iloc[0])
-            else:
-                values.append(0)
-            method = label.split("/")[0]
-            factor = label.split("/")[1]
-            colors.append(METHOD_COLORS.get(method, "#999999"))
-            hatches.append(FACTOR_HATCHES.get(factor, ""))
-
-        offsets = [x + gi * bar_width for x in x_positions]
-        group_label = f"{model_key}" f" ({format_tokens(train_tokens)})"
-        bars = ax.bar(
-            offsets,
-            values,
-            bar_width,
-            label=group_label,
-            color=colors,
-            edgecolor="black",
-            linewidth=0.5,
-        )
-        for bar, hatch in zip(bars, hatches):
-            bar.set_hatch(hatch)
-
-        # Add value labels on top of bars
-        for offset, val in zip(offsets, values):
-            if val > 0:
-                ax.text(
-                    offset,
-                    val,
-                    f"{val:.1f}s",
-                    ha="center",
-                    va="bottom",
-                    fontsize=7,
-                    rotation=45,
-                )
-
-    # X-axis labels
-    center_offsets = [x + bar_width * (n_groups - 1) / 2 for x in x_positions]
-    ax.set_xticks(center_offsets)
-    short_labels = [lb.replace("/", "\n") for lb in labels]
-    ax.set_xticklabels(short_labels, rotation=0, ha="center", fontsize=9)
-
-    ax.set_ylabel("Factor Computation Time (seconds)", fontsize=11)
-    ax.set_title(suptitle, fontsize=13, fontweight="bold")
-    ax.grid(
-        axis="y",
-        linestyle="--",
-        linewidth=0.5,
-        alpha=0.6,
+    # Left panel: time
+    _draw_bars(
+        axes[0],
+        df,
+        "factor_seconds",
+        "Factor Computation Time (seconds)",
+        "{:.1f}s",
+        groups,
+        labels,
     )
 
-    # Build legend: method colors + group labels
-    from matplotlib.patches import Patch
-
-    legend_handles = []
-    for method, color in METHOD_COLORS.items():
-        legend_handles.append(
-            Patch(
-                facecolor=color,
-                edgecolor="black",
-                label=method,
-            )
+    # Right panel: peak VRAM (if data available)
+    if has_memory:
+        _draw_bars(
+            axes[1],
+            df,
+            "peak_memory_gb",
+            "Peak GPU Memory (GB)",
+            "{:.1f}",
+            groups,
+            labels,
         )
-    ax.legend(
-        handles=legend_handles,
-        fontsize=9,
-        loc="upper left",
-    )
 
+    fig.suptitle(suptitle, fontsize=13, fontweight="bold")
     plt.tight_layout()
     figure_path.parent.mkdir(parents=True, exist_ok=True)
-    # Save in all requested formats
     for fmt in formats:
         out = figure_path.with_suffix(f".{fmt}")
         plt.savefig(out, dpi=200, bbox_inches="tight")
@@ -206,7 +254,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "run_root",
-        help=("Root directory containing benchmark results"),
+        help="Root directory containing benchmark results",
     )
     parser.add_argument(
         "--output",
@@ -222,6 +270,11 @@ def main(argv: list[str] | None = None) -> None:
         nargs="+",
         default=["png"],
         help=("Output formats (default: png)." " E.g. --formats png pdf"),
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Filter to a single model key (e.g. pythia-160m).",
     )
 
     args = parser.parse_args(argv)
@@ -243,7 +296,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     df = create_factor_dataframe(records)
-    print(f"Loaded {len(df)} successful runs" f" from {run_root}")
+    if args.model:
+        df = df[df["model_key"] == args.model]
+    print(f"Loaded {len(df)} successful runs from {run_root}")
 
     if df.empty:
         print(

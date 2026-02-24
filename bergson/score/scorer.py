@@ -20,6 +20,7 @@ class Scorer:
         *,
         unit_normalize: bool = False,
         score_mode: str = "inner_product",
+        attribute_tokens: bool = False,
     ):
         """
         Initialize the scorer.
@@ -40,12 +41,15 @@ class Scorer:
             Whether to unit normalize gradients before scoring.
         score_mode : str
             Scoring mode: "inner_product" or "nearest".
+        attribute_tokens : bool
+            Whether gradients are per-token (rows = total_valid tokens).
         """
         self.device = device
         self.dtype = dtype
         self.modules = modules
         self.unit_normalize = unit_normalize
         self.score_mode = score_mode
+        self.attribute_tokens = attribute_tokens
         self.writer = writer
 
         self.query_tensor = torch.cat(

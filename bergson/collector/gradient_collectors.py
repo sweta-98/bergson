@@ -11,7 +11,7 @@ from torch import Tensor
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import Builder
+from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -52,32 +52,6 @@ class GradientCollector(HookCollectorBase):
     scorer: Scorer | None = None
     """Optional scorer for computing scores instead of building an index."""
 
-    def __init__(self, *args, **kwargs):
-        self.data = assert_type(Dataset, kwargs["data"])
-        self.cfg = assert_type(IndexConfig, kwargs["cfg"])
-
-        self.reduce_cfg = kwargs.get("reduce_cfg", None)
-        self.builder = kwargs.get("builder", None)
-        self.scorer = kwargs.get("scorer", None)
-        self.mod_grads = {}
-
-        # Extract parent class arguments
-        parent_kwargs = {
-            k: v
-            for k, v in kwargs.items()
-            if k
-            in {
-                "model",
-                "filter_modules",
-                "target_modules",
-                "processor",
-                "attention_cfgs",
-            }
-        }
-        parent_kwargs["filter_modules"] = self.cfg.filter_modules
-
-        super().__init__(*args, **parent_kwargs)
-
     def setup(self) -> None:
         """
         Initialize collector state.
@@ -92,6 +66,11 @@ class GradientCollector(HookCollectorBase):
                 "Bias with normalizers not supported yet, "
                 "consider disabling bias inclusion for now."
             )
+
+        if self.cfg.attribute_tokens:
+            assert (
+                self.reduce_cfg is None
+            ), "attribute_tokens is incompatible with reduce mode."
 
         self.save_dtype = get_gradient_dtype(self.model)
         self.lo = torch.finfo(self.save_dtype).min
@@ -109,12 +88,13 @@ class GradientCollector(HookCollectorBase):
 
         if self.save_index:
             grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-            self.builder = Builder(
-                self.cfg.partial_run_path,
+            self.builder = create_builder(
                 self.data,
                 grad_sizes,
                 self.save_dtype,
-                self.reduce_cfg,
+                attribute_tokens=self.cfg.attribute_tokens,
+                path=self.cfg.partial_run_path,
+                reduce_cfg=self.reduce_cfg,
             )
         else:
             self.builder = None
@@ -157,6 +137,12 @@ class GradientCollector(HookCollectorBase):
 
         Computes gradient as outer product g.T @ a (again with optional projection and
         normalization).
+
+        When ``self.cfg.attribute_tokens`` is True, the gradient is computed
+        per-position instead of per-example then filtered to valid positions
+        using the valid mask.
+        The valid mask (from ``self._current_valid_mask``) marks positions
+        where ``labels[t+1] != -100``.
         """
         a = module._inputs  # [N, S, I/q]
 
@@ -168,12 +154,31 @@ class GradientCollector(HookCollectorBase):
         normalizer = self.processor.normalizers.get(name)
 
         if isinstance(normalizer, AdamNormalizer):
-            full_gradient = g.mT @ a  # [N, O, S] @ [N, S, I] → [N, O, I]
-            P = normalizer.normalize_(full_gradient)
-            if p is not None:
-                g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
-                a_projection = self.projection(name, p, i, "right", g.device, g.dtype).T
-                P = g_projection @ P @ a_projection
+            if self.cfg.attribute_tokens:
+                # Per-position outer product: [N,S,O,1]*[N,S,1,I] → [N,S,O,I]
+                P = g.unsqueeze(-1) * a.unsqueeze(-2)
+                P = normalizer.normalize_(P)  # broadcasts [O,I] over [N,S,O,I]
+                if p is not None:
+                    g_projection = self.projection(
+                        name, p, o, "left", g.device, g.dtype
+                    )
+                    a_projection = self.projection(
+                        name, p, i, "right", g.device, g.dtype
+                    ).T
+                    P = g_projection @ P @ a_projection  # [N, S, p, q]
+                P = P.flatten(2)  # [N, S, grad_dim]
+                P = P[self._current_valid_mask]  # [total_valid, grad_dim]
+            else:
+                full_gradient = g.mT @ a  # [N, O, S] @ [N, S, I] → [N, O, I]
+                P = normalizer.normalize_(full_gradient)
+                if p is not None:
+                    g_projection = self.projection(
+                        name, p, o, "left", g.device, g.dtype
+                    )
+                    a_projection = self.projection(
+                        name, p, i, "right", g.device, g.dtype
+                    ).T
+                    P = g_projection @ P @ a_projection
         else:
             if isinstance(normalizer, AdafactorNormalizer):
                 g_factor = normalizer.row.add(1e-30)
@@ -184,7 +189,16 @@ class GradientCollector(HookCollectorBase):
                 g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
                 g = g @ g_projection.T  # [N, S, p]
 
-            P = g.mT @ a  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
+            if self.cfg.attribute_tokens:
+                # [N, S, O/p, 1] * [N, S, 1, I/q] → [N, S, O/p, I/q]
+                P = g.unsqueeze(-1) * a.unsqueeze(-2)
+                P = P.flatten(2)  # [N, S, grad_dim]
+
+                # Filter to valid positions only
+                # Mask is [N, S]
+                P = P[self._current_valid_mask]  # [total_valid, grad_dim]
+            else:
+                P = g.mT @ a  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
 
         P = P.flatten(1).clamp_(self.lo, self.hi)
 
@@ -196,7 +210,8 @@ class GradientCollector(HookCollectorBase):
                 self.processor.preconditioners[name] = P.mT @ P
 
         if self.save_index and self.reduce_cfg is None:
-            # Asynchronously move the gradient to CPU and convert to the final dtype
+            # Asynchronously move the gradient to CPU and convert to the final
+            # dtype
             self.mod_grads[name] = P.to(
                 device="cpu", dtype=self.save_dtype, non_blocking=True
             )
@@ -400,10 +415,7 @@ class StreamingGradientCollector(HookCollectorBase):
     """Dtype for stored gradients."""
 
     def setup(self) -> None:
-        # TODO: handle more elegantly?
-        self.save_dtype = (
-            torch.float32 if self.model.dtype == torch.float32 else torch.float16
-        )
+        self.save_dtype = get_gradient_dtype(self.model)
 
         self.lo = torch.finfo(self.save_dtype).min
         self.hi = torch.finfo(self.save_dtype).max

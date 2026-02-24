@@ -120,7 +120,7 @@ def setup_model_and_peft(
     # Common configuration
     if device_map_auto:
         device_map = "auto"
-    elif cfg.fsdp:
+    elif cfg.fsdp or not torch.cuda.is_available():
         device_map = "cpu"
     else:
         device_map = {"": f"cuda:{local_rank}"}
@@ -140,6 +140,7 @@ def setup_model_and_peft(
     try:
         peft_config = PeftConfig.from_pretrained(cfg.model)
     except ValueError:
+        print(f"PEFT config not found for model {cfg.model}")
         peft_config = None
 
     if peft_config is None:
@@ -283,8 +284,6 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
         cfg.data.dataset, cfg.data.split, cfg.data.subset, cfg.data.data_args
     )
 
-    # In many cases the token_batch_size may be smaller than the max length allowed by
-    # the model. If cfg.data.truncation is True, we use the tokenizer to truncate
     tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer or cfg.model)
 
     default_model_max_len = getattr(tokenizer, "model_max_length", None)
@@ -352,13 +351,14 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
             new_fingerprint="advantage",  # type: ignore
         )
 
-    ds = filter_by_max_tokens(ds, cfg)
+    # Experimental benchmarking feature
+    if cfg.max_tokens is not None:
+        ds = filter_by_max_tokens(ds, cfg)
 
-    # Keep length and input_ids
+    # Remove extraneous columns
     if remove_columns is not None:
-        columns_to_remove = [
-            col for col in remove_columns if col not in {"length", "input_ids"}
-        ]
+        keep = {"length", "input_ids", "labels"}
+        columns_to_remove = [col for col in remove_columns if col not in keep]
         if columns_to_remove:
             ds = ds.remove_columns(columns_to_remove)
 

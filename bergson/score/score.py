@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from datasets import Dataset, IterableDataset
@@ -13,11 +14,18 @@ from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
 from bergson.config import IndexConfig, ScoreConfig
-from bergson.data import allocate_batches, load_gradients
+from bergson.data import (
+    allocate_batches,
+    load_gradients,
+)
 from bergson.distributed import launch_distributed_run
 from bergson.gradients import GradientProcessor
-from bergson.score.score_writer import MemmapScoreWriter
+from bergson.score.score_writer import (
+    MemmapSequenceScoreWriter,
+    MemmapTokenScoreWriter,
+)
 from bergson.score.scorer import Scorer
+from bergson.utils.math import compute_damped_inverse
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
@@ -32,15 +40,25 @@ from bergson.utils.worker_utils import (
 
 def create_scorer(
     path: Path,
-    num_items: int,
+    data: Dataset,
     query_grads: dict[str, torch.Tensor],
     score_cfg: ScoreConfig,
     device: torch.device,
     dtype: torch.dtype,
+    *,
+    attribute_tokens: bool = False,
 ) -> Scorer:
     """Create a Scorer with MemmapScoreWriter for disk-based scoring."""
     num_queries = len(query_grads[score_cfg.modules[0]])
-    writer = MemmapScoreWriter(path, num_items, num_queries, dtype=dtype)
+    if attribute_tokens:
+        writer = MemmapTokenScoreWriter(
+            path,
+            data,
+            num_queries,
+            dtype=dtype,
+        )
+    else:
+        writer = MemmapSequenceScoreWriter(path, len(data), num_queries, dtype=dtype)
     return Scorer(
         query_grads=query_grads,
         modules=score_cfg.modules,
@@ -49,78 +67,54 @@ def create_scorer(
         dtype=dtype,
         unit_normalize=score_cfg.unit_normalize,
         score_mode="nearest" if score_cfg.score == "nearest" else "inner_product",
+        attribute_tokens=attribute_tokens,
     )
 
 
 def preprocess_grads(
-    grad_ds: Dataset,
+    grad_dict: dict[str, torch.Tensor],
     grad_column_names: list[str],
     unit_normalize: bool,
-    batch_size: int,
     device: torch.device,
     accumulate_grads: Literal["mean", "sum", "none"] = "none",
     normalize_accumulated_grad: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """Preprocess the gradients in the dataset. Returns a dictionary
-    of preprocessed gradients with shape [1, grad_dim]. Preprocessing
-    includes some combination of unit normalization, accumulation,
-    accumulated gradient normalization, and dtype conversion."""
+    """Preprocess the gradients. Returns a dictionary of preprocessed gradients
+    with shape [1, grad_dim]. Preprocessing includes some combination of unit
+    normalization, accumulation, accumulated gradient normalization, and dtype
+    conversion."""
 
     # Short-circuit if possible
     if accumulate_grads == "none" and not unit_normalize:
-        return {
-            column_name: grad_ds[:][column_name].to(device=device)
-            for column_name in grad_column_names
-        }
+        return {name: grad_dict[name].to(device=device) for name in grad_column_names}
+
+    num_rows = len(grad_dict[grad_column_names[0]])
 
     # Get sum and sum of squares of the gradients
-    acc = {
-        column_name: torch.zeros_like(
-            grad_ds[0][column_name], device=device, dtype=torch.float32
-        )
-        for column_name in grad_column_names
-    }
+    acc = {}
     ss_acc = torch.tensor(0.0, device=device, dtype=torch.float32)
     if not unit_normalize:
         ss_acc.fill_(1.0)
 
-    def sum_(cols):
-        nonlocal ss_acc
-
-        for column_name in grad_column_names:
-            x = cols[column_name].to(device=device, dtype=torch.float32)
-            acc[column_name].add_(x.sum(0))
-
-            if unit_normalize:
-                # To normalize the mean gradient we can divide by the sum of
-                # squares of every gradient element in the dataset
-                ss_acc += x.pow(2).sum()
-
-    grad_ds.map(
-        sum_,
-        batched=True,
-        batch_size=batch_size,
-    )
+    for name in grad_column_names:
+        x = grad_dict[name].to(device=device, dtype=torch.float32)
+        acc[name] = x.sum(0)
+        if unit_normalize:
+            ss_acc += x.pow(2).sum()
 
     ss_acc = ss_acc.sqrt()
     assert ss_acc > 0, "Sum of squares of entire dataset is zero"
 
-    # Process the gradient dataset
+    # Process the gradients
     if accumulate_grads == "mean":
         grads = {
-            column_name: (acc[column_name] / ss_acc / len(grad_ds)).unsqueeze(0)
-            for column_name in grad_column_names
+            name: (acc[name] / ss_acc / num_rows).unsqueeze(0)
+            for name in grad_column_names
         }
     elif accumulate_grads == "sum":
-        grads = {
-            column_name: (acc[column_name] / ss_acc).unsqueeze(0)
-            for column_name in grad_column_names
-        }
+        grads = {name: (acc[name] / ss_acc).unsqueeze(0) for name in grad_column_names}
     elif accumulate_grads == "none":
-        grads = {
-            column_name: grad_ds[:][column_name].to(device=device)
-            for column_name in grad_column_names
-        }
+        grads = {name: grad_dict[name].to(device=device) for name in grad_column_names}
         if unit_normalize:
             norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
             grads = {k: v / norms for k, v in grads.items()}
@@ -130,25 +124,21 @@ def preprocess_grads(
     # Normalize the accumulated gradient
     if normalize_accumulated_grad:
         grad_norm = torch.cat(
-            [grads[column_name].flatten() for column_name in grad_column_names], dim=0
+            [grads[name].flatten() for name in grad_column_names], dim=0
         ).norm()
-        for column_name in grad_column_names:
-            grads[column_name] /= grad_norm
+        for name in grad_column_names:
+            grads[name] /= grad_norm
 
     return grads
 
 
-def precondition_ds(
-    query_ds: Dataset,
+def precondition_grads(
+    grads: dict[str, torch.Tensor],
     score_cfg: ScoreConfig,
     target_modules: list[str],
     device: torch.device,
-):
-    """Precondition the dataset with the query and index preconditioners."""
-    query_ds = query_ds.with_format(
-        "torch", columns=target_modules, output_all_columns=True
-    )
-
+) -> dict[str, torch.Tensor]:
+    """Precondition query gradients with the query and/or index preconditioners."""
     use_q = score_cfg.query_preconditioner_path is not None
     use_i = score_cfg.index_preconditioner_path is not None
 
@@ -177,36 +167,24 @@ def precondition_ds(
         )
 
         # Compute H^(-1) via eigendecomposition and apply to query gradients
-        h_inv = {}
-        for name, H in mixed_preconditioner.items():
-            H = H.to(device=device, dtype=torch.float64)
-            damping_val = 0.1 * H.abs().mean()
-            H = H + damping_val * torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
+        h_inv = {
+            name: compute_damped_inverse(H.to(device=device))
+            for name, H in mixed_preconditioner.items()
+        }
 
-            eigval, eigvec = torch.linalg.eigh(H)
-            h_inv[name] = (eigvec * (1.0 / eigval) @ eigvec.mT).to(
-                mixed_preconditioner[name].dtype
-            )
+        grads = {
+            name: (grads[name].to(device) @ h_inv[name]).cpu()
+            for name in target_modules
+        }
 
-        def precondition(batch):
-            for name in target_modules:
-                batch[name] = (batch[name].to(device) @ h_inv[name]).cpu()
-
-            return batch
-
-        query_ds = query_ds.map(
-            precondition, batched=True, batch_size=score_cfg.batch_size
-        )
-
-    return query_ds.with_format("torch", columns=score_cfg.modules)
+    return {name: grads[name] for name in score_cfg.modules}
 
 
-def get_query_ds(score_cfg: ScoreConfig):
+def get_query_grads(score_cfg: ScoreConfig) -> dict[str, torch.Tensor]:
     """
-    Load and preprocess the query dataset to get the query gradients. Preconditioners
-    may be mixed as described in https://arxiv.org/html/2410.17413v1#S3.
+    Load query gradients from the mmap index and return as a dict of tensors.
+    Preconditioners may be mixed as described in https://arxiv.org/html/2410.17413v1#S3.
     """
-    # Collect the query gradients if they don't exist
     query_path = Path(score_cfg.query_path)
     if not query_path.exists():
         raise FileNotFoundError(
@@ -214,32 +192,32 @@ def get_query_ds(score_cfg: ScoreConfig):
             "Please build a query dataset index first."
         )
 
-    # Load the query dataset
     with open(query_path / "info.json", "r") as f:
-        target_modules = json.load(f)["dtype"]["names"]
+        metadata = json.load(f)
+        target_modules = metadata["dtype"]["names"]
+        grad_sizes = metadata["grad_sizes"]
 
     if not score_cfg.modules:
         score_cfg.modules = target_modules
 
     mmap = load_gradients(Path(score_cfg.query_path), structured=False)
 
-    # Convert unstructured gradients to a dictionary of module-wise tensors
-    with open(query_path / "info.json", "r") as f:
-        metadata = json.load(f)
-        grad_sizes = metadata["grad_sizes"]
-
     sizes = torch.tensor(list(grad_sizes.values()))
     module_offsets = torch.tensor([0] + torch.cumsum(sizes, dim=0).tolist())
 
-    query_ds = Dataset.from_dict(
-        {
-            name: mmap[:, module_offsets[i] : module_offsets[i + 1]].copy()
-            for i, name in enumerate(grad_sizes.keys())
-            if name in target_modules
-        }
-    )
+    # Cast to float32 only for dtypes not natively supported by numpy (e.g. bfloat16)
+    needs_cast = not np.issubdtype(mmap.dtype, np.floating)
+    grads: dict[str, torch.Tensor] = {}
+    for i, name in enumerate(grad_sizes.keys()):
+        if name not in target_modules:
+            continue
+        sliced = mmap[:, module_offsets[i] : module_offsets[i + 1]]
+        if needs_cast:
+            grads[name] = torch.from_numpy(sliced.astype(np.float32))
+        else:
+            grads[name] = torch.from_numpy(sliced.copy())
 
-    return query_ds.with_format("torch", columns=target_modules)
+    return grads
 
 
 def score_worker(
@@ -315,11 +293,12 @@ def score_worker(
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
         kwargs["scorer"] = create_scorer(
             index_cfg.partial_run_path,
-            len(ds),
+            ds,
             query_grads,
             score_cfg,
             device=score_device,
             dtype=score_dtype,
+            attribute_tokens=index_cfg.attribute_tokens,
         )
 
         collect_gradients(**kwargs)
@@ -340,7 +319,7 @@ def score_worker(
 
             kwargs["scorer"] = create_scorer(
                 index_cfg.partial_run_path / f"shard-{shard_id:05d}",
-                len(ds_shard),
+                ds_shard,
                 query_grads,
                 score_cfg,
                 device=score_device,
@@ -387,15 +366,14 @@ def score_dataset(
 
     ds = setup_data_pipeline(index_cfg)
 
-    query_ds = get_query_ds(score_cfg)
-    query_ds = precondition_ds(
-        query_ds, score_cfg, score_cfg.modules, preprocess_device
+    query_grads = get_query_grads(score_cfg)
+    query_grads = precondition_grads(
+        query_grads, score_cfg, score_cfg.modules, preprocess_device
     )
     query_grads = preprocess_grads(
-        query_ds,
+        query_grads,
         score_cfg.modules,
         score_cfg.unit_normalize,
-        score_cfg.batch_size,
         preprocess_device,
         accumulate_grads="mean" if score_cfg.score == "mean" else "none",
         normalize_accumulated_grad=score_cfg.score == "mean",

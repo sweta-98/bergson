@@ -2,6 +2,7 @@ import json
 import math
 import os
 import random
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Sequence, cast, overload
 
@@ -27,6 +28,453 @@ from .utils.utils import (
     simple_parse_args_string,
     tensor_to_numpy,
 )
+
+
+def compute_num_token_grads(data: Dataset) -> np.ndarray:
+    """Compute the number of valid gradient positions per example.
+
+    A token at position t produces a gradient iff the *next* token's label
+    is not -100 (the ignore index).  When there is no explicit ``labels``
+    column every position except the last is valid, so
+    ``num_token_grads = length - 1``.
+
+    Returns
+    -------
+    np.ndarray of shape ``(len(data),)`` with dtype int64.
+    """
+    if "labels" in data.column_names:
+        # Count positions where labels[t+1] != -100 for t in 0..len-2
+        counts = []
+        for labels in data["labels"]:
+            labels_arr = np.asarray(labels)
+            counts.append(int(np.sum(labels_arr[1:] != -100)))
+        return np.array(counts, dtype=np.int64)
+    else:
+        lengths = np.array(data["length"], dtype=np.int64)
+        return lengths - 1
+
+
+def create_token_index(
+    root: Path,
+    num_token_grads: np.ndarray,
+    grad_sizes: dict[str, int],
+    dtype: DTypeLike,
+) -> tuple[np.memmap, np.ndarray]:
+    """Allocate a flat memory-mapped file for ragged per-token gradients.
+
+    Parameters
+    ----------
+    root : Path
+        Directory in which ``token_gradients.bin``, ``num_token_grads.npy``,
+        ``offsets.npy`` and ``info.json`` will be created.
+    num_token_grads : np.ndarray
+        Number of valid gradient rows per example, shape ``(num_items,)``.
+    grad_sizes : dict[str, int]
+        Per-module gradient dimensions (same as :func:`create_index`).
+    dtype : DTypeLike
+        Element dtype for the gradient array.
+
+    Returns
+    -------
+    (memmap, offsets) where *memmap* has shape ``(total_tokens, total_grad_dim)``
+    and *offsets* is ``cumsum([0] + num_token_grads)`` of length
+    ``num_items + 1``.
+    """
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    total_grad_dim = sum(grad_sizes.values())
+    offsets = np.zeros(len(num_token_grads) + 1, dtype=np.int64)
+    np.cumsum(num_token_grads, out=offsets[1:])
+    total_tokens = int(offsets[-1])
+
+    np_dtype = np.dtype(dtype)
+    grad_path = root / "token_gradients.bin"
+
+    if rank == 0:
+        root.mkdir(parents=True, exist_ok=True)
+        nbytes = np_dtype.itemsize * total_tokens * total_grad_dim
+        with open(grad_path, "wb") as f:
+            f.truncate(nbytes)
+            os.fsync(f.fileno())
+
+        np.save(root / "num_token_grads.npy", num_token_grads)
+        np.save(root / "offsets.npy", offsets)
+
+        with (root / "info.json").open("w") as f:
+            json.dump(
+                {
+                    "attribute_tokens": True,
+                    "total_tokens": total_tokens,
+                    "total_grad_dim": total_grad_dim,
+                    "num_items": len(num_token_grads),
+                    "grad_sizes": grad_sizes,
+                    "base_dtype": np_dtype.name,
+                },
+                f,
+                indent=2,
+            )
+
+    if dist.is_initialized():
+        dist.barrier()
+
+    mmap = np.memmap(
+        grad_path,
+        dtype=np_dtype,
+        mode="r+",
+        shape=(total_tokens, total_grad_dim),
+    )
+    return mmap, offsets
+
+
+def load_token_gradients(
+    root_dir: Path | str,
+) -> tuple[np.memmap, np.ndarray, np.ndarray]:
+    """Load per-token gradients stored by :func:`create_token_index`.
+
+    Returns
+    -------
+    (mmap, num_token_grads, offsets)
+        *mmap* has shape ``(total_tokens, total_grad_dim)``.
+        Example *i*'s gradients are ``mmap[offsets[i]:offsets[i+1]]`` with
+        shape ``(num_token_grads[i], total_grad_dim)``.
+    """
+    root_dir = Path(root_dir)
+    with (root_dir / "info.json").open("r") as f:
+        info = json.load(f)
+
+    total_tokens = info["total_tokens"]
+    total_grad_dim = info["total_grad_dim"]
+    base_dtype = info["base_dtype"]
+
+    mmap = np.memmap(
+        root_dir / "token_gradients.bin",
+        dtype=np.dtype(base_dtype),
+        mode="r",
+        shape=(total_tokens, total_grad_dim),
+    )
+    num_token_grads = np.load(root_dir / "num_token_grads.npy")
+    offsets = np.load(root_dir / "offsets.npy")
+    return mmap, num_token_grads, offsets
+
+
+class TokenGradients:
+    """Convenience wrapper around the flat per-token gradient memmap.
+
+    Provides ``__getitem__`` to retrieve a single example's gradients as
+    a contiguous array of shape ``(num_token_grads[i], grad_dim)``.
+
+    Parameters
+    ----------
+    root_dir : Path | str
+        Directory produced by :func:`create_token_index`.
+    """
+
+    def __init__(self, root_dir: Path | str):
+        self.mmap, self._num_token_grads, self._offsets = load_token_gradients(root_dir)
+
+    @property
+    def num_token_grads(self) -> np.ndarray:
+        return self._num_token_grads
+
+    def __len__(self) -> int:
+        return len(self._num_token_grads)
+
+    def __getitem__(self, i: int) -> np.ndarray:
+        return np.asarray(self.mmap[self._offsets[i] : self._offsets[i + 1]])
+
+
+class Builder(ABC):
+    """Interface for gradient index writers.
+
+    Use :func:`create_builder` to construct the appropriate concrete
+    subclass based on *attribute_tokens* and *path*.
+    """
+
+    grad_buffer: np.ndarray
+
+    @abstractmethod
+    def __call__(
+        self,
+        indices: list[int],
+        mod_grads: dict[str, torch.Tensor],
+    ) -> None: ...
+
+    def flush(self) -> None:
+        if isinstance(self.grad_buffer, np.memmap):
+            self.grad_buffer.flush()
+
+    def dist_reduce(self) -> None:
+        pass
+
+
+class TokenBuilder(Builder):
+    """Creates and writes per-token gradients to disk.
+
+    Parameters
+    ----------
+    data : Dataset
+        The dataset being indexed (used only for length).
+    grad_sizes : dict[str, int]
+        Per-module gradient dimensions.
+    dtype : torch.dtype
+        Torch dtype for the gradients (converted to numpy internally).
+    path : Path
+        Root directory for the index artifacts.
+    """
+
+    def __init__(
+        self,
+        data: Dataset,
+        grad_sizes: dict[str, int],
+        dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
+        reduce_cfg: ReduceConfig | None = None,
+    ):
+        assert path is not None
+        self.grad_sizes = grad_sizes
+        self.num_items = len(data)
+        np_dtype = convert_dtype_to_np(dtype)
+
+        self.num_token_grads = compute_num_token_grads(data)
+        self.grad_buffer, self.offsets = create_token_index(
+            path,
+            self.num_token_grads,
+            grad_sizes,
+            np_dtype,
+        )
+
+    def __call__(
+        self,
+        indices: list[int],
+        mod_grads: dict[str, torch.Tensor],
+    ):
+        """Write a batch of per-token gradients to the flat buffer.
+
+        ``mod_grads`` values have shape ``[total_valid_in_batch, grad_dim_mod]``
+        (already filtered to valid positions).  Batch indices may be
+        non-contiguous, so each example's chunk is written individually.
+        """
+        torch.cuda.synchronize()
+
+        per_example_lengths = self.num_token_grads[indices]
+
+        col_offset = 0
+        for module_name in self.grad_sizes.keys():
+            g_np = tensor_to_numpy(mod_grads[module_name])
+            dim = g_np.shape[1]
+            row = 0
+            for idx, sl in zip(indices, per_example_lengths):
+                buf_start = int(self.offsets[idx])
+                buf_end = int(self.offsets[idx + 1])
+                self.grad_buffer[buf_start:buf_end, col_offset : col_offset + dim] = (
+                    g_np[row : row + sl]
+                )
+                row += sl
+            col_offset += dim
+
+
+class InMemorySequenceBuilder(Builder):
+    """Stores per-example gradients in memory.
+
+    Drop-in replacement for :class:`SequenceBuilder` that keeps
+    gradients in a plain numpy array instead of a memory-mapped
+    file.  Supports optional gradient reduction via
+    *reduce_cfg*.
+
+    Parameters
+    ----------
+    data : Dataset
+        The dataset being indexed (used only for length).
+    grad_sizes : dict[str, int]
+        Per-module gradient dimensions.
+    dtype : torch.dtype
+        Torch dtype for the gradients.
+    reduce_cfg : ReduceConfig | None
+        When set, accumulate all gradients into a single
+        row (mean or sum) instead of storing per-example.
+    """
+
+    def __init__(
+        self,
+        data: Dataset,
+        grad_sizes: dict[str, int],
+        dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
+        reduce_cfg: ReduceConfig | None = None,
+    ):
+        self.grad_sizes = grad_sizes
+        self.num_items = len(data)
+        self.reduce_cfg = reduce_cfg
+        self.eps = torch.finfo(torch.float32).eps
+        total_grad_dim = sum(grad_sizes.values())
+
+        if reduce_cfg is not None:
+            np_dtype = np.float32
+            num_grads = 1
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.in_memory_grad_buffer = torch.zeros(
+                (1, total_grad_dim),
+                dtype=torch.float32,
+                device=device,
+            )
+        else:
+            np_dtype = convert_dtype_to_np(dtype)
+            num_grads = self.num_items
+            self.in_memory_grad_buffer = None
+
+        self.grad_buffer = np.zeros(
+            (num_grads, total_grad_dim),
+            dtype=np_dtype,
+        )
+
+    def reduce(
+        self,
+        indices: list[int],
+        mod_grads: dict[str, torch.Tensor],
+    ):
+        """Accumulate batch gradients into the reduce buffer."""
+        assert self.reduce_cfg is not None
+        assert self.in_memory_grad_buffer is not None
+        device = next(iter(mod_grads.values())).device
+
+        if self.reduce_cfg.unit_normalize:
+            ssqs = torch.zeros(len(indices), device=device)
+            for mod_grad in mod_grads.values():
+                ssqs += mod_grad.pow(2).sum(dim=-1)
+            norms = ssqs.sqrt()
+        else:
+            norms = torch.ones(len(indices), device=device)
+
+        offset = 0
+        for module_name in self.grad_sizes.keys():
+            grads = mod_grads[module_name]
+            if self.reduce_cfg.unit_normalize:
+                grads = grads / (norms.unsqueeze(1) + self.eps)
+            grads = grads.sum(dim=0).to(torch.float32)
+            self.in_memory_grad_buffer[
+                0,
+                offset : offset + grads.shape[0],
+            ] += grads
+            offset += grads.shape[0]
+
+    def __call__(
+        self,
+        indices: list[int],
+        mod_grads: dict[str, torch.Tensor],
+    ):
+        if self.reduce_cfg is not None:
+            self.reduce(indices, mod_grads)
+            return
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        offset = 0
+        for module_name in self.grad_sizes.keys():
+            dim = mod_grads[module_name].shape[1]
+            self.grad_buffer[
+                indices,
+                offset : offset + dim,
+            ] = tensor_to_numpy(mod_grads[module_name])
+            offset += dim
+
+    def dist_reduce(self):
+        if self.reduce_cfg is None:
+            return
+
+        assert self.in_memory_grad_buffer is not None
+
+        if torch.cuda.is_available():
+            self.in_memory_grad_buffer = self.in_memory_grad_buffer.cuda()
+
+        if dist.is_initialized():
+            dist.reduce(
+                self.in_memory_grad_buffer,
+                dst=0,
+                op=dist.ReduceOp.SUM,
+            )
+
+        if self.reduce_cfg.method == "mean":
+            self.in_memory_grad_buffer /= self.num_items
+
+        self.in_memory_grad_buffer = self.in_memory_grad_buffer.cpu()
+
+        self.grad_buffer[:] = tensor_to_numpy(self.in_memory_grad_buffer).astype(
+            self.grad_buffer.dtype
+        )
+
+
+class InMemoryTokenBuilder(Builder):
+    """Stores per-token gradients in memory.
+
+    Drop-in replacement for :class:`TokenBuilder` that keeps
+    gradients in a plain numpy array instead of a memory-mapped
+    file.
+
+    Parameters
+    ----------
+    data : Dataset
+        The dataset being indexed (used only for length and
+        label information).
+    grad_sizes : dict[str, int]
+        Per-module gradient dimensions.
+    dtype : torch.dtype
+        Torch dtype for the gradients.
+    """
+
+    def __init__(
+        self,
+        data: Dataset,
+        grad_sizes: dict[str, int],
+        dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
+        reduce_cfg: ReduceConfig | None = None,
+    ):
+        self.grad_sizes = grad_sizes
+        self.num_items = len(data)
+        np_dtype = convert_dtype_to_np(dtype)
+        total_grad_dim = sum(grad_sizes.values())
+
+        self.num_token_grads = compute_num_token_grads(data)
+        self.offsets = np.zeros(len(self.num_token_grads) + 1, dtype=np.int64)
+        np.cumsum(self.num_token_grads, out=self.offsets[1:])
+        total_tokens = int(self.offsets[-1])
+
+        self.grad_buffer = np.zeros((total_tokens, total_grad_dim), dtype=np_dtype)
+
+    def __call__(
+        self,
+        indices: list[int],
+        mod_grads: dict[str, torch.Tensor],
+    ):
+        """Write a batch of per-token gradients.
+
+        ``mod_grads`` values have shape
+        ``[total_valid_in_batch, grad_dim_mod]``
+        (already filtered to valid positions).
+        """
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        per_example_lengths = self.num_token_grads[indices]
+
+        col_offset = 0
+        for module_name in self.grad_sizes.keys():
+            g_np = tensor_to_numpy(mod_grads[module_name])
+            dim = g_np.shape[1]
+            row = 0
+            for idx, sl in zip(indices, per_example_lengths):
+                buf_start = int(self.offsets[idx])
+                buf_end = int(self.offsets[idx + 1])
+                self.grad_buffer[
+                    buf_start:buf_end,
+                    col_offset : col_offset + dim,
+                ] = g_np[row : row + sl]
+                row += sl
+            col_offset += dim
 
 
 def ceildiv(a: int, b: int) -> int:
@@ -76,6 +524,23 @@ def allocate_batches(
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
+    (batches,) = _allocate_batches_world(doc_lengths, N, world_size, seed, ranks=[rank])
+    return batches
+
+
+def _allocate_batches_world(
+    doc_lengths: list[int],
+    N: int,
+    world_size: int,
+    seed: int = 42,
+    ranks: list[int] | None = None,
+) -> list[list[list[int]]]:
+    """Lower-level version of allocate_batches that returns batches for specified ranks.
+
+    If ranks is None, returns batches for all ranks.
+    """
+    if ranks is None:
+        ranks = list(range(world_size))
     if len(doc_lengths) < world_size:
         raise RuntimeError("Not enough documents to distribute across workers.")
 
@@ -162,11 +627,12 @@ def allocate_batches(
     # Sanity: equal # of batches per worker
     assert len({len(b) for b in allocation}) == 1
 
-    # Break any systematic ordering of batches
-    random.seed(seed)
-    random.shuffle(allocation[rank])
+    # Break any systematic ordering of batches (shuffle only requested ranks)
+    for rank in ranks:
+        random.seed(seed)
+        random.shuffle(allocation[rank])
 
-    return allocation[rank]
+    return [allocation[rank] for rank in ranks]
 
 
 def create_index(
@@ -241,9 +707,13 @@ def load_data_string(
 ) -> Dataset | IterableDataset:
     """Load a dataset from a string identifier or path."""
     if data_str.endswith(".csv"):
-        ds = assert_type(Dataset, Dataset.from_csv(data_str))
+        ds = Dataset.from_csv(data_str)
     elif data_str.endswith(".json") or data_str.endswith(".jsonl"):
-        ds = assert_type(Dataset, Dataset.from_json(data_str))
+        ds = Dataset.from_json(data_str)
+    elif Path(data_str).is_dir() and (Path(data_str) / "dataset_info.json").exists():
+        ds = Dataset.load_from_disk(data_str, keep_in_memory=False)
+        if isinstance(ds, DatasetDict):
+            ds = ds[split]
     else:
         try:
             kwargs = simple_parse_args_string(data_args)
@@ -260,6 +730,7 @@ def load_data_string(
             else:
                 raise e
 
+    ds = assert_type(Dataset, ds)
     return ds
 
 
@@ -348,24 +819,25 @@ def load_scores(
     return cast(Scores, mmap)
 
 
-class Builder:
+class SequenceBuilder(Builder):
     """Creates and writes gradients to disk, with optional distributed reduction.
     Scores are always saved as float32."""
 
     num_items: int
 
-    grad_buffer: np.memmap
-
     reduce_cfg: ReduceConfig | None
 
     def __init__(
         self,
-        path: Path,
         data: Dataset,
         grad_sizes: dict[str, int],
         dtype: torch.dtype,
+        *,
+        attribute_tokens: bool = False,
+        path: Path | None = None,
         reduce_cfg: ReduceConfig | None = None,
     ):
+        assert path is not None
         self.grad_sizes = grad_sizes
         self.num_items = len(data)
         self.reduce_cfg = reduce_cfg
@@ -431,9 +903,6 @@ class Builder:
                 ] = tensor_to_numpy(mod_grads[module_name])
                 offset += mod_grads[module_name].shape[1]
 
-    def flush(self):
-        self.grad_buffer.flush()
-
     def dist_reduce(self):
         if self.reduce_cfg is None:
             return
@@ -459,6 +928,39 @@ class Builder:
         self.in_memory_grad_buffer = self.in_memory_grad_buffer.cpu()
 
 
+def create_builder(
+    data: Dataset,
+    grad_sizes: dict[str, int],
+    dtype: torch.dtype,
+    *,
+    attribute_tokens: bool = False,
+    path: Path | None = None,
+    reduce_cfg: ReduceConfig | None = None,
+) -> Builder:
+    """Create the appropriate :class:`Builder` subclass.
+
+    Dispatches based on *attribute_tokens* and *path*:
+
+    * ``path`` given + ``attribute_tokens`` → :class:`TokenBuilder`
+    * ``path`` given                        → :class:`SequenceBuilder`
+    * no ``path`` + ``attribute_tokens``    → :class:`InMemoryTokenBuilder`
+    * no ``path``                           → :class:`InMemorySequenceBuilder`
+    """
+    if path is not None:
+        cls = TokenBuilder if attribute_tokens else SequenceBuilder
+    else:
+        cls = InMemoryTokenBuilder if attribute_tokens else InMemorySequenceBuilder
+
+    return cls(
+        data,
+        grad_sizes,
+        dtype,
+        attribute_tokens=attribute_tokens,
+        path=path,
+        reduce_cfg=reduce_cfg,
+    )
+
+
 def pad_and_tensor(
     sequences: list[list[int]],
     labels: list[list[int]] | None = None,
@@ -466,7 +968,7 @@ def pad_and_tensor(
     padding_value: int = 0,
     dtype: torch.dtype | None = torch.long,
     device: torch.device | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Pad a list of sequences to the same length and convert them to tensors.
     Returns a tuple of padded sequences and labels. The labels are the same as the
@@ -485,21 +987,29 @@ def pad_and_tensor(
     # convert to tensor
     padded_tokens = torch.tensor(padded, dtype=dtype, device=device)
     padded_labels = torch.tensor(labels, dtype=dtype, device=device)
-    return padded_tokens, padded_labels
+    # Compute valid_masks: position i is valid if labels[i+1] != -100
+    N, S = padded_tokens.shape
+    valid_masks = torch.zeros(N, S, dtype=torch.bool, device=device)
+    valid_masks[:, :-1] = padded_labels[:, 1:] != -100
+
+    return padded_tokens, padded_labels, valid_masks
 
 
 def tokenize(
-    batch: dict, *, args: DataConfig, tokenizer, max_length: int | None = None
+    batch: dict,
+    *,
+    args: DataConfig,
+    tokenizer,
+    max_length: int | None = None,
 ):
     """Tokenize a batch of data with `tokenizer` according to `args`."""
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         return_attention_mask=False,
         return_length=True,
         truncation=args.truncation,
     )
     if args.truncation and max_length is not None:
         kwargs["max_length"] = max_length
-
     if args.completion_column:
         # We're dealing with a prompt-completion dataset
         convos = [

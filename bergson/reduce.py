@@ -112,7 +112,7 @@ def reduce_worker(
         if rank == 0:
             processor.save(index_cfg.partial_run_path)
 
-    # Save info.json for score command (if it doesn't already exist from Builder)
+    # Save info.json for score command (if it doesn't already exist)
     if rank == 0:
         info_path = index_cfg.partial_run_path / "info.json"
         if not info_path.exists():

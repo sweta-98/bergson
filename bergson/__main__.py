@@ -6,7 +6,8 @@ from typing import Optional, Union
 from simple_parsing import ArgumentParser, ConflictResolution
 
 from .build import build
-from .config import IndexConfig, QueryConfig, ReduceConfig, ScoreConfig
+from .config import HessianConfig, IndexConfig, QueryConfig, ReduceConfig, ScoreConfig
+from .hessians.hessian_approximations import approximate_hessians
 from .query.query_index import query
 from .reduce import reduce
 from .score.score import score_dataset
@@ -99,10 +100,23 @@ class Query:
 
 
 @dataclass
+class Hessian:
+    """Approximate Hessian matrices using KFAC or EKFAC."""
+
+    hessian_cfg: HessianConfig
+    index_cfg: IndexConfig
+
+    def execute(self):
+        """Compute Hessian approximation."""
+        validate_run_path(self.index_cfg)
+        approximate_hessians(self.index_cfg, self.hessian_cfg)
+
+
+@dataclass
 class Main:
     """Routes to the subcommands."""
 
-    command: Union[Build, Query, Reduce, Score]
+    command: Union[Build, Query, Reduce, Score, Hessian]
 
     def execute(self):
         """Run the script."""

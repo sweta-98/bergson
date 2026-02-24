@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-from collections import defaultdict
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 
@@ -12,55 +11,79 @@ from jaxtyping import Float
 from torch import Tensor, nn
 
 from bergson.collector.collector import HookCollectorBase
-from bergson.config import IndexConfig
-from bergson.gradients import AdafactorNormalizer, AdamNormalizer, LayerAdapter
-from bergson.process_preconditioners import process_preconditioners
+from bergson.config import IndexConfig, ReduceConfig
+from bergson.data import Builder, create_builder
+from bergson.gradients import (
+    AdafactorNormalizer,
+    AdamNormalizer,
+    LayerAdapter,
+)
+from bergson.process_preconditioners import (
+    process_preconditioners,
+)
+from bergson.score.scorer import Scorer
 from bergson.utils.utils import assert_type, get_gradient_dtype
 
 
-@dataclass
+@dataclass(kw_only=True)
 class InMemoryCollector(HookCollectorBase):
-    """Simple collector that accumulates gradients in memory for benchmarking."""
+    """Collector that accumulates gradients in memory.
 
-    gradients: dict[str, list[torch.Tensor]] = dc_field(
-        default_factory=lambda: defaultdict(list)
-    )
-    """Accumulated gradients keyed by module name."""
+    Supports both per-example and per-token gradient collection
+    via ``cfg.attribute_tokens``.  Uses in-memory builders
+    (:class:`InMemorySequenceBuilder` /
+    :class:`InMemoryTokenBuilder`) for flat gradient storage and
+    an optional :class:`Scorer` for on-the-fly scoring.
 
-    def __init__(self, *args, **kwargs):
-        self.data = assert_type(Dataset, kwargs["data"])
-        self.cfg = assert_type(IndexConfig, kwargs["cfg"])
+    After collection, ``self.gradients`` is populated from the
+    builder's buffer in :meth:`teardown`, providing per-module
+    gradient tensors for downstream use.
+    """
 
-        self.reduce_cfg = kwargs.get("reduce_cfg", None)
-        self.builder = kwargs.get("builder", None)
-        self.scorer = kwargs.get("scorer", None)
+    data: Dataset
+    """The dataset being processed."""
 
-        # Extract parent class arguments
-        parent_kwargs = {
-            k: v
-            for k, v in kwargs.items()
-            if k
-            in {
-                "model",
-                "filter_modules",
-                "target_modules",
-                "processor",
-                "attention_cfgs",
-            }
-        }
-        parent_kwargs["filter_modules"] = self.cfg.filter_modules
+    cfg: IndexConfig
+    """Configuration for gradient collection."""
 
-        super().__init__(*args, **parent_kwargs)
+    mod_grads: dict = dc_field(default_factory=dict)
+    """Temporary per-batch gradients keyed by module name."""
+
+    reduce_cfg: ReduceConfig | None = None
+    """Configuration for in-run gradient reduction."""
+
+    builder: Builder | None = None
+    """Handles writing gradients. Created in setup()."""
+
+    scorer: Scorer | None = None
+    """Optional scorer for on-the-fly scoring."""
+
+    gradients: dict[str, torch.Tensor] = dc_field(default_factory=dict)
+    """Per-module gradients, populated from builder
+    in teardown."""
+
+    scores: list | torch.Tensor | None = None
+    """Scores populated from scorer's writer in teardown."""
+
+    def __post_init__(self):
+        if self.filter_modules is None:
+            self.filter_modules = self.cfg.filter_modules
+        super().__post_init__()
 
     def setup(self) -> None:
-        """Initialize gradient storage."""
+        """Initialize collector state and create builders."""
         assert isinstance(
             self.model.device, torch.device
         ), "Model device is not set correctly"
         if self.cfg.include_bias and self.processor.normalizers is not None:
             raise NotImplementedError(
                 "Bias with normalizers not supported yet, "
-                "consider disabling bias inclusion for now."
+                "consider disabling bias inclusion."
+            )
+
+        if self.cfg.attribute_tokens:
+            assert self.reduce_cfg is None, (
+                "attribute_tokens is incompatible" " with reduce mode."
             )
 
         self.save_dtype = get_gradient_dtype(self.model)
@@ -74,14 +97,22 @@ class InMemoryCollector(HookCollectorBase):
             fill_value=0.0,
         )
 
-        self.gradients = defaultdict(list)
-        self._gpu_gradients: dict[str, torch.Tensor] = {}
+        self.gradients = {}
+        self.scores = None
+
+        # Create in-memory builder when not scoring
+        if self.builder is None and self.scorer is None:
+            grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
+            self.builder = create_builder(
+                self.data,
+                grad_sizes,
+                self.save_dtype,
+                attribute_tokens=self.cfg.attribute_tokens,
+                reduce_cfg=self.reduce_cfg,
+            )
 
     def teardown(self) -> None:
-        """No cleanup needed for in-memory storage."""
-        assert isinstance(
-            self.cfg, IndexConfig
-        ), "cfg is required for GradientCollector"  # pleasing type checker
+        assert isinstance(self.cfg, IndexConfig)
         if dist.is_initialized():
             dist.reduce(self.per_doc_losses, dst=0)
 
@@ -95,8 +126,28 @@ class InMemoryCollector(HookCollectorBase):
                 self.rank,
             )
 
-    def forward_hook(self, module: nn.Module, a: Float[Tensor, "N S I"]) -> None:
-        """Store activations for gradient computation."""
+        if self.builder is not None:
+            self.builder.dist_reduce()
+            self.builder.flush()
+
+            # Populate self.gradients from builder buffer
+            buf = self.builder.grad_buffer
+            offset = 0
+            for name, dim in grad_sizes.items():
+                self.gradients[name] = torch.from_numpy(
+                    buf[:, offset : offset + dim].copy()
+                )
+                offset += dim
+
+        if self.scorer is not None:
+            self.scores = self.scorer.writer.scores
+
+    def forward_hook(
+        self,
+        module: nn.Module,
+        a: Float[Tensor, "N S I"],
+    ) -> None:
+        """Cache activations for gradient computation."""
         p = self.processor.projection_dim
         name = assert_type(str, module._name)
         i = getattr(module, LayerAdapter.in_attr(module))
@@ -108,22 +159,35 @@ class InMemoryCollector(HookCollectorBase):
         if isinstance(normalizer, AdafactorNormalizer):
             a_factor = normalizer.col.add(1e-30)
             a_factor = a_factor.rsqrt()
-            a = a * a_factor.type_as(a)  # [N, S, I] * [I] → [N, S, I]
+            a = a * a_factor.type_as(a)
 
         if module._has_bias:
-            # Append ones to activation for bias term
-            ones = torch.ones(a.size(0), a.size(1), 1, device=a.device, dtype=a.dtype)
+            ones = torch.ones(
+                a.size(0),
+                a.size(1),
+                1,
+                device=a.device,
+                dtype=a.dtype,
+            )
             a = torch.cat([a, ones], dim=-1)
             i = i + 1
             setattr(module, LayerAdapter.in_attr(module), i)
         if p is not None:
-            a_projection = self.projection(name, p, i, "right", a.device, a.dtype).T
-            a = a @ a_projection  # type: ignore
-        # set module._inputs to a
+            a_proj = self.projection(name, p, i, "right", a.device, a.dtype).T
+            a = a @ a_proj
         module._inputs = a
 
-    def backward_hook(self, module: nn.Module, g: Float[Tensor, "N S O"]) -> None:
-        """Compute and store per-sample gradient."""
+    @HookCollectorBase.split_attention_heads
+    def backward_hook(
+        self,
+        module: nn.Module,
+        g: Float[Tensor, "N S O"],
+    ) -> None:
+        """Compute per-sample gradient.
+
+        When ``self.cfg.attribute_tokens`` is True, computes
+        per-position gradients filtered to valid positions.
+        """
         a = module._inputs  # [N, S, I/q]
 
         assert isinstance(a, torch.Tensor), "Activation cache missing for module"
@@ -134,23 +198,43 @@ class InMemoryCollector(HookCollectorBase):
         normalizer = self.processor.normalizers.get(name)
 
         if isinstance(normalizer, AdamNormalizer):
-            full_gradient = g.mT @ a  # [N, O, S] @ [N, S, I] → [N, O, I]
-            P = normalizer.normalize_(full_gradient)
-            if p is not None:
-                g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
-                a_projection = self.projection(name, p, i, "right", g.device, g.dtype).T
-                P = g_projection @ P @ a_projection
+            if self.cfg.attribute_tokens:
+                # Per-position outer product: [N,S,O,1]*[N,S,1,I] → [N,S,O,I]
+                P = g.unsqueeze(-1) * a.unsqueeze(-2)
+                P = normalizer.normalize_(P)  # broadcasts [O,I] over [N,S,O,I]
+                if p is not None:
+                    g_proj = self.projection(name, p, o, "left", g.device, g.dtype)
+                    a_proj = self.projection(name, p, i, "right", g.device, g.dtype).T
+                    P = g_proj @ P @ a_proj  # [N, S, p, q]
+                P = P.flatten(2)  # [N, S, grad_dim]
+                P = P[self._current_valid_mask]  # [total_valid, grad_dim]
+            else:
+                full_gradient = g.mT @ a
+                P = normalizer.normalize_(full_gradient)
+                if p is not None:
+                    g_proj = self.projection(name, p, o, "left", g.device, g.dtype)
+                    a_proj = self.projection(name, p, i, "right", g.device, g.dtype).T
+                    P = g_proj @ P @ a_proj
         else:
             if isinstance(normalizer, AdafactorNormalizer):
                 g_factor = normalizer.row.add(1e-30)
                 g_factor = g_factor.mean().sqrt() * g_factor.rsqrt()
-                g = g * g_factor.type_as(g)  # [N, S, O] * [O] → [N, S, O]
+                g = g * g_factor.type_as(g)
 
             if p is not None:
-                g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
-                g = g @ g_projection.T  # [N, S, p]
+                g_proj = self.projection(name, p, o, "left", g.device, g.dtype)
+                g = g @ g_proj.T
 
-            P = g.mT @ a  # [N, O/p, S] @ [N, S, I/q] → [N, O/p, I/q]
+            if self.cfg.attribute_tokens:
+                # Per-position outer product
+                # [N,S,O/p,1]*[N,S,1,I/q] -> [N,S,O/p,I/q]
+                P = g.unsqueeze(-1) * a.unsqueeze(-2)
+                P = P.flatten(2)
+
+                # Filter to valid positions
+                P = P[self._current_valid_mask]
+            else:
+                P = g.mT @ a
 
         P = P.flatten(1).clamp_(self.lo, self.hi)
 
@@ -161,12 +245,15 @@ class InMemoryCollector(HookCollectorBase):
             else:
                 self.processor.preconditioners[name] = P.mT @ P
 
-        # Store GPU tensor for scoring to avoid GPU→CPU→GPU round-trip
-        if self.scorer is not None:
-            self._gpu_gradients[name] = P
-
-        # Store on CPU for later use (index building, etc.)
-        self.gradients[name].append(P.cpu())
+        # GPU for scorer/reduce, CPU for builder
+        if self.scorer is not None or self.reduce_cfg is not None:
+            self.mod_grads[name] = P.to(dtype=self.save_dtype)
+        else:
+            self.mod_grads[name] = P.to(
+                device="cpu",
+                dtype=self.save_dtype,
+                non_blocking=True,
+            )
 
         del module._inputs  # type: ignore
 
@@ -174,8 +261,11 @@ class InMemoryCollector(HookCollectorBase):
         losses = kwargs.get("losses")
         assert losses is not None, "losses must be provided in kwargs"
 
+        if self.builder is not None:
+            self.builder(indices, self.mod_grads)
         if self.scorer is not None:
-            self.scorer(indices, self._gpu_gradients)
-            self._gpu_gradients = {}
+            self.scorer(indices, self.mod_grads)
+
+        self.mod_grads.clear()
 
         self.per_doc_losses[indices] = losses.detach().type_as(self.per_doc_losses)

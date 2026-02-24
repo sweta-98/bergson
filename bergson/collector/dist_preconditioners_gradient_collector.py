@@ -10,7 +10,7 @@ from torch import Tensor
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import Builder
+from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -54,32 +54,6 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
     scorer: Scorer | None = None
     """Optional scorer for computing scores instead of building an index."""
 
-    def __init__(self, *args, **kwargs):
-        self.data = assert_type(Dataset, kwargs["data"])
-        self.cfg = assert_type(IndexConfig, kwargs["cfg"])
-
-        self.reduce_cfg = kwargs.get("reduce_cfg", None)
-        self.builder = kwargs.get("builder", None)
-        self.scorer = kwargs.get("scorer", None)
-        self.mod_grads = {}
-
-        # Extract parent class arguments
-        parent_kwargs = {
-            k: v
-            for k, v in kwargs.items()
-            if k
-            in {
-                "model",
-                "filter_modules",
-                "target_modules",
-                "processor",
-                "attention_cfgs",
-            }
-        }
-        parent_kwargs["filter_modules"] = self.cfg.filter_modules
-
-        super().__init__(*args, **parent_kwargs)
-
     def setup(self) -> None:
         """
         Initialize collector state.
@@ -114,12 +88,13 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
 
         if self.save_index:
             grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-            self.builder = Builder(
-                self.cfg.partial_run_path,
+            self.builder = create_builder(
                 self.data,
                 grad_sizes,
                 self.save_dtype,
-                self.reduce_cfg,
+                attribute_tokens=self.cfg.attribute_tokens,
+                path=self.cfg.partial_run_path,
+                reduce_cfg=self.reduce_cfg,
             )
         else:
             self.builder = None
