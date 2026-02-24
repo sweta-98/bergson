@@ -61,6 +61,14 @@ API Reference
    api
    utils
 
+Preprocessing
+-------------
+
+.. toctree::
+   :maxdepth: 2
+
+   preprocessing
+
 Experiments
 -----------
 
