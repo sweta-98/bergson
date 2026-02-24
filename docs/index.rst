@@ -47,20 +47,6 @@ Benchmarks
 
    benchmarks/index
 
-API Reference
---------------
-
-.. toctree::
-   :maxdepth: 4
-
-   cli
-
-.. toctree::
-   :maxdepth: 2
-
-   api
-   utils
-
 Preprocessing
 -------------
 
@@ -76,6 +62,20 @@ Experiments
    :maxdepth: 2
 
    experiments
+
+API Reference
+--------------
+
+.. toctree::
+   :maxdepth: 4
+
+   cli
+
+.. toctree::
+   :maxdepth: 2
+
+   api
+   utils
 
 
 Content Index
