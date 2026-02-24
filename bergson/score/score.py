@@ -122,7 +122,8 @@ def preprocess_grads(
 def compute_preconditioner(
     score_cfg: ScoreConfig, device: torch.device
 ) -> dict[str, torch.Tensor]:
-    """Compute the mixed preconditioner from the query and index preconditioners, applying mixing if necessary."""
+    """Compute the mixed preconditioner from the query and index preconditioners,
+    applying mixing if necessary."""
     use_q = score_cfg.query_preconditioner_path is not None
     use_i = score_cfg.index_preconditioner_path is not None
 
@@ -156,7 +157,8 @@ def compute_preconditioner(
                 for name, H in mixed_preconditioner.items()
             }
         else:
-            # If we are unit normalizing, we have to multiply by H^(-1/2) instead of H^(-1)
+            # If we are unit normalizing, we have to multiply by H^(-1/2)
+            # instead of H^(-1)
             # The other half is applied on the index side.
             h_inv = {
                 name: psd_rsqrt(H.to(device=device))
@@ -176,7 +178,8 @@ def precondition_grads(
 ) -> dict[str, torch.Tensor]:
     """Precondition query gradients with the query and/or index preconditioners."""
 
-    # If preconditioners are empty, this is a no-op and we can skip the rest of the function
+    # If preconditioners are empty, this is a no-op and we can skip the rest
+    # of the function
     if not preconditioners:
         return grads
 
