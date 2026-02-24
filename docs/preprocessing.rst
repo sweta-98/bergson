@@ -6,7 +6,7 @@ Bergson supports several gradient preprocessing operations that affect the quali
 Operations
 ----------
 
-**Optimizer normalization** (``--normalizer``): Scales each gradient element by an estimate of the inverse standard deviation of that parameter's gradient distribution. Applied elementwise during gradient collection using Adam or Adafactor running statistics. This downweights parameters with high gradient variance and amplifies signal in stable, task-specific directions.
+**Optimizer normalization** (``--normalizer``): Scales each gradient element by the inverse root-mean-square (RMS) of that parameter's gradient history — i.e., divides by :math:`\sqrt{E[g^2]} + \varepsilon`, where :math:`E[g^2]` is the mean of squared gradients across the dataset. Applied elementwise during gradient collection. Unlike the Adam optimizer used during training, this uses a simple mean over the dataset rather than an exponential moving average. This downweights parameters with large gradient magnitudes and amplifies signal in directions with consistently small gradients.
 
 **Unit normalization** (``--unit_normalize``): Normalizes each gradient vector to unit L2 norm before similarity computation, enabling cosine similarity when used with inner product scoring.
 
@@ -52,7 +52,7 @@ Cosine similarity with an optimizer normalizer (full gradients)
 
 **Goal:** Rank training examples by cosine similarity to a query, using optimizer-normalized gradients.
 
-Optimizer normalization scales each parameter's gradient by :math:`1/\sqrt{v}`, where :math:`v` is an exponential moving average of squared gradients. Applied before cosine similarity, this reweights the gradient space by the inverse of per-parameter gradient noise, emphasizing consistent parameter updates over noisy ones.
+Optimizer normalization scales each parameter's gradient by :math:`1/(\sqrt{v} + \varepsilon)`, where :math:`v = E[g^2]` is the mean of squared gradients across the dataset. Applied before cosine similarity, this reweights the gradient space by the inverse RMS of each parameter's gradient history, emphasizing directions with consistently small-magnitude gradients.
 
 The normalizer is applied during gradient collection, so the same ``--normalizer`` must be set when collecting both query and index gradients. Unit normalization is then applied at scoring time to obtain cosine similarity.
 
