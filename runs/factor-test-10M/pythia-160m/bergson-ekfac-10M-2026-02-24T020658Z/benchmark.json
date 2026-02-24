@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "status": "success",
+  "model_key": "pythia-160m",
+  "model_name": "EleutherAI/pythia-160m",
+  "params": 160000000,
+  "train_tokens": 10000000,
+  "method": "bergson",
+  "factor_type": "ekfac",
+  "factor_seconds": 1633.4787022380624,
+  "run_path": "/mnt/ssd-1/lucia/bergson/runs/factor-test-10M/pythia-160m/bergson-ekfac-10M-2026-02-24T020658Z",
+  "notes": null,
+  "error": null,
+  "peak_memory_mb": 2540.16943359375,
+  "hardware": "lucia-ord-0 (8x NVIDIA A40)",
+  "gpu_name": "NVIDIA A40",
+  "num_gpus_available": 8,
+  "gpu_vram_gb": 48.0
+}

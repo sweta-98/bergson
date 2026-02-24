@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "status": "error",
+  "model_key": "pythia-14m",
+  "model_name": "EleutherAI/pythia-14m",
+  "params": 14000000,
+  "train_tokens": 10000000,
+  "method": "bergson",
+  "factor_type": "kfac",
+  "factor_seconds": null,
+  "run_path": "/mnt/ssd-1/lucia/bergson/runs/factor-test-10M/pythia-14m/bergson-kfac-10M-rerun",
+  "notes": null,
+  "error": "ImportError(\"cannot import name 'fwd_bwd_hessian_factory' from 'bergson.collector.collector' (/mnt/ssd-1/lucia/bergson/bergson/collector/collector.py)\")",
+  "peak_memory_mb": null,
+  "hardware": "lucia-ord-0 (8x NVIDIA A40)",
+  "gpu_name": "NVIDIA A40",
+  "num_gpus_available": 8,
+  "gpu_vram_gb": 48.0
+}
