@@ -76,16 +76,16 @@ def preprocess_grads(
     grad_column_names: list[str],
     unit_normalize: bool,
     device: torch.device,
-    accumulate_grads: Literal["mean", "sum", "none"] = "none",
-    normalize_accumulated_grad: bool = False,
+    aggregate_grads: Literal["mean", "sum", "none"] = "none",
+    normalize_aggregated_grad: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Preprocess the gradients. Returns a dictionary of preprocessed gradients
     with shape [N, grad_dim] or [1, grad_dim]. Preprocessing includes some
-    combination of per-item unit normalization, accumulation, accumulated
+    combination of per-item unit normalization, aggregation, aggregated
     gradient normalization, and dtype conversion."""
 
     # Short-circuit if possible
-    if accumulate_grads == "none" and not unit_normalize:
+    if aggregate_grads == "none" and not unit_normalize:
         return {name: grad_dict[name].to(device=device) for name in grad_column_names}
 
     grads = {
@@ -98,16 +98,16 @@ def preprocess_grads(
         norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
         grads = {k: v / norms for k, v in grads.items()}
 
-    # Accumulate across items
-    if accumulate_grads == "mean":
+    # Aggregate across items
+    if aggregate_grads == "mean":
         grads = {name: grads[name].mean(0, keepdim=True) for name in grad_column_names}
-    elif accumulate_grads == "sum":
+    elif aggregate_grads == "sum":
         grads = {name: grads[name].sum(0, keepdim=True) for name in grad_column_names}
-    elif accumulate_grads != "none":
-        raise ValueError(f"Invalid accumulate_grads: {accumulate_grads}")
+    elif aggregate_grads != "none":
+        raise ValueError(f"Invalid aggregate_grads: {aggregate_grads}")
 
-    # Normalize the accumulated gradient
-    if normalize_accumulated_grad:
+    # Normalize the aggregated gradient
+    if normalize_aggregated_grad:
         grad_norm = torch.cat(
             [grads[name].flatten() for name in grad_column_names], dim=0
         ).norm()
@@ -318,8 +318,8 @@ def score_dataset(
         score_cfg.modules,
         preprocess_cfg.unit_normalize,
         preprocess_device,
-        accumulate_grads="mean" if score_cfg.score == "mean" else "none",
-        normalize_accumulated_grad=score_cfg.score == "mean",
+        aggregate_grads="mean" if score_cfg.score == "mean" else "none",
+        normalize_aggregated_grad=score_cfg.score == "mean",
     )
 
     launch_distributed_run(

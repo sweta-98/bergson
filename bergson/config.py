@@ -149,10 +149,10 @@ class IndexConfig:
     Experimental feature only enabled for `build`."""
 
     processor_path: str = ""
-    """Path to a precomputed processor to apply during gradient collection."""
+    """Path to a precomputed processor."""
 
     normalizer: Literal["adafactor", "adam", "none"] = "none"
-    """Type of normalizer statistics to estimate during build."""
+    """Type of normalizer to use for the gradients."""
 
     skip_preconditioners: bool = False
     """Whether to skip estimating preconditioner statistics"""

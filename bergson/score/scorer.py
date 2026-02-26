@@ -78,24 +78,21 @@ class Scorer:
                 k: v.to(dtype=dtype) for k, v in self.preconditioners.items()
             }
 
-        # Apply query-side preconditioning then concatenate into a single tensor.
-        # H^(-1/2) for split (two-sided) preconditioning with unit_normalize,
-        # H^(-1) for one-sided preconditioning without unit_normalize.
-        if self.preconditioners:
-            query_grads = {
-                m: (
-                    query_grads[m].to(device=self.device, dtype=torch.float32)
-                    @ self.preconditioners[m].float()
-                    if m in self.preconditioners
-                    else query_grads[m]
-                )
-                for m in modules
-            }
-
+        # Concatenate query grads then apply preconditioning in-place on slices
         self.query_tensor = torch.cat(
             [query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules],
             dim=1,
         )
+        if self.preconditioners:
+            offset = 0
+            for m in modules:
+                d = query_grads[m].shape[1]
+                if m in self.preconditioners:
+                    self.query_tensor[:, offset : offset + d] = (
+                        self.query_tensor[:, offset : offset + d].float()
+                        @ self.preconditioners[m].float()
+                    ).to(self.dtype)
+                offset += d
 
     def __call__(
         self,

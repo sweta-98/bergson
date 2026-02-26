@@ -1,4 +1,5 @@
 import json
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -22,8 +23,10 @@ def normalize_grad(
 
     if unit_normalize:
         norm = torch.sqrt(torch.stack([g.pow(2).sum() for g in grads.values()]).sum())
-        assert norm > 0, "Gradient norm is zero"
-        grads = {k: v / norm for k, v in grads.items()}
+        if norm > 0:
+            grads = {k: v / norm for k, v in grads.items()}
+        else:
+            warnings.warn("Gradient norm is zero, skipping normalization")
 
     return grads
 
@@ -37,6 +40,8 @@ def normalize_flat_grad(
     norm = grad.norm()
     if norm > 0:
         grad /= norm
+    else:
+        warnings.warn("Gradient norm is zero, skipping normalization")
     return grad
 
 
