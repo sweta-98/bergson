@@ -1,11 +1,17 @@
 import torch
 
+from bergson.process_grads import compute_preconditioner
 from bergson.score.score_writer import ScoreWriter
 
 
 class Scorer:
     """
     Scores training gradients against query gradients.
+
+    Handles all preconditioning internally:
+      - Loads preconditioner from disk if ``preconditioner_path`` is given.
+      - Applies to query grads once at init time.
+      - Applies to index grads per-batch in :meth:`score` (split mode only).
 
     Accepts a ScoreWriter for saving the scores (disk or in-memory).
     """
@@ -21,7 +27,7 @@ class Scorer:
         unit_normalize: bool = False,
         score_mode: str = "inner_product",
         attribute_tokens: bool = False,
-        preconditioners: dict[str, torch.Tensor] | None = None,
+        preconditioner_path: str | None = None,
     ):
         """
         Initialize the scorer.
@@ -44,10 +50,14 @@ class Scorer:
             Scoring mode: "inner_product" or "nearest".
         attribute_tokens : bool
             Whether gradients are per-token (rows = total_valid tokens).
-        preconditioners : dict[str, torch.Tensor] | None
-            Per-module preconditioner matrices to apply to index gradients
-            before scoring. Used for split preconditioning (H^(-1/2) on
-            each side) when unit_normalize=True.
+        preconditioner_path : str | None
+            Path to a saved GradientProcessor. When provided:
+
+            * ``unit_normalize=True`` — loads H^(-1/2) and applies to both
+              query (here) and index (in :meth:`score`) for split
+              (two-sided) preconditioning.
+            * ``unit_normalize=False`` — loads H^(-1) and applies to query
+              only for one-sided preconditioning.
         """
         self.device = device
         self.dtype = dtype
@@ -56,7 +66,31 @@ class Scorer:
         self.score_mode = score_mode
         self.attribute_tokens = attribute_tokens
         self.writer = writer
-        self.preconditioners = preconditioners
+
+        # Load preconditioner: H^(-1/2) for split, H^(-1) for one-sided
+        self.preconditioners = compute_preconditioner(
+            preconditioner_path,
+            device=device,
+            power=-0.5 if unit_normalize else -1,
+        )
+        if self.preconditioners:
+            self.preconditioners = {
+                k: v.to(dtype=dtype) for k, v in self.preconditioners.items()
+            }
+
+        # Apply query-side preconditioning then concatenate into a single tensor.
+        # H^(-1/2) for split (two-sided) preconditioning with unit_normalize,
+        # H^(-1) for one-sided preconditioning without unit_normalize.
+        if self.preconditioners:
+            query_grads = {
+                m: (
+                    query_grads[m].to(device=self.device, dtype=torch.float32)
+                    @ self.preconditioners[m].float()
+                    if m in self.preconditioners
+                    else query_grads[m]
+                )
+                for m in modules
+            }
 
         self.query_tensor = torch.cat(
             [query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules],
@@ -81,8 +115,9 @@ class Scorer:
         """Compute scores for a batch of gradients."""
         grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
 
-        # Apply per-module preconditioners in-place on the concatenated tensor
-        if self.preconditioners:
+        # Apply H^(-1/2) to index grads for split (two-sided) preconditioning.
+        # One-sided mode (unit_normalize=False) only preconditions the query.
+        if self.preconditioners and self.unit_normalize:
             offset = 0
             for m in self.modules:
                 d = mod_grads[m].shape[1]

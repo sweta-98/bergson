@@ -19,7 +19,6 @@ from bergson.data import (
     load_gradients,
 )
 from bergson.distributed import launch_distributed_run
-from bergson.process_grads import compute_preconditioner, precondition_grads
 from bergson.score.score_writer import (
     MemmapSequenceScoreWriter,
     MemmapTokenScoreWriter,
@@ -47,7 +46,6 @@ def create_scorer(
     dtype: torch.dtype,
     *,
     attribute_tokens: bool = False,
-    preconditioners: dict[str, torch.Tensor] | None = None,
 ) -> Scorer:
     """Create a Scorer with MemmapScoreWriter for disk-based scoring."""
     num_queries = len(query_grads[score_cfg.modules[0]])
@@ -69,7 +67,7 @@ def create_scorer(
         unit_normalize=preprocess_cfg.unit_normalize,
         score_mode="nearest" if score_cfg.score == "nearest" else "inner_product",
         attribute_tokens=attribute_tokens,
-        preconditioners=preconditioners,
+        preconditioner_path=preprocess_cfg.preconditioner_path,
     )
 
 
@@ -231,21 +229,6 @@ def score_worker(
     )
     score_device = torch.device(f"cuda:{rank}")
 
-    # Apply H^(-1/2) to index grads when using split (two-sided) preconditioning.
-    # Only used with unit_normalize, where both query and index get H^(-1/2).
-    preconditioners = None
-    if preprocess_cfg.unit_normalize and preprocess_cfg.preconditioner_path:
-        preconditioners = compute_preconditioner(
-            preprocess_cfg.preconditioner_path,
-            device=score_device,
-            power=-0.5,
-        )
-        # Cast preconditioners to score dtype
-        if preconditioners:
-            preconditioners = {
-                k: v.to(dtype=score_dtype) for k, v in preconditioners.items()
-            }
-
     if isinstance(ds, Dataset):
         kwargs["batches"] = allocate_batches(ds["length"], index_cfg.token_batch_size)
         kwargs["scorer"] = create_scorer(
@@ -257,7 +240,6 @@ def score_worker(
             device=score_device,
             dtype=score_dtype,
             attribute_tokens=index_cfg.attribute_tokens,
-            preconditioners=preconditioners,
         )
 
         collect_gradients(**kwargs)
@@ -284,7 +266,6 @@ def score_worker(
                 preprocess_cfg,
                 device=score_device,
                 dtype=score_dtype,
-                preconditioners=preconditioners,
             )
 
             collect_gradients(**kwargs)
@@ -331,13 +312,6 @@ def score_dataset(
     ds = setup_data_pipeline(index_cfg)
 
     query_grads = get_query_grads(score_cfg)
-
-    # Apply preconditioner to query grads: H^(-1/2) when unit_normalize (split
-    # preconditioning), H^(-1) otherwise (one-sided preconditioning).
-    if not score_cfg.skip_query_preprocess and preprocess_cfg.preconditioner_path:
-        query_grads = precondition_grads(
-            query_grads, preprocess_cfg, score_cfg.modules, preprocess_device
-        )
 
     query_grads = preprocess_grads(
         query_grads,

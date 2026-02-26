@@ -300,14 +300,20 @@ def test_compute_preconditioner_h_inv():
     assert result == {}
 
 
-def test_scorer_preconditioners():
+def test_scorer_preconditioners(tmp_path: Path):
     """Test that Scorer applies preconditioners to index grads."""
+    from bergson.gradients import GradientProcessor
+
     modules = ["mod_a"]
     query_grads = {"mod_a": torch.randn(1, 4)}
-    precond = {"mod_a": torch.eye(4) * 2.0}
+
+    # Save a processor with a non-identity preconditioner
+    proc = GradientProcessor(preconditioners={"mod_a": torch.eye(4) * 2.0})
+    precond_path = tmp_path / "preconditioner"
+    proc.save(precond_path)
 
     writer = MemmapSequenceScoreWriter(
-        Path("/tmp/test_scorer_precond"), 2, 1, dtype=torch.float32
+        tmp_path / "scores_with", 2, 1, dtype=torch.float32
     )
     scorer = Scorer(
         query_grads=query_grads,
@@ -315,7 +321,7 @@ def test_scorer_preconditioners():
         writer=writer,
         device=torch.device("cpu"),
         dtype=torch.float32,
-        preconditioners=precond,
+        preconditioner_path=str(precond_path),
     )
 
     # Score with preconditioners
@@ -323,10 +329,13 @@ def test_scorer_preconditioners():
     scores_with = scorer.score(mod_grads)
 
     # Score without preconditioners
+    writer_no = MemmapSequenceScoreWriter(
+        tmp_path / "scores_without", 2, 1, dtype=torch.float32
+    )
     scorer_no_precond = Scorer(
         query_grads=query_grads,
         modules=modules,
-        writer=writer,
+        writer=writer_no,
         device=torch.device("cpu"),
         dtype=torch.float32,
     )
