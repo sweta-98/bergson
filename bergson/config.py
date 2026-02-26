@@ -384,5 +384,4 @@ class TrackstarConfig:
     """Number of gradient components to downweight via automatic lambda
     selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is
     computed so that the sorted singular-value curves of the query and
-    index preconditioners intersect at this component. Set to 0 to
-    disable and use the mixing_coefficient from ScoreConfig as-is."""
+    index preconditioners intersect at this component."""
