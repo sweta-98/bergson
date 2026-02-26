@@ -79,18 +79,18 @@ class Scorer:
     @torch.inference_mode()
     def score(self, mod_grads: dict[str, torch.Tensor]) -> torch.Tensor:
         """Compute scores for a batch of gradients."""
-        # Apply per-module preconditioners to index grads if provided
-        if self.preconditioners:
-            mod_grads = {
-                m: (
-                    mod_grads[m].to(self.device) @ self.preconditioners[m]
-                    if m in self.preconditioners
-                    else mod_grads[m].to(self.device)
-                )
-                for m in self.modules
-            }
-
         grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
+
+        # Apply per-module preconditioners in-place on the concatenated tensor
+        if self.preconditioners:
+            offset = 0
+            for m in self.modules:
+                d = mod_grads[m].shape[1]
+                if m in self.preconditioners:
+                    grads[:, offset : offset + d] = (
+                        grads[:, offset : offset + d] @ self.preconditioners[m]
+                    )
+                offset += d
         if self.unit_normalize:
             grads = grads / grads.norm(dim=1, keepdim=True)
 
