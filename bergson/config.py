@@ -379,3 +379,11 @@ class TrackstarConfig:
 
     query: DataConfig = field(default_factory=DataConfig)
     """Query dataset specification."""
+
+    target_downweight_components: int = 0
+    """Number of gradient components to downweight via automatic lambda
+    selection (§A.1.3 of Chang et al., 2024). When > 0, the mixing
+    coefficient is computed so that the sorted singular-value curves of
+    the query and index preconditioners intersect at this component.
+    Typical value is ~1000 out of ~65K total components. When 0
+    (default), the mixing_coefficient from ScoreConfig is used as-is."""

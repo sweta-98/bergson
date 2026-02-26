@@ -15,10 +15,12 @@ from .config import (
     ScoreConfig,
     TrackstarConfig,
 )
+from .gradients import GradientProcessor
 from .hessians.hessian_approximations import approximate_hessians
 from .query.query_index import query
 from .reduce import reduce
 from .score.score import score_dataset
+from .utils.math import compute_lambda
 
 
 def validate_run_path(index_cfg: IndexConfig):
@@ -170,6 +172,22 @@ class Trackstar:
         query_precond_cfg.skip_preconditioners = False
         validate_run_path(query_precond_cfg)
         build(query_precond_cfg)
+
+        # Auto-compute mixing coefficient if target_downweight_components > 0
+        if self.trackstar_cfg.target_downweight_components > 0:
+            query_processor = GradientProcessor.load(query_precond_path)
+            value_processor = GradientProcessor.load(value_precond_path)
+            lam = compute_lambda(
+                query_eigen=query_processor.preconditioners_eigen,
+                index_eigen=value_processor.preconditioners_eigen,
+                target_components=self.trackstar_cfg.target_downweight_components,
+            )
+            self.score_cfg.mixing_coefficient = lam
+            print(
+                f"Auto-computed mixing coefficient λ={lam:.4f} "
+                f"(target {self.trackstar_cfg.target_downweight_components} "
+                f"downweighted components)"
+            )
 
         # Step 3: Build per-item query gradient index
         print("Step 3/4: Building query gradient index...")
