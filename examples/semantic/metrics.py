@@ -200,7 +200,7 @@ def compute_metrics(
         exclude_llama: Whether to exclude Llama-generated samples.
         query_preconditioner_path: Optional path to query preconditioner.
         index_preconditioner_path: Optional path to index preconditioner.
-        mixing_coefficient: Weight for the query preconditioner when mixing (default 0.99).
+        mixing_coefficient: Weight for the query preconditioner when mixing.
 
     Returns:
         Dictionary of similarity statistics.

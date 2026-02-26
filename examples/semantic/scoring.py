@@ -230,7 +230,7 @@ def compute_scores_with_bergson(
         output_path: Path to save scores.
         query_preconditioner_path: Optional path to query preconditioner.
         index_preconditioner_path: Optional path to index preconditioner.
-        mixing_coefficient: Weight for the query preconditioner when mixing (default 0.99).
+        mixing_coefficient: Weight for the query preconditioner when mixing.
         unit_normalize: Whether to unit normalize gradients.
     """
     output_path = Path(output_path)

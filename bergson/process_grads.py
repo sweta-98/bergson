@@ -32,11 +32,11 @@ def normalize_flat_grad(
     grad: torch.Tensor,
     device: torch.device,
 ) -> torch.Tensor:
-    """Unit-normalize a flat gradient tensor (not a dict)."""
+    """Unit-normalize a single gradient tensor."""
     grad = grad.to(device=device, dtype=torch.float32)
     norm = grad.norm()
     if norm > 0:
-        grad = grad / norm
+        grad /= norm
     return grad
 
 

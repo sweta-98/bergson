@@ -231,13 +231,14 @@ def score_worker(
     )
     score_device = torch.device(f"cuda:{rank}")
 
-    # Compute preconditioner for index-side application
+    # Apply H^(-1/2) to index grads when using split (two-sided) preconditioning.
+    # Only used with unit_normalize, where both query and index get H^(-1/2).
     preconditioners = None
-    if preprocess_cfg.unit_normalize and not index_cfg.skip_preconditioners:
+    if preprocess_cfg.unit_normalize and preprocess_cfg.preconditioner_path:
         preconditioners = compute_preconditioner(
             preprocess_cfg.preconditioner_path,
             device=score_device,
-            power=-0.5 if preprocess_cfg.unit_normalize else -1,
+            power=-0.5,
         )
         # Cast preconditioners to score dtype
         if preconditioners:
@@ -331,8 +332,9 @@ def score_dataset(
 
     query_grads = get_query_grads(score_cfg)
 
-    # Apply preconditioner to query grads if needed
-    if not score_cfg.skip_query_preprocess and not index_cfg.skip_preconditioners:
+    # Apply preconditioner to query grads: H^(-1/2) when unit_normalize (split
+    # preconditioning), H^(-1) otherwise (one-sided preconditioning).
+    if not score_cfg.skip_query_preprocess and preprocess_cfg.preconditioner_path:
         query_grads = precondition_grads(
             query_grads, preprocess_cfg, score_cfg.modules, preprocess_device
         )
