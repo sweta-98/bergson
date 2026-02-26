@@ -211,8 +211,7 @@ def compute_scores_fast(
 def compute_scores_with_bergson(
     index_path: Path | str,
     output_path: Path | str,
-    query_preconditioner_path: str | None = None,
-    index_preconditioner_path: str | None = None,
+    preconditioner_path: str | None = None,
     unit_normalize: bool = True,
 ) -> None:
     """Run bergson score to compute pairwise similarities.
@@ -223,8 +222,7 @@ def compute_scores_with_bergson(
     Args:
         index_path: Path to the gradient index.
         output_path: Path to save scores.
-        query_preconditioner_path: Optional path to query preconditioner.
-        index_preconditioner_path: Optional path to index preconditioner.
+        preconditioner_path: Optional path to (mixed) preconditioner.
         unit_normalize: Whether to unit normalize gradients.
     """
     output_path = Path(output_path)
@@ -269,11 +267,8 @@ def compute_scores_with_bergson(
     if unit_normalize:
         cmd.append("--unit_normalize")
 
-    if query_preconditioner_path:
-        cmd.extend(["--query_preconditioner_path", query_preconditioner_path])
-
-    if index_preconditioner_path:
-        cmd.extend(["--index_preconditioner_path", index_preconditioner_path])
+    if preconditioner_path:
+        cmd.extend(["--preconditioner_path", preconditioner_path])
 
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)

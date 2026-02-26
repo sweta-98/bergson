@@ -272,14 +272,8 @@ class PreprocessConfig:
     unit_normalize: bool = False
     """Whether to unit normalize the gradients."""
 
-    query_preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner for query gradients."""
-
-    index_preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner for index gradients."""
-
-    mixing_coefficient: float = 0.99
-    """Weight for mixing query vs index preconditioner (1.0 = query only)."""
+    preconditioner_path: str | None = None
+    """Path to a precomputed preconditioner."""
 
 
 @dataclass
@@ -387,3 +381,6 @@ class TrackstarConfig:
 
     query: DataConfig = field(default_factory=DataConfig)
     """Query dataset specification."""
+
+    mixing_coefficient: float = 0.99
+    """Weight for mixing query vs index preconditioner (1.0 = query only)."""

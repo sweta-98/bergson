@@ -25,6 +25,7 @@ from .data import (
 )
 from .gradients import GradientProcessor
 from .normalizer.fit_normalizers import fit_normalizers
+from .process_grads import mix_preconditioners
 from .query.attributor import Attributor
 from .query.faiss_index import FaissConfig
 from .score.scorer import Scorer
@@ -56,4 +57,5 @@ __all__ = [
     "ScoreConfig",
     "ReduceConfig",
     "QueryConfig",
+    "mix_preconditioners",
 ]

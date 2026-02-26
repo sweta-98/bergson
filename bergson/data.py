@@ -349,9 +349,7 @@ class InMemorySequenceBuilder(Builder):
             return {}
         device = torch.device(device)
         return compute_preconditioner(
-            self.preprocess_cfg.query_preconditioner_path,
-            self.preprocess_cfg.index_preconditioner_path,
-            self.preprocess_cfg.mixing_coefficient,
+            self.preprocess_cfg.preconditioner_path,
             self.preprocess_cfg.unit_normalize,
             device,
         )
@@ -930,9 +928,7 @@ class SequenceBuilder(Builder):
         if self.preprocess_cfg is None:
             return {}
         return compute_preconditioner(
-            self.preprocess_cfg.query_preconditioner_path,
-            self.preprocess_cfg.index_preconditioner_path,
-            self.preprocess_cfg.mixing_coefficient,
+            self.preprocess_cfg.preconditioner_path,
             self.preprocess_cfg.unit_normalize,
             device,
         )

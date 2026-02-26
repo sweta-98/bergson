@@ -188,7 +188,7 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
 
     # Produce preconditioned query gradients
     preprocess_cfg = PreprocessConfig(
-        query_preconditioner_path=str(tmp_path),
+        preconditioner_path=str(tmp_path),
     )
 
     preconditioned = precondition_grads(
@@ -295,8 +295,8 @@ def test_compute_preconditioner_h_inv():
     """Test that compute_preconditioner returns H^(-1) when unit_normalize=False."""
     from bergson.process_grads import compute_preconditioner
 
-    # No paths → empty dict
-    result = compute_preconditioner(None, None, 0.99, False, torch.device("cpu"))
+    # No path → empty dict
+    result = compute_preconditioner(None, False, torch.device("cpu"))
     assert result == {}
 
 

@@ -235,9 +235,7 @@ def score_worker(
     preconditioners = None
     if preprocess_cfg.unit_normalize and not index_cfg.skip_preconditioners:
         preconditioners = compute_preconditioner(
-            preprocess_cfg.query_preconditioner_path,
-            preprocess_cfg.index_preconditioner_path,
-            preprocess_cfg.mixing_coefficient,
+            preprocess_cfg.preconditioner_path,
             preprocess_cfg.unit_normalize,
             score_device,
         )

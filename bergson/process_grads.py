@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -102,54 +103,103 @@ def preprocess_grads(
     return grads
 
 
+def mix_preconditioners(
+    query_path: str | Path,
+    index_path: str | Path,
+    output_path: str | Path,
+    mixing_coefficient: float = 0.99,
+) -> Path:
+    """Mix query and index preconditioners and save the result to disk.
+
+    Computes ``H_mixed = coeff * H_query + (1 - coeff) * H_index`` for
+    every module's raw H matrix, then persists a new
+    :class:`~bergson.gradients.GradientProcessor` at *output_path*.
+
+    A ``mix_config.json`` file is also written alongside for provenance.
+
+    Parameters
+    ----------
+    query_path : str | Path
+        Directory containing the query GradientProcessor.
+    index_path : str | Path
+        Directory containing the index GradientProcessor.
+    output_path : str | Path
+        Directory where the mixed GradientProcessor will be saved.
+    mixing_coefficient : float
+        Weight for the query preconditioner (1.0 = query only).
+
+    Returns
+    -------
+    Path
+        The *output_path* as a :class:`pathlib.Path`.
+    """
+    query_path = Path(query_path)
+    index_path = Path(index_path)
+    output_path = Path(output_path)
+
+    q_proc = GradientProcessor.load(query_path)
+    i_proc = GradientProcessor.load(index_path)
+
+    mixed_preconditioners = {
+        k: q_proc.preconditioners[k] * mixing_coefficient
+        + i_proc.preconditioners[k] * (1 - mixing_coefficient)
+        for k in q_proc.preconditioners
+    }
+
+    # Build a new processor with the mixed preconditioners
+    mixed_proc = GradientProcessor(
+        normalizers=q_proc.normalizers,
+        preconditioners=mixed_preconditioners,
+        preconditioners_eigen={},
+        projection_dim=q_proc.projection_dim,
+        reshape_to_square=q_proc.reshape_to_square,
+        projection_type=q_proc.projection_type,
+        include_bias=q_proc.include_bias,
+    )
+    mixed_proc.save(output_path)
+
+    # Save provenance metadata
+    mix_config = {
+        "query_path": str(query_path),
+        "index_path": str(index_path),
+        "mixing_coefficient": mixing_coefficient,
+    }
+    with (output_path / "mix_config.json").open("w") as f:
+        json.dump(mix_config, f, indent=2)
+
+    return output_path
+
+
 def compute_preconditioner(
-    query_preconditioner_path: str | None,
-    index_preconditioner_path: str | None,
-    mixing_coefficient: float,
+    preconditioner_path: str | None,
     unit_normalize: bool,
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
-    """Compute preconditioner matrices from saved processor files.
+    """Compute preconditioner matrices from a saved processor file.
 
     When unit_normalize=True, returns H^(-1/2) for split application to both
     query and index sides.
     When unit_normalize=False, returns H^(-1) for one-sided application.
     """
-    use_q = query_preconditioner_path is not None
-    use_i = index_preconditioner_path is not None
-
-    if not (use_q or use_i):
+    if preconditioner_path is None:
         return {}
 
-    q, i = {}, {}
-    if use_q:
-        q = GradientProcessor.load(
-            Path(query_preconditioner_path),
-            map_location=device,
-        ).preconditioners
-    if use_i:
-        i = GradientProcessor.load(
-            Path(index_preconditioner_path),
-            map_location=device,
-        ).preconditioners
-
-    mixed = (
-        {k: q[k] * mixing_coefficient + i[k] * (1 - mixing_coefficient) for k in q}
-        if (q and i)
-        else (q or i)
-    )
+    preconditioners = GradientProcessor.load(
+        Path(preconditioner_path),
+        map_location=device,
+    ).preconditioners
 
     if unit_normalize:
         # H^(-1/2) for split application to both sides
         return {
             name: psd_rsqrt(H.to(device=device, dtype=torch.float32))
-            for name, H in mixed.items()
+            for name, H in preconditioners.items()
         }
     else:
         # H^(-1) for one-sided application
         return {
             name: compute_damped_inverse(H.to(device=device))
-            for name, H in mixed.items()
+            for name, H in preconditioners.items()
         }
 
 
@@ -171,11 +221,9 @@ def precondition_grads(
     target_modules: list[str],
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
-    """Precondition query gradients with the query and/or index preconditioners."""
+    """Precondition query gradients with the preconditioner."""
     h_inv = compute_preconditioner(
-        preprocess_cfg.query_preconditioner_path,
-        preprocess_cfg.index_preconditioner_path,
-        preprocess_cfg.mixing_coefficient,
+        preprocess_cfg.preconditioner_path,
         preprocess_cfg.unit_normalize,
         device,
     )
