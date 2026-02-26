@@ -236,8 +236,8 @@ def score_worker(
     if preprocess_cfg.unit_normalize and not index_cfg.skip_preconditioners:
         preconditioners = compute_preconditioner(
             preprocess_cfg.preconditioner_path,
-            apply_rsqrt=preprocess_cfg.unit_normalize,
             device=score_device,
+            power=-0.5 if preprocess_cfg.unit_normalize else -1,
         )
         # Cast preconditioners to score dtype
         if preconditioners:

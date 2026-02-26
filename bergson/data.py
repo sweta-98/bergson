@@ -350,7 +350,7 @@ class InMemorySequenceBuilder(Builder):
         device = torch.device(device)
         return compute_preconditioner(
             self.preprocess_cfg.preconditioner_path,
-            apply_rsqrt=self.preprocess_cfg.unit_normalize,
+            power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
             device=device,
         )
 
@@ -929,7 +929,7 @@ class SequenceBuilder(Builder):
             return {}
         return compute_preconditioner(
             self.preprocess_cfg.preconditioner_path,
-            apply_rsqrt=self.preprocess_cfg.unit_normalize,
+            power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
             device=device,
         )
 

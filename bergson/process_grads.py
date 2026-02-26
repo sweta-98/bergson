@@ -172,14 +172,24 @@ def mix_preconditioners(
 
 def compute_preconditioner(
     preconditioner_path: str | None,
-    apply_rsqrt: bool,
     device: torch.device,
+    power: float = -0.5,
 ) -> dict[str, torch.Tensor]:
     """Compute preconditioner matrices from a saved processor file.
 
-    When apply_rsqrt=True, returns H^(-1/2) for split application to both
-    query and index sides.
-    When apply_rsqrt=False, returns H^(-1) for one-sided application.
+    Parameters
+    ----------
+    preconditioner_path : str | None
+        Directory containing the saved GradientProcessor.
+    device : torch.device
+        Device to load the preconditioner onto.
+    power : float
+        Matrix power to apply to each H matrix.
+
+        * ``-0.5`` — H^(-1/2), used for split (two-sided) preconditioning
+          where both query and index gradients are multiplied by H^(-1/2).
+        * ``-1``   — H^(-1), used for one-sided preconditioning where only
+          the query gradients are preconditioned.
     """
     if preconditioner_path is None:
         return {}
@@ -189,18 +199,18 @@ def compute_preconditioner(
         map_location=device,
     ).preconditioners
 
-    if apply_rsqrt:
-        # H^(-1/2) for split application to both sides
+    if power == -0.5:
         return {
             name: psd_rsqrt(H.to(device=device, dtype=torch.float32))
             for name, H in preconditioners.items()
         }
-    else:
-        # H^(-1) for one-sided application
+    elif power == -1:
         return {
             name: compute_damped_inverse(H.to(device=device))
             for name, H in preconditioners.items()
         }
+    else:
+        raise ValueError(f"Unsupported power: {power}. Use -0.5 or -1.")
 
 
 def precondition_grad(
@@ -224,8 +234,8 @@ def precondition_grads(
     """Precondition query gradients with the preconditioner."""
     h_inv = compute_preconditioner(
         preprocess_cfg.preconditioner_path,
-        apply_rsqrt=preprocess_cfg.unit_normalize,
         device=device,
+        power=-0.5 if preprocess_cfg.unit_normalize else -1,
     )
 
     if h_inv:
