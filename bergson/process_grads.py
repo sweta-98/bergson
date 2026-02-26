@@ -172,14 +172,14 @@ def mix_preconditioners(
 
 def compute_preconditioner(
     preconditioner_path: str | None,
-    unit_normalize: bool,
+    apply_rsqrt: bool,
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
     """Compute preconditioner matrices from a saved processor file.
 
-    When unit_normalize=True, returns H^(-1/2) for split application to both
+    When apply_rsqrt=True, returns H^(-1/2) for split application to both
     query and index sides.
-    When unit_normalize=False, returns H^(-1) for one-sided application.
+    When apply_rsqrt=False, returns H^(-1) for one-sided application.
     """
     if preconditioner_path is None:
         return {}
@@ -189,7 +189,7 @@ def compute_preconditioner(
         map_location=device,
     ).preconditioners
 
-    if unit_normalize:
+    if apply_rsqrt:
         # H^(-1/2) for split application to both sides
         return {
             name: psd_rsqrt(H.to(device=device, dtype=torch.float32))
@@ -224,8 +224,8 @@ def precondition_grads(
     """Precondition query gradients with the preconditioner."""
     h_inv = compute_preconditioner(
         preprocess_cfg.preconditioner_path,
-        preprocess_cfg.unit_normalize,
-        device,
+        apply_rsqrt=preprocess_cfg.unit_normalize,
+        device=device,
     )
 
     if h_inv:

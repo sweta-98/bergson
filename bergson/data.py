@@ -350,8 +350,8 @@ class InMemorySequenceBuilder(Builder):
         device = torch.device(device)
         return compute_preconditioner(
             self.preprocess_cfg.preconditioner_path,
-            self.preprocess_cfg.unit_normalize,
-            device,
+            apply_rsqrt=self.preprocess_cfg.unit_normalize,
+            device=device,
         )
 
     def reduce(
@@ -929,8 +929,8 @@ class SequenceBuilder(Builder):
             return {}
         return compute_preconditioner(
             self.preprocess_cfg.preconditioner_path,
-            self.preprocess_cfg.unit_normalize,
-            device,
+            apply_rsqrt=self.preprocess_cfg.unit_normalize,
+            device=device,
         )
 
     def reduce(self, indices: list[int], mod_grads: dict[str, torch.Tensor]):

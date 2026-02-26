@@ -292,11 +292,11 @@ def test_memmap_score_writer_float32(tmp_path: Path):
 
 
 def test_compute_preconditioner_h_inv():
-    """Test that compute_preconditioner returns H^(-1) when unit_normalize=False."""
+    """Test that compute_preconditioner returns H^(-1) when apply_rsqrt=False."""
     from bergson.process_grads import compute_preconditioner
 
     # No path → empty dict
-    result = compute_preconditioner(None, False, torch.device("cpu"))
+    result = compute_preconditioner(None, apply_rsqrt=False, device=torch.device("cpu"))
     assert result == {}
 
 

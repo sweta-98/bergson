@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from bergson.data import load_gradients
 from bergson.gradients import GradientProcessor
+from bergson.process_grads import mix_preconditioners
 from bergson.utils.math import compute_damped_inverse
 
 
@@ -211,7 +212,9 @@ def compute_scores_fast(
 def compute_scores_with_bergson(
     index_path: Path | str,
     output_path: Path | str,
-    preconditioner_path: str | None = None,
+    query_preconditioner_path: str | Path | None = None,
+    index_preconditioner_path: str | Path | None = None,
+    mixing_coefficient: float = 0.99,
     unit_normalize: bool = True,
 ) -> None:
     """Run bergson score to compute pairwise similarities.
@@ -219,18 +222,40 @@ def compute_scores_with_bergson(
     NOTE: This recomputes gradients, which is slow. For index-vs-index
     scoring, use compute_scores_fast() instead.
 
+    If both query_preconditioner_path and index_preconditioner_path are given,
+    they are mixed internally using mixing_coefficient before scoring.
+
     Args:
         index_path: Path to the gradient index.
         output_path: Path to save scores.
-        preconditioner_path: Optional path to (mixed) preconditioner.
+        query_preconditioner_path: Optional path to query preconditioner.
+        index_preconditioner_path: Optional path to index preconditioner.
+        mixing_coefficient: Weight for the query preconditioner when mixing (default 0.99).
         unit_normalize: Whether to unit normalize gradients.
     """
     output_path = Path(output_path)
     index_path = Path(index_path)
 
-    if output_path.exists():
+    if (output_path / "info.json").exists():
         print(f"Scores already exist at {output_path}, skipping...")
         return
+
+    # Mix preconditioners if both paths are given, otherwise use whichever is provided
+    preconditioner_path = None
+    if query_preconditioner_path and index_preconditioner_path:
+        mixed_path = output_path / "mixed_preconditioner"
+        output_path.mkdir(parents=True, exist_ok=True)
+        mix_preconditioners(
+            query_preconditioner_path,
+            index_preconditioner_path,
+            mixed_path,
+            mixing_coefficient=mixing_coefficient,
+        )
+        preconditioner_path = str(mixed_path)
+    elif query_preconditioner_path:
+        preconditioner_path = str(query_preconditioner_path)
+    elif index_preconditioner_path:
+        preconditioner_path = str(index_preconditioner_path)
 
     # Load index config to get model and dataset info
     with open(index_path / "index_config.json") as f:
