@@ -22,7 +22,7 @@ from bergson.process_preconditioners import (
     process_preconditioners,
 )
 from bergson.score.scorer import Scorer
-from bergson.utils.utils import assert_type, get_gradient_dtype
+from bergson.utils.utils import assert_type, get_gradient_dtype, numpy_to_tensor
 
 
 @dataclass(kw_only=True)
@@ -138,9 +138,7 @@ class InMemoryCollector(HookCollectorBase):
             buf = self.builder.grad_buffer
             offset = 0
             for name, dim in grad_sizes.items():
-                self.gradients[name] = torch.from_numpy(
-                    buf[:, offset : offset + dim].copy()
-                )
+                self.gradients[name] = numpy_to_tensor(buf[:, offset : offset + dim])
                 offset += dim
 
         if self.scorer is not None:

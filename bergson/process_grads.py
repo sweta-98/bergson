@@ -179,6 +179,7 @@ def get_trackstar_preconditioner(
     preconditioner_path: str | None,
     device: torch.device,
     power: float = -0.5,
+    return_dtype: torch.dtype | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute preconditioner matrices from a saved processor file.
 
@@ -204,8 +205,10 @@ def get_trackstar_preconditioner(
         map_location=device,
     ).preconditioners
 
+    final_dtype = return_dtype or next(iter(preconditioners.values())).dtype
+
     return {
-        name: damped_psd_power(H.to(device=device), power=power)
+        name: damped_psd_power(H.to(device=device), power=power).to(final_dtype)
         for name, H in preconditioners.items()
     }
 

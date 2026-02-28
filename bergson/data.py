@@ -331,7 +331,15 @@ class InMemorySequenceBuilder(Builder):
                 dtype=torch.float32,
                 device=device,
             )
-            self.h_inv = self._compute_h_inv(device)
+            self.h_inv = (
+                get_trackstar_preconditioner(
+                    self.preprocess_cfg.preconditioner_path,
+                    power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
+                    device=torch.device(device),
+                )
+                if self.preprocess_cfg is not None
+                else {}
+            )
         else:
             np_dtype = convert_dtype_to_np(dtype)
             num_grads = self.num_items
@@ -341,17 +349,6 @@ class InMemorySequenceBuilder(Builder):
         self.grad_buffer = np.zeros(
             (num_grads, total_grad_dim),
             dtype=np_dtype,
-        )
-
-    def _compute_h_inv(self, device: str | torch.device) -> dict[str, torch.Tensor]:
-        """Compute preconditioner from preprocess_cfg if available."""
-        if self.preprocess_cfg is None:
-            return {}
-        device = torch.device(device)
-        return get_trackstar_preconditioner(
-            self.preprocess_cfg.preconditioner_path,
-            power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
-            device=device,
         )
 
     def reduce(
@@ -908,7 +905,15 @@ class SequenceBuilder(Builder):
                 device=f"cuda:{self.rank}",
             )
             device = torch.device(f"cuda:{self.rank}")
-            self.h_inv = self._compute_h_inv(device)
+            self.h_inv = (
+                get_trackstar_preconditioner(
+                    self.preprocess_cfg.preconditioner_path,
+                    power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
+                    device=torch.device(device),
+                )
+                if self.preprocess_cfg is not None
+                else {}
+            )
         else:
             num_grads = self.num_items
             np_dtype = convert_dtype_to_np(dtype)
@@ -921,16 +926,6 @@ class SequenceBuilder(Builder):
             grad_sizes=self.grad_sizes,
             dtype=np_dtype,
             with_structure=False,
-        )
-
-    def _compute_h_inv(self, device: torch.device) -> dict[str, torch.Tensor]:
-        """Compute preconditioner from preprocess_cfg if available."""
-        if self.preprocess_cfg is None:
-            return {}
-        return get_trackstar_preconditioner(
-            self.preprocess_cfg.preconditioner_path,
-            power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
-            device=device,
         )
 
     def reduce(self, indices: list[int], mod_grads: dict[str, torch.Tensor]):

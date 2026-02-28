@@ -72,27 +72,20 @@ class Scorer:
             preconditioner_path,
             device=device,
             power=-0.5 if unit_normalize else -1,
+            return_dtype=dtype,
         )
+        # Precondition query grads per module
         if self.preconditioners:
-            self.preconditioners = {
-                k: v.to(dtype=dtype) for k, v in self.preconditioners.items()
+            self.query_grads = {
+                m: query_grads[m].to(device=self.device, dtype=self.dtype)
+                @ self.preconditioners[m]
+                for m in modules
             }
-
-        # Concatenate query grads then apply preconditioning in-place on slices
-        self.query_tensor = torch.cat(
-            [query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules],
-            dim=1,
-        )
-        if self.preconditioners:
-            offset = 0
-            for m in modules:
-                d = query_grads[m].shape[1]
-                if m in self.preconditioners:
-                    self.query_tensor[:, offset : offset + d] = (
-                        self.query_tensor[:, offset : offset + d].float()
-                        @ self.preconditioners[m].float()
-                    ).to(self.dtype)
-                offset += d
+        else:
+            self.query_grads = {
+                m: query_grads[m].to(device=self.device, dtype=self.dtype)
+                for m in modules
+            }
 
     def __call__(
         self,
@@ -100,34 +93,46 @@ class Scorer:
         mod_grads: dict[str, torch.Tensor],
     ):
         """Score a batch of training gradients against all queries."""
-        # Convert the gradients to the scoring dtype
-        if next(iter(mod_grads.values())).dtype != self.dtype:
-            mod_grads = {name: grad.to(self.dtype) for name, grad in mod_grads.items()}
-
         scores = self.score(mod_grads)
         self.writer(indices, scores)
 
     @torch.inference_mode()
-    def score(self, mod_grads: dict[str, torch.Tensor]) -> torch.Tensor:
+    def score(self, index_grads: dict[str, torch.Tensor]) -> torch.Tensor:
         """Compute scores for a batch of gradients."""
-        grads = torch.cat([mod_grads[m].to(self.device) for m in self.modules], dim=1)
-
-        # Apply H^(-1/2) to index grads for split (two-sided) preconditioning.
+        # Device transfer and (optionally split) preconditioning of index grads.
         # One-sided mode (unit_normalize=False) only preconditions the query.
-        if self.preconditioners and self.unit_normalize:
-            offset = 0
-            for m in self.modules:
-                d = mod_grads[m].shape[1]
-                if m in self.preconditioners:
-                    grads[:, offset : offset + d] = (
-                        grads[:, offset : offset + d] @ self.preconditioners[m]
-                    )
-                offset += d
+        i_mods = {}
+        for m in self.modules:
+            g = index_grads[m].to(self.device, self.dtype, non_blocking=True)
+            if (
+                self.unit_normalize
+                and self.preconditioners
+                and m in self.preconditioners
+            ):
+                g = g @ self.preconditioners[m]
+            i_mods[m] = g
+
+        # Sum per-module matmuls
+        scores = torch.zeros(
+            i_mods[self.modules[0]].shape[0],
+            self.query_grads[self.modules[0]].shape[0],
+            device=self.device,
+            dtype=self.dtype,
+        )
+        for m in self.modules:
+            scores.addmm_(i_mods[m], self.query_grads[m].T)
+
         if self.unit_normalize:
-            grads = grads / grads.norm(dim=1, keepdim=True)
+            i_norm = (
+                torch.stack([i_mods[m].pow(2).sum(dim=1) for m in self.modules])
+                .sum(0)
+                .sqrt()
+                .clamp_min_(1e-12)
+                .unsqueeze(1)
+            )
+            scores.div_(i_norm)
 
         if self.score_mode == "nearest":
-            all_scores = grads @ self.query_tensor.T
-            return all_scores.max(dim=-1).values
+            return scores.max(dim=-1).values
 
-        return grads @ self.query_tensor.T
+        return scores
