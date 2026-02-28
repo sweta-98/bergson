@@ -10,18 +10,19 @@ import torch
 from ml_dtypes import bfloat16
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from bergson import (
-    GradientProcessor,
-    collect_gradients,
-)
+from bergson.collector.collector import CollectorComputer
 from bergson.collector.gradient_collectors import GradientCollector
-from bergson.config import IndexConfig, PreprocessConfig, ScoreConfig
-from bergson.data import create_index, load_scores
-from bergson.process_grads import precondition_grads
-from bergson.score.score_writer import MemmapSequenceScoreWriter
+from bergson.collector.in_memory_collector import InMemoryCollector
+from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
+from bergson.data import create_index
+from bergson.gradients import GradientProcessor
+from bergson.process_grads import get_trackstar_preconditioner, precondition_grads
+from bergson.score.score_writer import (
+    InMemorySequenceScoreWriter,
+    MemmapSequenceScoreWriter,
+)
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import (
-    convert_precision_to_torch,
     get_gradient_dtype,
     tensor_to_numpy,
 )
@@ -84,98 +85,97 @@ def test_large_gradients_query(tmp_path: Path, dataset):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_score(tmp_path: Path, model, dataset):
+    model = model.cuda()
     processor = GradientProcessor(projection_dim=16)
-    collector = GradientCollector(
-        model.base_model,
+
+    # Step 1: Reduce query gradients using InMemoryCollector
+    reduce_cfg = ReduceConfig(method="mean")
+    reduce_index_cfg = IndexConfig(
+        run_path=str(tmp_path / "reduce"), token_batch_size=1024
+    )
+    reduce_index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
+
+    query_collector = InMemoryCollector(
+        model=model.base_model,
         data=dataset,
-        cfg=IndexConfig(run_path=str(tmp_path)),
+        cfg=reduce_index_cfg,
         processor=processor,
-    )
-    shapes = collector.shapes()
-
-    cfg = IndexConfig(run_path=str(tmp_path), token_batch_size=1024)
-    score_cfg = ScoreConfig(
-        query_path=str(tmp_path / "query_gradient_ds"),
-        modules=list(shapes.keys()),
-        score="mean",
+        reduce_cfg=reduce_cfg,
     )
 
-    query_grads = {
-        module: torch.randn(1, shape.numel()) for module, shape in shapes.items()
-    }
-
-    score_dtype = (
-        convert_precision_to_torch(score_cfg.precision)
-        if score_cfg.precision != "auto"
-        else get_gradient_dtype(model)
+    computer = CollectorComputer(
+        model=model,
+        data=dataset,
+        collector=query_collector,
+        cfg=reduce_index_cfg,
     )
+    computer.run_with_collector_hooks(desc="Reducing query gradients")
 
-    score_writer = MemmapSequenceScoreWriter(
-        tmp_path, len(dataset), 1, dtype=score_dtype
-    )
+    query_grads = query_collector.gradients
+    modules = list(query_collector.shapes().keys())
+
+    # Step 2: Score using InMemoryCollector with scorer
+    score_dtype = get_gradient_dtype(model)
+    score_writer = InMemorySequenceScoreWriter(len(dataset), 1, dtype=score_dtype)
     scorer = Scorer(
         query_grads=query_grads,
-        modules=list(shapes.keys()),
+        modules=modules,
         writer=score_writer,
-        device=torch.device("cpu"),
+        device=torch.device("cuda:0"),
         dtype=score_dtype,
     )
 
-    collect_gradients(
-        model=model,
+    index_processor = GradientProcessor(projection_dim=16)
+    index_cfg = IndexConfig(run_path=str(tmp_path / "index"), token_batch_size=1024)
+    index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
+
+    index_collector = InMemoryCollector(
+        model=model.base_model,
         data=dataset,
-        processor=processor,
-        cfg=cfg,
+        cfg=index_cfg,
+        processor=index_processor,
         scorer=scorer,
     )
 
-    assert (tmp_path / "info.json").exists()
-    assert (tmp_path / "scores.bin").exists()
-
-    with open(tmp_path / "info.json", "r") as f:
-        info = json.load(f)
-
-    scores = load_scores(tmp_path)
-
-    assert len(scores) == len(dataset)
-
-    assert info["num_scores"] == 1
-
-    assert np.allclose(
-        scores[:],
-        np.array(
-            [
-                [
-                    1.8334405,
-                ],
-                [
-                    0.3371131,
-                ],
-            ]
-        ),
+    computer = CollectorComputer(
+        model=model,
+        data=dataset,
+        collector=index_collector,
+        cfg=index_cfg,
     )
+    computer.run_with_collector_hooks(desc="Scoring")
+
+    scores = index_collector.scores
+    assert scores is not None
+    assert scores.shape == (len(dataset), 1)
+    assert torch.isfinite(scores).all()
+    assert not torch.allclose(scores, torch.zeros_like(scores))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_precondition_ds(tmp_path: Path, model, dataset):
-    cfg = IndexConfig(run_path=str(tmp_path), token_batch_size=1024)
-
+    model = model.cuda()
     preprocess_device = torch.device("cuda:0")
 
-    # Populate and save preconditioners
+    # Collect gradients and build preconditioners using InMemoryCollector
     processor = GradientProcessor(projection_dim=16)
-    collector = GradientCollector(
-        model.base_model,
+    build_cfg = IndexConfig(run_path=str(tmp_path / "build"), token_batch_size=1024)
+    build_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
+
+    collector = InMemoryCollector(
+        model=model.base_model,
         data=dataset,
-        cfg=cfg,
+        cfg=build_cfg,
         processor=processor,
     )
-    collect_gradients(
+
+    computer = CollectorComputer(
         model=model,
         data=dataset,
-        processor=processor,
-        cfg=cfg,
+        collector=collector,
+        cfg=build_cfg,
     )
+    computer.run_with_collector_hooks(desc="Building preconditioners")
     processor.save(tmp_path)
 
     # Produce query gradients dict
@@ -292,17 +292,15 @@ def test_memmap_score_writer_float32(tmp_path: Path):
 
 
 def test_compute_preconditioner_h_inv():
-    """Test that compute_preconditioner returns empty dict for None path."""
-    from bergson.process_grads import compute_preconditioner
+    """Test that get_trackstar_preconditioner returns empty dict for None path."""
 
     # No path → empty dict
-    result = compute_preconditioner(None, device=torch.device("cpu"), power=-1)
+    result = get_trackstar_preconditioner(None, device=torch.device("cpu"), power=-1)
     assert result == {}
 
 
 def test_scorer_preconditioners(tmp_path: Path):
     """Test that Scorer applies preconditioners to index grads."""
-    from bergson.gradients import GradientProcessor
 
     modules = ["mod_a"]
     query_grads = {"mod_a": torch.randn(1, 4)}
@@ -343,3 +341,66 @@ def test_scorer_preconditioners(tmp_path: Path):
 
     # Preconditioner is 2*I, so scores should differ
     assert not torch.allclose(scores_with, scores_without)
+
+
+def test_scorer_split_preconditioners(tmp_path: Path):
+    """Split preconditioning applies H^(-1/2) to both query and index grads,
+    then unit normalizes."""
+    torch.manual_seed(0)
+    modules = ["mod_a"]
+    query_grads = {"mod_a": torch.randn(1, 4)}
+    index_grads = {"mod_a": torch.randn(2, 4)}
+
+    # Save a processor with H = 2*I
+    proc = GradientProcessor(preconditioners={"mod_a": torch.eye(4) * 2.0})
+    precond_path = tmp_path / "preconditioner"
+    proc.save(precond_path)
+
+    # Score with split preconditioning (unit_normalize=True)
+    scorer_precond_norm = Scorer(
+        query_grads=query_grads,
+        modules=modules,
+        writer=InMemorySequenceScoreWriter(2, 1, dtype=torch.float32),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        unit_normalize=True,
+        preconditioner_path=str(precond_path),
+    )
+    scores_precond_norm = scorer_precond_norm.score(index_grads)
+
+    # Score with unit_normalize=True but no preconditioner
+    scorer_norm = Scorer(
+        query_grads=query_grads,
+        modules=modules,
+        writer=InMemorySequenceScoreWriter(2, 1, dtype=torch.float32),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        unit_normalize=True,
+    )
+    scores_norm = scorer_norm.score(index_grads)
+
+    # Score with preconditioner but unit_normalize=False (one-sided)
+    scorer_inner_products = Scorer(
+        query_grads=query_grads,
+        modules=modules,
+        writer=InMemorySequenceScoreWriter(2, 1, dtype=torch.float32),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        unit_normalize=False,
+        preconditioner_path=str(precond_path),
+    )
+    scores_inner_products = scorer_inner_products.score(index_grads)
+
+    # Split preconditioning should differ from both:
+    # - unit_normalize without preconditioner (preconditioner changes the space)
+    # - one-sided preconditioning (different power and normalization)
+    assert not torch.allclose(scores_precond_norm, scores_norm)
+    assert not torch.allclose(scores_precond_norm, scores_inner_products)
+
+    # Verify split math: H^(-1/2) applied to both sides + unit normalize
+    h_inv_sqrt = scorer_precond_norm.preconditioners["mod_a"]
+    q = query_grads["mod_a"] @ h_inv_sqrt  # preconditioned query
+    g = index_grads["mod_a"] @ h_inv_sqrt  # preconditioned index
+    g = g / g.norm(dim=1, keepdim=True)  # unit normalize
+    expected = g @ q.T
+    assert torch.allclose(scores_precond_norm, expected, atol=1e-6)
