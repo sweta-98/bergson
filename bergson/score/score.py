@@ -65,7 +65,7 @@ def create_scorer(
         device=device,
         dtype=dtype,
         unit_normalize=preprocess_cfg.unit_normalize,
-        score_mode="nearest" if score_cfg.score == "nearest" else "inner_product",
+        score_mode=score_cfg.score,
         attribute_tokens=attribute_tokens,
         preconditioner_path=preprocess_cfg.preconditioner_path,
     )
@@ -318,8 +318,6 @@ def score_dataset(
         score_cfg.modules,
         preprocess_cfg.unit_normalize,
         preprocess_device,
-        aggregate_grads="mean" if score_cfg.score == "mean" else "none",
-        normalize_aggregated_grad=score_cfg.score == "mean",
     )
 
     launch_distributed_run(

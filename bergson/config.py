@@ -283,16 +283,14 @@ class ScoreConfig:
     query_path: str = ""
     """Path to the existing query index."""
 
-    score: Literal["mean", "nearest", "individual"] = "mean"
+    score: Literal["nearest", "individual"] = "individual"
     """Method for scoring the gradients with the query.
-        `mean`: compute each gradient's similarity to the mean
-            query gradient.
         `nearest`: compute each gradient's similarity to the most
             similar query gradient (the maximum score).
         `individual`: compute a separate score for each query gradient."""
 
     skip_query_preprocess: bool = False
-    """Skip query preprocessing if already applied during reduce."""
+    """Skip query preprocessing if already applied (e.g. by reduce)."""
 
     batch_size: int = 1024
     """Batch size for processing the query dataset."""
@@ -317,8 +315,8 @@ class ReduceConfig:
 
     normalize_reduced_grad: bool = False
     """Whether to unit normalize the reduced query gradient. This has
-    no effect on future score rankings but does affect the magnitude of
-    the scores."""
+    no effect on future relative score rankings but does affect score
+    magnitudes."""
 
 
 @dataclass

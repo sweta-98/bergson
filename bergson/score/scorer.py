@@ -25,7 +25,7 @@ class Scorer:
         dtype: torch.dtype,
         *,
         unit_normalize: bool = False,
-        score_mode: str = "inner_product",
+        score_mode: str = "individual",
         attribute_tokens: bool = False,
         preconditioner_path: str | None = None,
     ):
@@ -47,7 +47,7 @@ class Scorer:
         unit_normalize : bool
             Whether to unit normalize gradients before scoring.
         score_mode : str
-            Scoring mode: "inner_product" or "nearest".
+            Scoring mode: "individual" or "nearest".
         attribute_tokens : bool
             Whether gradients are per-token (rows = total_valid tokens).
         preconditioner_path : str | None
