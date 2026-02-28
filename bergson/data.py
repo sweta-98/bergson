@@ -24,7 +24,7 @@ from numpy.typing import DTypeLike
 
 from .config import DataConfig, PreprocessConfig, ReduceConfig
 from .process_grads import (
-    compute_preconditioner,
+    get_trackstar_preconditioner,
     normalize_flat_grad,
     precondition_grad,
 )
@@ -348,7 +348,7 @@ class InMemorySequenceBuilder(Builder):
         if self.preprocess_cfg is None:
             return {}
         device = torch.device(device)
-        return compute_preconditioner(
+        return get_trackstar_preconditioner(
             self.preprocess_cfg.preconditioner_path,
             power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
             device=device,
@@ -927,7 +927,7 @@ class SequenceBuilder(Builder):
         """Compute preconditioner from preprocess_cfg if available."""
         if self.preprocess_cfg is None:
             return {}
-        return compute_preconditioner(
+        return get_trackstar_preconditioner(
             self.preprocess_cfg.preconditioner_path,
             power=-0.5 if self.preprocess_cfg.unit_normalize else -1,
             device=device,

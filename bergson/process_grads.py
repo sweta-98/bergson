@@ -7,7 +7,7 @@ import torch
 
 from bergson.config import PreprocessConfig
 from bergson.gradients import GradientProcessor
-from bergson.utils.math import compute_damped_inverse, psd_rsqrt
+from bergson.utils.math import damped_psd_power
 
 
 def normalize_grad(
@@ -175,7 +175,7 @@ def mix_preconditioners(
     return output_path
 
 
-def compute_preconditioner(
+def get_trackstar_preconditioner(
     preconditioner_path: str | None,
     device: torch.device,
     power: float = -0.5,
@@ -204,18 +204,10 @@ def compute_preconditioner(
         map_location=device,
     ).preconditioners
 
-    if power == -0.5:
-        return {
-            name: psd_rsqrt(H.to(device=device, dtype=torch.float32))
-            for name, H in preconditioners.items()
-        }
-    elif power == -1:
-        return {
-            name: compute_damped_inverse(H.to(device=device))
-            for name, H in preconditioners.items()
-        }
-    else:
-        raise ValueError(f"Unsupported power: {power}. Use -0.5 or -1.")
+    return {
+        name: damped_psd_power(H.to(device=device), power=power)
+        for name, H in preconditioners.items()
+    }
 
 
 def precondition_grad(
@@ -237,7 +229,7 @@ def precondition_grads(
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
     """Precondition query gradients with the preconditioner."""
-    h_inv = compute_preconditioner(
+    h_inv = get_trackstar_preconditioner(
         preprocess_cfg.preconditioner_path,
         device=device,
         power=-0.5 if preprocess_cfg.unit_normalize else -1,

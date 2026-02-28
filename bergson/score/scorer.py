@@ -1,6 +1,6 @@
 import torch
 
-from bergson.process_grads import compute_preconditioner
+from bergson.process_grads import get_trackstar_preconditioner
 from bergson.score.score_writer import ScoreWriter
 
 
@@ -68,7 +68,7 @@ class Scorer:
         self.writer = writer
 
         # Load preconditioner: H^(-1/2) for split, H^(-1) for one-sided
-        self.preconditioners = compute_preconditioner(
+        self.preconditioners = get_trackstar_preconditioner(
             preconditioner_path,
             device=device,
             power=-0.5 if unit_normalize else -1,

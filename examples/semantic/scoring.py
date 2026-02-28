@@ -11,7 +11,7 @@ from tqdm import tqdm
 from bergson.data import load_gradients
 from bergson.gradients import GradientProcessor
 from bergson.process_grads import mix_preconditioners
-from bergson.utils.math import compute_damped_inverse
+from bergson.utils.math import damped_psd_power
 
 
 def load_scores_matrix(scores_path: Path | str) -> np.ndarray:
@@ -107,7 +107,7 @@ def compute_scores_fast(
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
             H = proc.preconditioners[name].to(device=device)
-            h_inv[name] = compute_damped_inverse(H)
+            h_inv[name] = damped_psd_power(H, power=-1)
 
         # Bergson's approach (from score.py):
         # 1. Query: precondition with H^(-1), then unit normalize

@@ -54,41 +54,52 @@ def optimal_linear_shrinkage(S_n: Tensor, n: int | Tensor) -> Tensor:
 
 
 @torch.compile
-def psd_rsqrt(A: Tensor) -> Tensor:
-    """Efficiently compute the p.s.d. pseudoinverse sqrt of p.s.d. matrix `A`."""
-    L, U = torch.linalg.eigh(A)
-    L = L[..., None, :].clamp_min(0.0)
+def psd_power(H: Tensor, power: float) -> Tensor:
+    """Compute a pseudoinverse power of p.s.d. matrix `H` via eigendecomposition.
 
-    # We actually compute the pseudo-inverse here for numerical stability.
+    Uses the same tolerance heuristic as `torch.linalg.pinv` to zero out
+    eigenvalues that are effectively zero, ensuring numerical stability.
+
+    Args:
+        H: Positive semi-definite matrix.
+        power: Exponent to apply to eigenvalues (e.g. -0.5 for rsqrt, -1 for inverse).
+    """
+    eigval, eigvec = torch.linalg.eigh(H)
+    eigval = eigval[..., None, :].clamp_min(0.0)
+
+    # Zero out eigenvalues below the tolerance threshold (pseudoinverse).
     # Use the same heuristic as `torch.linalg.pinv` to determine the tolerance.
-    thresh = L[..., None, -1] * A.shape[-1] * torch.finfo(A.dtype).eps
-    rsqrt = U * torch.where(L > thresh, L.rsqrt(), 0.0) @ U.mH
+    thresh = eigval[..., None, -1] * H.shape[-1] * torch.finfo(H.dtype).eps
+    result = eigvec * torch.where(eigval > thresh, eigval.pow(power), 0.0) @ eigvec.mH
 
-    return rsqrt
+    return result
 
 
-def compute_damped_inverse(
+@torch.compile
+def damped_psd_power(
     H: Tensor,
+    power: float,
     damping_factor: float = 0.1,
     dtype: torch.dtype = torch.float64,
     regularizer: Tensor | None = None,
 ) -> Tensor:
-    """Compute H^(-1) with damping for numerical stability.
+    """Compute a damped power of p.s.d. matrix `H` via eigendecomposition.
 
-    Uses eigendecomposition to compute the inverse of a positive semi-definite
-    matrix with adaptive damping based on the matrix's mean absolute value.
+    Adds adaptive damping before computing the power to improve numerical stability.
 
     Args:
-        H: Positive semi-definite matrix to invert.
-        damping_factor: Multiplier for the damping term (default: 0.1).
+        H: Positive semi-definite matrix.
+        power: Exponent to apply to eigenvalues (e.g. -0.5 for rsqrt, -1 for inverse).
+        damping_factor: Multiplier for the damping term (default: 0.1). Set to
+            0 to disable damping.
         dtype: Dtype for intermediate computation (default: float64 for stability).
         regularizer: Optional matrix to use as regularizer instead of identity.
-            If provided, computes inv(H + damping_factor * regularizer).
+            If provided, computes (H + damping_factor * regularizer)^power.
             If None (default), uses scaled identity:
-            inv(H + damping_factor * |H|_mean * I).
+            (H + damping_factor * |H|_mean * I)^power.
 
     Returns:
-        The damped inverse H^(-1) in the original dtype of H.
+        The damped power of H in the original dtype.
     """
     original_dtype = H.dtype
     H = H.to(dtype=dtype)
@@ -98,8 +109,9 @@ def compute_damped_inverse(
     else:
         damping_val = damping_factor * H.abs().mean()
         H = H + damping_val * torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
+
     eigval, eigvec = torch.linalg.eigh(H)
-    return (eigvec * (1.0 / eigval) @ eigvec.mT).to(original_dtype)
+    return (eigvec * eigval.pow(power) @ eigvec.mH).to(original_dtype)
 
 
 def trace(matrices: Tensor) -> Tensor:
