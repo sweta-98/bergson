@@ -10,7 +10,7 @@ from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
-from bergson.config import IndexConfig
+from bergson.config import IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
 from bergson.utils.auto_batch_size import maybe_auto_batch_size
@@ -27,6 +27,7 @@ def build_worker(
     local_rank: int,
     world_size: int,
     cfg: IndexConfig,
+    preprocess_cfg: PreprocessConfig,
     ds: Dataset | IterableDataset,
 ):
     """
@@ -108,7 +109,7 @@ def build_worker(
             processor.save(cfg.partial_run_path)
 
 
-def build(index_cfg: IndexConfig):
+def build(index_cfg: IndexConfig, preprocess_cfg: PreprocessConfig):
     """
     Build a gradient index by distributing work across all available GPUs.
 
@@ -117,6 +118,8 @@ def build(index_cfg: IndexConfig):
     index_cfg : IndexConfig
         Specifies the run path, dataset, model, tokenizer, PEFT adapters,
         and many other gradient collection settings.
+    preprocess_cfg : PreprocessConfig
+        Preprocessing configuration for gradient normalization/preconditioning.
     """
     if index_cfg.debug:
         setup_reproducibility()
@@ -128,7 +131,10 @@ def build(index_cfg: IndexConfig):
     ds = setup_data_pipeline(index_cfg)
 
     launch_distributed_run(
-        "build", build_worker, [index_cfg, ds], index_cfg.distributed
+        "build",
+        build_worker,
+        [index_cfg, preprocess_cfg, ds],
+        index_cfg.distributed,
     )
 
     rank = index_cfg.distributed.rank

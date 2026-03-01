@@ -9,6 +9,7 @@ from bergson.collector.gradient_collectors import TraceCollector
 from bergson.data import load_gradients
 from bergson.gradients import GradientProcessor
 from bergson.query.faiss_index import FaissConfig, FaissIndex
+from bergson.utils.math import damped_psd_power
 from bergson.utils.utils import numpy_to_tensor
 
 
@@ -44,11 +45,13 @@ class Attributor:
         device: str = "cpu",
         dtype: torch.dtype = torch.float32,
         unit_norm: bool = False,
+        precondition: bool = False,
         faiss_cfg: FaissConfig | None = None,
     ):
         self.device = device
         self.dtype = dtype
         self.unit_norm = unit_norm
+        self.precondition = precondition
         self.faiss_index = None
         index_path = Path(index_path)
 
@@ -86,6 +89,22 @@ class Attributor:
         self.N = mmap[mmap.dtype.names[0]].shape[0]
 
         self.ordered_modules = mmap.dtype.names
+
+        # Precompute preconditioners
+        self.h_inv: dict[str, Tensor] = {}
+        if precondition and unit_norm:
+            # Split: apply H^(-1/2) to index grads before normalization
+            for name in self.grads:
+                if name in self.processor.preconditioners:
+                    h_inv = damped_psd_power(
+                        self.processor.preconditioners[name], power=-0.5
+                    )
+                    self.grads[name] = self.grads[name].float() @ h_inv.to(device)
+                    self.grads[name] = self.grads[name].to(dtype=dtype)
+        elif precondition:
+            # One-sided: precompute H^(-1) for query-side application in search()
+            for name, H in self.processor.preconditioners.items():
+                self.h_inv[name] = damped_psd_power(H, power=-1).to(device)
 
         if unit_norm:
             norm = torch.cat(
@@ -131,6 +150,13 @@ class Attributor:
             for name in self.ordered_modules
         }
 
+        # One-sided preconditioning: apply H^(-1) to query
+        if self.h_inv:
+            for name in q:
+                if name in self.h_inv:
+                    q[name] = q[name].float() @ self.h_inv[name]
+                    q[name] = q[name].to(self.dtype)
+
         if self.unit_norm:
             norm = torch.cat(list(q.values()), dim=1).norm(dim=1, keepdim=True)
 
@@ -172,7 +198,6 @@ class Attributor:
         module: nn.Module,
         k: int | None,
         *,
-        precondition: bool = False,
         modules: set[str] | None = None,
         reverse: bool = False,
     ) -> Generator[TraceResult, None, None]:
@@ -183,7 +208,6 @@ class Attributor:
         Args:
             module: The module to trace.
             k: The number of nearest examples to return.
-            precondition: Whether to apply preconditioning.
             modules: The modules to trace. If None, all modules will be traced.
             reverse: If True, return the lowest influence examples instead of highest.
         """
@@ -193,7 +217,8 @@ class Attributor:
         collector = TraceCollector(
             model=module,
             processor=self.processor,
-            precondition=precondition,
+            precondition=self.precondition,
+            unit_normalize=self.unit_norm,
             target_modules=modules,
             device=self.device,
             dtype=self.dtype,

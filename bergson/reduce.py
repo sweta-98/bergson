@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
 from bergson.collector.gradient_collectors import GradientCollector
-from bergson.config import IndexConfig, ReduceConfig
+from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
 from bergson.data import allocate_batches
 from bergson.utils.utils import assert_type
 from bergson.utils.worker_utils import setup_model_and_peft
@@ -27,6 +27,7 @@ def reduce_worker(
     world_size: int,
     index_cfg: IndexConfig,
     reduce_cfg: ReduceConfig,
+    preprocess_cfg: PreprocessConfig,
     ds: Dataset | IterableDataset,
 ):
     """
@@ -78,6 +79,7 @@ def reduce_worker(
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
         "reduce_cfg": reduce_cfg,
+        "preprocess_cfg": preprocess_cfg,
     }
 
     if isinstance(ds, Dataset):
@@ -145,7 +147,11 @@ def reduce_worker(
                 json.dump(metadata, f, indent=2)
 
 
-def reduce(index_cfg: IndexConfig, reduce_cfg: ReduceConfig):
+def reduce(
+    index_cfg: IndexConfig,
+    reduce_cfg: ReduceConfig,
+    preprocess_cfg: PreprocessConfig,
+):
     """
     Reduce a dataset to a single aggregated gradient vector.
 
@@ -155,7 +161,9 @@ def reduce(index_cfg: IndexConfig, reduce_cfg: ReduceConfig):
         Specifies the run path, dataset, model, tokenizer, PEFT adapters,
         and many other gradient collection settings.
     reduce_cfg : ReduceConfig
-        Specifies aggregation strategy (mean/sum, unit normalization).
+        Specifies aggregation strategy (mean/sum).
+    preprocess_cfg : PreprocessConfig
+        Preprocessing configuration for gradient normalization/preconditioning.
     """
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
@@ -164,7 +172,10 @@ def reduce(index_cfg: IndexConfig, reduce_cfg: ReduceConfig):
     ds = setup_data_pipeline(index_cfg)
 
     launch_distributed_run(
-        "reduce", reduce_worker, [index_cfg, reduce_cfg, ds], index_cfg.distributed
+        "reduce",
+        reduce_worker,
+        [index_cfg, reduce_cfg, preprocess_cfg, ds],
+        index_cfg.distributed,
     )
 
     if index_cfg.distributed.rank == 0:

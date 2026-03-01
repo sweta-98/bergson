@@ -184,11 +184,15 @@ def compute_metrics(
     exclude_llama: bool = False,
     query_preconditioner_path: str | None = None,
     index_preconditioner_path: str | None = None,
+    mixing_coefficient: float = 0.99,
 ) -> dict[str, float]:
     """Compute intra/inter similarities for subject (identifier) and style.
 
     Uses bergson score_dataset to compute pairwise similarities instead of
     custom gradient inner product implementation.
+
+    If both query_preconditioner_path and index_preconditioner_path are given,
+    they are mixed internally using mixing_coefficient before scoring.
 
     Args:
         index_path: Path to the gradient index.
@@ -196,6 +200,7 @@ def compute_metrics(
         exclude_llama: Whether to exclude Llama-generated samples.
         query_preconditioner_path: Optional path to query preconditioner.
         index_preconditioner_path: Optional path to index preconditioner.
+        mixing_coefficient: Weight for the query preconditioner when mixing.
 
     Returns:
         Dictionary of similarity statistics.
@@ -214,6 +219,7 @@ def compute_metrics(
         scores_path,
         query_preconditioner_path=query_preconditioner_path,
         index_preconditioner_path=index_preconditioner_path,
+        mixing_coefficient=mixing_coefficient,
     )
 
     # Load metadata from HF dataset (fast)

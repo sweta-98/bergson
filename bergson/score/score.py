@@ -13,19 +13,17 @@ from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
-from bergson.config import IndexConfig, ScoreConfig
+from bergson.config import IndexConfig, PreprocessConfig, ScoreConfig
 from bergson.data import (
     allocate_batches,
     load_gradients,
 )
 from bergson.distributed import launch_distributed_run
-from bergson.gradients import GradientProcessor
 from bergson.score.score_writer import (
     MemmapSequenceScoreWriter,
     MemmapTokenScoreWriter,
 )
 from bergson.score.scorer import Scorer
-from bergson.utils.math import compute_damped_inverse
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
@@ -43,6 +41,7 @@ def create_scorer(
     data: Dataset,
     query_grads: dict[str, torch.Tensor],
     score_cfg: ScoreConfig,
+    preprocess_cfg: PreprocessConfig,
     device: torch.device,
     dtype: torch.dtype,
     *,
@@ -65,9 +64,10 @@ def create_scorer(
         writer=writer,
         device=device,
         dtype=dtype,
-        unit_normalize=score_cfg.unit_normalize,
-        score_mode="nearest" if score_cfg.score == "nearest" else "inner_product",
+        unit_normalize=preprocess_cfg.unit_normalize,
+        score_mode=score_cfg.score,
         attribute_tokens=attribute_tokens,
+        preconditioner_path=preprocess_cfg.preconditioner_path,
     )
 
 
@@ -76,16 +76,16 @@ def preprocess_grads(
     grad_column_names: list[str],
     unit_normalize: bool,
     device: torch.device,
-    accumulate_grads: Literal["mean", "sum", "none"] = "none",
-    normalize_accumulated_grad: bool = False,
+    aggregate_grads: Literal["mean", "sum", "none"] = "none",
+    normalize_aggregated_grad: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Preprocess the gradients. Returns a dictionary of preprocessed gradients
     with shape [N, grad_dim] or [1, grad_dim]. Preprocessing includes some
-    combination of per-item unit normalization, accumulation, accumulated
+    combination of per-item unit normalization, aggregation, aggregated
     gradient normalization, and dtype conversion."""
 
     # Short-circuit if possible
-    if accumulate_grads == "none" and not unit_normalize:
+    if aggregate_grads == "none" and not unit_normalize:
         return {name: grad_dict[name].to(device=device) for name in grad_column_names}
 
     grads = {
@@ -98,16 +98,16 @@ def preprocess_grads(
         norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
         grads = {k: v / norms for k, v in grads.items()}
 
-    # Accumulate across items
-    if accumulate_grads == "mean":
+    # Aggregate across items
+    if aggregate_grads == "mean":
         grads = {name: grads[name].mean(0, keepdim=True) for name in grad_column_names}
-    elif accumulate_grads == "sum":
+    elif aggregate_grads == "sum":
         grads = {name: grads[name].sum(0, keepdim=True) for name in grad_column_names}
-    elif accumulate_grads != "none":
-        raise ValueError(f"Invalid accumulate_grads: {accumulate_grads}")
+    elif aggregate_grads != "none":
+        raise ValueError(f"Invalid aggregate_grads: {aggregate_grads}")
 
-    # Normalize the accumulated gradient
-    if normalize_accumulated_grad:
+    # Normalize the aggregated gradient
+    if normalize_aggregated_grad:
         grad_norm = torch.cat(
             [grads[name].flatten() for name in grad_column_names], dim=0
         ).norm()
@@ -115,56 +115,6 @@ def preprocess_grads(
             grads[name] /= grad_norm
 
     return grads
-
-
-def precondition_grads(
-    grads: dict[str, torch.Tensor],
-    score_cfg: ScoreConfig,
-    target_modules: list[str],
-    device: torch.device,
-) -> dict[str, torch.Tensor]:
-    """Precondition query gradients with the query and/or index preconditioners."""
-    use_q = score_cfg.query_preconditioner_path is not None
-    use_i = score_cfg.index_preconditioner_path is not None
-
-    if use_q or use_i:
-        q, i = {}, {}
-        if use_q:
-            assert score_cfg.query_preconditioner_path is not None
-            q = GradientProcessor.load(
-                Path(score_cfg.query_preconditioner_path),
-                map_location=device,
-            ).preconditioners
-        if use_i:
-            assert score_cfg.index_preconditioner_path is not None
-            i = GradientProcessor.load(
-                Path(score_cfg.index_preconditioner_path), map_location=device
-            ).preconditioners
-
-        mixed_preconditioner = (
-            {
-                k: q[k] * score_cfg.mixing_coefficient
-                + i[k] * (1 - score_cfg.mixing_coefficient)
-                for k in q
-            }
-            if (q and i)
-            else (q or i)
-        )
-
-        # Compute H^(-1) via eigendecomposition and apply to query gradients
-        h_inv = {
-            name: compute_damped_inverse(H.to(device=device))
-            for name, H in mixed_preconditioner.items()
-        }
-
-        grads = {
-            name: (
-                grads[name].to(device=device, dtype=h_inv[name].dtype) @ h_inv[name]
-            ).cpu()
-            for name in target_modules
-        }
-
-    return {name: grads[name] for name in score_cfg.modules}
 
 
 def get_query_grads(score_cfg: ScoreConfig) -> dict[str, torch.Tensor]:
@@ -213,6 +163,7 @@ def score_worker(
     world_size: int,
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
+    preprocess_cfg: PreprocessConfig,
     ds: Dataset | IterableDataset,
     query_grads: dict[str, torch.Tensor],
 ):
@@ -232,6 +183,8 @@ def score_worker(
     score_cfg : ScoreConfig
         Score configuration specifying query path, target modules, and scoring
         method (mean/nearest/individual).
+    preprocess_cfg : PreprocessConfig
+        Preprocessing configuration for gradient normalization/preconditioning.
     ds : Dataset | IterableDataset
         The entire dataset to be indexed. A subset is assigned to each worker.
     query_grads : dict[str, torch.Tensor]
@@ -283,6 +236,7 @@ def score_worker(
             ds,
             query_grads,
             score_cfg,
+            preprocess_cfg,
             device=score_device,
             dtype=score_dtype,
             attribute_tokens=index_cfg.attribute_tokens,
@@ -309,6 +263,7 @@ def score_worker(
                 ds_shard,
                 query_grads,
                 score_cfg,
+                preprocess_cfg,
                 device=score_device,
                 dtype=score_dtype,
             )
@@ -331,6 +286,7 @@ def score_worker(
 def score_dataset(
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
+    preprocess_cfg: PreprocessConfig,
     preprocess_device=torch.device("cuda:0"),
 ):
     """
@@ -344,6 +300,8 @@ def score_dataset(
     score_cfg : ScoreConfig
         Specifies the query path, target modules, and scoring method
         (mean/nearest/individual).
+    preprocess_cfg : PreprocessConfig
+        Preprocessing configuration for gradient normalization/preconditioning.
     """
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     with (index_cfg.partial_run_path / "index_config.json").open("w") as f:
@@ -354,22 +312,18 @@ def score_dataset(
     ds = setup_data_pipeline(index_cfg)
 
     query_grads = get_query_grads(score_cfg)
-    query_grads = precondition_grads(
-        query_grads, score_cfg, score_cfg.modules, preprocess_device
-    )
+
     query_grads = preprocess_grads(
         query_grads,
         score_cfg.modules,
-        score_cfg.unit_normalize,
+        preprocess_cfg.unit_normalize,
         preprocess_device,
-        accumulate_grads="mean" if score_cfg.score == "mean" else "none",
-        normalize_accumulated_grad=score_cfg.score == "mean",
     )
 
     launch_distributed_run(
         "score",
         score_worker,
-        [index_cfg, score_cfg, ds, query_grads],
+        [index_cfg, score_cfg, preprocess_cfg, ds, query_grads],
         index_cfg.distributed,
     )
 

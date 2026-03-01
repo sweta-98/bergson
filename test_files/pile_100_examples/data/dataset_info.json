@@ -1,0 +1,44 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "pile-10k",
+  "dataset_size": 61266887,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/NeelNanda/pile-10k@127bfedcd5047750df5ccf3a12979a47bfa0bafa/data/train-00000-of-00001-4746b8785c874cc7.parquet": {
+      "num_bytes": 33262901,
+      "checksum": null
+    }
+  },
+  "download_size": 33262901,
+  "features": {
+    "text": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "meta": {
+      "pile_set_name": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 94529788,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 61266887,
+      "num_examples": 10000,
+      "dataset_name": "pile-10k"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}

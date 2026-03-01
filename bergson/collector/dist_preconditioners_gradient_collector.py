@@ -8,9 +8,9 @@ from datasets import Dataset, Value
 from jaxtyping import Float
 from torch import Tensor
 
+from bergson.builders import Builder, create_builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -275,10 +275,8 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
 
             self.processor.save(self.cfg.partial_run_path)
 
-        # Flush and reduce builder if it exists
         if self.builder is not None:
-            self.builder.flush()
-            self.builder.dist_reduce()
+            self.builder.teardown()
 
 
 def exchange_preconditioner_gradients(

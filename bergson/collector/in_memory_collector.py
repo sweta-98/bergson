@@ -10,9 +10,9 @@ from datasets import Dataset
 from jaxtyping import Float
 from torch import Tensor, nn
 
+from bergson.builders import Builder, create_builder
 from bergson.collector.collector import HookCollectorBase
-from bergson.config import IndexConfig, ReduceConfig
-from bergson.data import Builder, create_builder
+from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -22,7 +22,7 @@ from bergson.process_preconditioners import (
     process_preconditioners,
 )
 from bergson.score.scorer import Scorer
-from bergson.utils.utils import assert_type, get_gradient_dtype
+from bergson.utils.utils import assert_type, get_gradient_dtype, numpy_to_tensor
 
 
 @dataclass(kw_only=True)
@@ -51,6 +51,9 @@ class InMemoryCollector(HookCollectorBase):
 
     reduce_cfg: ReduceConfig | None = None
     """Configuration for in-run gradient reduction."""
+
+    preprocess_cfg: PreprocessConfig | None = None
+    """Configuration for gradient preprocessing."""
 
     builder: Builder | None = None
     """Handles writing gradients. Created in setup()."""
@@ -109,6 +112,7 @@ class InMemoryCollector(HookCollectorBase):
                 self.save_dtype,
                 attribute_tokens=self.cfg.attribute_tokens,
                 reduce_cfg=self.reduce_cfg,
+                preprocess_cfg=self.preprocess_cfg,
             )
 
     def teardown(self) -> None:
@@ -127,16 +131,13 @@ class InMemoryCollector(HookCollectorBase):
             )
 
         if self.builder is not None:
-            self.builder.dist_reduce()
-            self.builder.flush()
+            self.builder.teardown()
 
             # Populate self.gradients from builder buffer
             buf = self.builder.grad_buffer
             offset = 0
             for name, dim in grad_sizes.items():
-                self.gradients[name] = torch.from_numpy(
-                    buf[:, offset : offset + dim].copy()
-                )
+                self.gradients[name] = numpy_to_tensor(buf[:, offset : offset + dim])
                 offset += dim
 
         if self.scorer is not None:
