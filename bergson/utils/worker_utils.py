@@ -285,17 +285,6 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer or cfg.model)
 
-    default_model_max_len = getattr(tokenizer, "model_max_length", None)
-    if (
-        default_model_max_len is not None
-        and cfg.token_batch_size > default_model_max_len
-    ):
-        raise ValueError(
-            f"Token batch size {cfg.token_batch_size} exceeds model_max_length "
-            f"({default_model_max_len}). "
-            f"Use --token_batch_size {default_model_max_len} or smaller."
-        )
-
     max_pos_emb = getattr(
         AutoConfig.from_pretrained(cfg.model, revision=cfg.revision),
         "max_position_embeddings",

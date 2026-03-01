@@ -1,5 +1,11 @@
 __version__ = "0.6.0"
 
+# Register custom model architectures so AutoModel can load them
+try:
+    import examples.induction.attn_only_transformer  # noqa: F401
+except ImportError:
+    pass
+
 from .builders import (
     Builder,
     InMemorySequenceBuilder,

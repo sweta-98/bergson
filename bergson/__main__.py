@@ -8,6 +8,7 @@ from simple_parsing import ArgumentParser, ConflictResolution
 
 from .build import build
 from .config import (
+    DistributedConfig,
     HessianConfig,
     IndexConfig,
     PreprocessConfig,
@@ -146,6 +147,30 @@ class Hessian:
         approximate_hessians(self.index_cfg, self.hessian_cfg)
 
 
+def _cap_workers_for_data(cfg: IndexConfig):
+    """Reduce nproc_per_node when the dataset is too small for full DDP."""
+    from .data import load_data_string
+
+    ds = load_data_string(
+        cfg.data.dataset, cfg.data.split, cfg.data.subset, cfg.data.data_args
+    )
+    n = len(ds)
+    # Conservatively assume each worker needs at least 1 batch.
+    # A single batch can hold token_batch_size tokens, so estimate
+    # the minimum number of batches as ceil(total_tokens / budget).
+    avg_len = cfg.token_batch_size  # pessimistic: 1 batch for everything
+    if hasattr(ds, "__getitem__") and "length" in (ds.column_names or []):
+        avg_len = max(ds["length"])
+    min_batches = max(1, -(-n * avg_len // cfg.token_batch_size))  # ceil div
+    nproc = cfg.distributed.nproc_per_node
+    if min_batches < nproc:
+        cfg.distributed = DistributedConfig(nproc_per_node=max(1, min_batches))
+        print(
+            f"  Capped workers {nproc} -> {cfg.distributed.nproc_per_node} "
+            f"for {n} examples"
+        )
+
+
 @dataclass
 class Trackstar:
     """Run preconditioners, build, and score as a single pipeline."""
@@ -177,12 +202,14 @@ class Trackstar:
         build(value_precond_cfg, self.preprocess_cfg)
 
         # Step 2: Compute normalizers and preconditioners on query dataset
+        # Cap workers so small query datasets don't fail in distributed mode
         print("Step 2/5: Computing normalizers and preconditioners on query dataset...")
         query_precond_cfg = deepcopy(self.index_cfg)
         query_precond_cfg.run_path = query_precond_path
         query_precond_cfg.data = self.trackstar_cfg.query
         query_precond_cfg.skip_index = True
         query_precond_cfg.skip_preconditioners = False
+        _cap_workers_for_data(query_precond_cfg)
         validate_run_path(query_precond_cfg)
         build(query_precond_cfg, self.preprocess_cfg)
 
@@ -216,6 +243,7 @@ class Trackstar:
         query_cfg.data = self.trackstar_cfg.query
         query_cfg.processor_path = query_precond_path
         query_cfg.skip_preconditioners = True
+        _cap_workers_for_data(query_cfg)
         validate_run_path(query_cfg)
         build(query_cfg, self.preprocess_cfg)
 

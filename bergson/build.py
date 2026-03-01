@@ -79,6 +79,14 @@ def build_worker(
     }
 
     if isinstance(ds, Dataset):
+        if cfg.skip_index and cfg.stats_sample_size is not None:
+            # When only computing preconditioners (no index), use a sample of the
+            # data instead of the full dataset.  KFAC statistics converge quickly.
+            n = min(cfg.stats_sample_size, len(ds))
+            sample_indices = torch.randperm(len(ds))[:n].sort().values
+            ds = ds.select(sample_indices.tolist())
+            kwargs["data"] = ds
+
         batches = allocate_batches(ds["length"], cfg.token_batch_size)
         kwargs["batches"] = batches
         collect_gradients(**kwargs)

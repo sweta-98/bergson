@@ -433,7 +433,8 @@ def load_data_string(
             else:
                 raise e
 
-    ds = assert_type(Dataset, ds)
+    if not isinstance(ds, (Dataset, IterableDataset)):
+        raise TypeError(f"Expected Dataset or IterableDataset, got {type(ds)}")
     return ds
 
 
