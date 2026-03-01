@@ -153,10 +153,13 @@ def get_trackstar_preconditioner(
 def precondition_grad(
     grad: dict[str, torch.Tensor],
     h_inv: dict[str, torch.Tensor],
-    device: torch.device,
 ) -> dict[str, torch.Tensor]:
     """Precondition a single example's gradients."""
     if not h_inv:
         return grad
 
-    return {name: (grad[name].to(device) @ h_inv[name]).cpu() for name in grad.keys()}
+    return {
+        name: grad[name].to(device=h_inv[name].device, dtype=h_inv[name].dtype)
+        @ h_inv[name]
+        for name in grad.keys()
+    }

@@ -205,10 +205,9 @@ class InMemorySequenceBuilder(Builder):
         """Accumulate batch gradients into the reduce buffer."""
         assert self.reduce_cfg is not None
         assert self.in_memory_grad_buffer is not None
-        device = next(iter(mod_grads.values())).device
 
         # Precondition the gradients
-        mod_grads = precondition_grad(mod_grads, self.h_inv, device)
+        mod_grads = precondition_grad(mod_grads, self.h_inv)
 
         unit_normalize = (
             self.preprocess_cfg.unit_normalize
@@ -402,10 +401,9 @@ class SequenceBuilder(Builder):
 
     def reduce(self, indices: list[int], mod_grads: dict[str, torch.Tensor]):
         assert self.reduce_cfg is not None and self.in_memory_grad_buffer is not None
-        device = next(iter(mod_grads.values())).device
 
         # Precondition the gradients
-        mod_grads = precondition_grad(mod_grads, self.h_inv, device)
+        mod_grads = precondition_grad(mod_grads, self.h_inv)
 
         unit_normalize = (
             self.preprocess_cfg.unit_normalize
