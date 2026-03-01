@@ -4,11 +4,23 @@ from bergson.process_grads import get_trackstar_preconditioner
 from bergson.score.score_writer import ScoreWriter
 
 
+@torch.compile(fullgraph=True)
+def _cosine_score(
+    index_grads: torch.Tensor,
+    query_grads_t: torch.Tensor,
+) -> torch.Tensor:
+    """Matmul + unit normalization."""
+    scores = index_grads @ query_grads_t
+    i_norm = index_grads.pow(2).sum(dim=1).sqrt().clamp_min_(1e-12).unsqueeze(1)
+    scores.div_(i_norm)
+    return scores
+
+
 class Scorer:
     """
     Scores training gradients against query gradients.
 
-    Handles all preconditioning internally:
+    Handles preconditioning internally:
       - Loads preconditioner from disk if ``preconditioner_path`` is given.
       - Applies to query grads once at init time.
       - Applies to index grads per-batch in :meth:`score` (split mode only).
@@ -74,18 +86,19 @@ class Scorer:
             power=-0.5 if unit_normalize else -1,
             return_dtype=dtype,
         )
-        # Precondition query grads per module
+        # Precondition query grads per module, then cat into a single tensor
         if self.preconditioners:
-            self.query_grads = {
-                m: query_grads[m].to(device=self.device, dtype=self.dtype)
+            q_list = [
+                query_grads[m].to(device=self.device, dtype=self.dtype)
                 @ self.preconditioners[m]
                 for m in modules
-            }
+            ]
         else:
-            self.query_grads = {
-                m: query_grads[m].to(device=self.device, dtype=self.dtype)
-                for m in modules
-            }
+            q_list = [
+                query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules
+            ]
+        # Pre-transpose for scoring: [total_dim, n_queries]
+        self.query_grads_t = torch.cat(q_list, dim=-1).T
 
     def __call__(
         self,
@@ -101,7 +114,7 @@ class Scorer:
         """Compute scores for a batch of gradients."""
         # Device transfer and (optionally split) preconditioning of index grads.
         # One-sided mode (unit_normalize=False) only preconditions the query.
-        i_mods = {}
+        i_list = []
         for m in self.modules:
             g = index_grads[m].to(self.device, self.dtype, non_blocking=True)
             if (
@@ -110,27 +123,16 @@ class Scorer:
                 and m in self.preconditioners
             ):
                 g = g @ self.preconditioners[m]
-            i_mods[m] = g
+            i_list.append(g)
 
-        # Sum per-module matmuls
-        scores = torch.zeros(
-            i_mods[self.modules[0]].shape[0],
-            self.query_grads[self.modules[0]].shape[0],
-            device=self.device,
-            dtype=self.dtype,
-        )
-        for m in self.modules:
-            scores.addmm_(i_mods[m], self.query_grads[m].T)
+        all_index = torch.cat(i_list, dim=-1)
 
         if self.unit_normalize:
-            i_norm = (
-                torch.stack([i_mods[m].pow(2).sum(dim=1) for m in self.modules])
-                .sum(0)
-                .sqrt()
-                .clamp_min_(1e-12)
-                .unsqueeze(1)
-            )
-            scores.div_(i_norm)
+            scores = _cosine_score(all_index, self.query_grads_t)
+        else:
+            # Compiled score adds overhead for dot-product-only
+            # where the single matmul is already fast.
+            scores = all_index @ self.query_grads_t
 
         if self.score_mode == "nearest":
             return scores.max(dim=-1).values

@@ -9,9 +9,9 @@ from datasets import Dataset, Value
 from jaxtyping import Float
 from torch import Tensor
 
+from bergson.builders import Builder, create_builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
-from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -256,15 +256,13 @@ class GradientCollector(HookCollectorBase):
                 self.rank,
             )
 
-        # Flush and reduce builder if it exists
-        if self.builder is not None:
-            self.builder.flush()
-            self.builder.dist_reduce()
+        if self.builder:
+            self.builder.teardown()
 
         if self.rank == 0:
-            if self.reduce_cfg is not None:
+            if self.reduce_cfg:
                 # Create a new dataset with one row for each reduced gradient
-                assert self.builder is not None
+                assert self.builder
                 self.data = Dataset.from_list(
                     [
                         {"query_index": i}

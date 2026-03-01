@@ -13,10 +13,10 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from bergson.collector.collector import CollectorComputer
 from bergson.collector.gradient_collectors import GradientCollector
 from bergson.collector.in_memory_collector import InMemoryCollector
-from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
+from bergson.config import IndexConfig, ReduceConfig
 from bergson.data import create_index
 from bergson.gradients import GradientProcessor
-from bergson.process_grads import get_trackstar_preconditioner, precondition_grads
+from bergson.process_grads import get_trackstar_preconditioner
 from bergson.score.score_writer import (
     InMemorySequenceScoreWriter,
     MemmapSequenceScoreWriter,
@@ -187,24 +187,18 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
     target_modules = list(collector.shapes().keys())
 
     # Produce preconditioned query gradients
-    preprocess_cfg = PreprocessConfig(
-        preconditioner_path=str(tmp_path),
+    h_inv = get_trackstar_preconditioner(
+        str(tmp_path), device=preprocess_device, power=-1
     )
+    preconditioned = {
+        name: (query_grads[name].to(preprocess_device) @ h_inv[name]).cpu()
+        for name in target_modules
+    }
 
-    preconditioned = precondition_grads(
-        query_grads, preprocess_cfg, target_modules, preprocess_device
-    )
-
-    # Produce query gradients without preconditioning
-    preprocess_cfg_none = PreprocessConfig()
-
-    vanilla = precondition_grads(
-        query_grads, preprocess_cfg_none, target_modules, preprocess_device
-    )
-
-    # Compare the two
+    # Compare against unpreconditioned — should differ
     for name in target_modules:
-        assert not torch.allclose(preconditioned[name], vanilla[name])
+        vanilla = query_grads[name].to(preprocess_device).cpu()
+        assert not torch.allclose(preconditioned[name], vanilla)
 
 
 def test_memmap_score_writer_bfloat16(tmp_path: Path):

@@ -1,5 +1,11 @@
 __version__ = "0.6.0"
 
+from .builders import (
+    Builder,
+    InMemorySequenceBuilder,
+    InMemoryTokenBuilder,
+    create_builder,
+)
 from .collection import collect_gradients
 from .collector.collector import CollectorComputer
 from .collector.gradient_collectors import GradientCollector
@@ -14,11 +20,7 @@ from .config import (
     ScoreConfig,
 )
 from .data import (
-    Builder,
-    InMemorySequenceBuilder,
-    InMemoryTokenBuilder,
     TokenGradients,
-    create_builder,
     load_gradient_dataset,
     load_gradients,
     load_token_gradients,

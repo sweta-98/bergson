@@ -289,9 +289,6 @@ class ScoreConfig:
             similar query gradient (the maximum score).
         `individual`: compute a separate score for each query gradient."""
 
-    skip_query_preprocess: bool = False
-    """Skip query preprocessing if already applied (e.g. by reduce)."""
-
     batch_size: int = 1024
     """Batch size for processing the query dataset."""
 
@@ -305,7 +302,8 @@ class ScoreConfig:
 
 @dataclass
 class ReduceConfig:
-    """Config for reducing a dataset into a standalone query."""
+    """Config for reducing the gradients of a dataset into a standalone
+    aggregated gradient."""
 
     method: Literal["mean", "sum"] = "mean"
     """Method for reducing the gradients."""

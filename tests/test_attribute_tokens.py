@@ -16,9 +16,10 @@ from bergson import (
     fit_normalizers,
     load_token_gradients,
 )
+from bergson.builders import TokenBuilder
 from bergson.collector.gradient_collectors import GradientCollector
 from bergson.config import IndexConfig
-from bergson.data import TokenBuilder, compute_num_token_grads, create_token_index
+from bergson.data import compute_num_token_grads, create_token_index
 from bergson.score.score_writer import MemmapTokenScoreWriter
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import convert_dtype_to_np, get_gradient_dtype

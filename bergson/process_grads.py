@@ -1,11 +1,9 @@
 import json
 import warnings
 from pathlib import Path
-from typing import Literal
 
 import torch
 
-from bergson.config import PreprocessConfig
 from bergson.gradients import GradientProcessor
 from bergson.utils.math import damped_psd_power
 
@@ -17,6 +15,7 @@ def normalize_grad(
 ) -> dict[str, torch.Tensor]:
     """Preprocess a single gradient. Optionally unit-normalizes
     across all columns, moves to device."""
+    final_dtype = next(iter(grad_dict.values())).dtype
     grads = {
         name: g.to(device=device, dtype=torch.float32) for name, g in grad_dict.items()
     }
@@ -28,7 +27,7 @@ def normalize_grad(
         else:
             warnings.warn("Gradient norm is zero, skipping normalization")
 
-    return grads
+    return {k: v.to(final_dtype) for k, v in grads.items()}
 
 
 def normalize_flat_grad(
@@ -36,76 +35,14 @@ def normalize_flat_grad(
     device: torch.device,
 ) -> torch.Tensor:
     """Unit-normalize a single gradient tensor."""
+    final_dtype = grad.dtype
     grad = grad.to(device=device, dtype=torch.float32)
     norm = grad.norm()
     if norm > 0:
         grad /= norm
     else:
         warnings.warn("Gradient norm is zero, skipping normalization")
-    return grad
-
-
-def preprocess_grads(
-    grad_dict: dict[str, torch.Tensor],
-    grad_column_names: list[str],
-    unit_normalize: bool,
-    device: torch.device,
-    aggregate_grads: Literal["mean", "sum", "none"] = "none",
-    normalize_aggregated_grad: bool = False,
-) -> dict[str, torch.Tensor]:
-    """Preprocess the gradients. Returns a dictionary of preprocessed gradients
-    with shape [1, grad_dim]. Preprocessing includes some combination of unit
-    normalization, accumulation, aggregated gradient normalization, and dtype
-    conversion."""
-
-    grad_column_names = list(grad_dict.keys())
-
-    # Short-circuit if possible
-    if aggregate_grads == "none" and not unit_normalize:
-        return {name: grad_dict[name].to(device=device) for name in grad_column_names}
-
-    num_rows = len(grad_dict[grad_column_names[0]])
-
-    # Get sum and sum of squares of the gradients
-    acc = {}
-    ss_acc = torch.tensor(0.0, device=device, dtype=torch.float32)
-    if not unit_normalize:
-        ss_acc.fill_(1.0)
-
-    for name in grad_column_names:
-        x = grad_dict[name].to(device=device, dtype=torch.float32)
-        acc[name] = x.sum(0)
-        if unit_normalize:
-            ss_acc += x.pow(2).sum()
-
-    ss_acc = ss_acc.sqrt()
-    assert ss_acc > 0, "Sum of squares of entire dataset is zero"
-
-    # Process the gradients
-    if aggregate_grads == "mean":
-        grads = {
-            name: (acc[name] / ss_acc / num_rows).unsqueeze(0)
-            for name in grad_column_names
-        }
-    elif aggregate_grads == "sum":
-        grads = {name: (acc[name] / ss_acc).unsqueeze(0) for name in grad_column_names}
-    elif aggregate_grads == "none":
-        grads = {name: grad_dict[name].to(device=device) for name in grad_column_names}
-        if unit_normalize:
-            norms = torch.cat(list(grads.values()), dim=1).norm(dim=1, keepdim=True)
-            grads = {k: v / norms for k, v in grads.items()}
-    else:
-        raise ValueError(f"Invalid aggregate_grads: {aggregate_grads}")
-
-    # Normalize the aggregated gradient
-    if normalize_aggregated_grad:
-        grad_norm = torch.cat(
-            [grads[name].flatten() for name in grad_column_names], dim=0
-        ).norm()
-        for name in grad_column_names:
-            grads[name] /= grad_norm
-
-    return grads
+    return grad.to(final_dtype)
 
 
 def mix_preconditioners(
@@ -223,25 +160,3 @@ def precondition_grad(
         return grad
 
     return {name: (grad[name].to(device) @ h_inv[name]).cpu() for name in grad.keys()}
-
-
-def precondition_grads(
-    grads: dict[str, torch.Tensor],
-    preprocess_cfg: PreprocessConfig,
-    target_modules: list[str],
-    device: torch.device,
-) -> dict[str, torch.Tensor]:
-    """Precondition query gradients with the preconditioner."""
-    h_inv = get_trackstar_preconditioner(
-        preprocess_cfg.preconditioner_path,
-        device=device,
-        power=-0.5 if preprocess_cfg.unit_normalize else -1,
-    )
-
-    if h_inv:
-        return {
-            name: (grads[name].to(device) @ h_inv[name]).cpu()
-            for name in target_modules
-        }
-
-    return grads

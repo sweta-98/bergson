@@ -10,9 +10,9 @@ from datasets import Dataset
 from jaxtyping import Float
 from torch import Tensor, nn
 
+from bergson.builders import Builder, create_builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig, ReduceConfig
-from bergson.data import Builder, create_builder
 from bergson.gradients import (
     AdafactorNormalizer,
     AdamNormalizer,
@@ -131,8 +131,7 @@ class InMemoryCollector(HookCollectorBase):
             )
 
         if self.builder is not None:
-            self.builder.dist_reduce()
-            self.builder.flush()
+            self.builder.teardown()
 
             # Populate self.gradients from builder buffer
             buf = self.builder.grad_buffer
