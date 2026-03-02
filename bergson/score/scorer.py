@@ -79,24 +79,17 @@ class Scorer:
         self.attribute_tokens = attribute_tokens
         self.writer = writer
 
-        # Load preconditioner: H^(-1/2) for split, H^(-1) for one-sided
+        # Load preconditioner for index-side preconditioning
         self.preconditioners = get_trackstar_preconditioner(
             preconditioner_path,
             device=device,
             power=-0.5 if unit_normalize else -1,
             return_dtype=dtype,
         )
-        # Precondition query grads per module, then cat into a single tensor
-        if self.preconditioners:
-            q_list = [
-                query_grads[m].to(device=self.device, dtype=self.dtype)
-                @ self.preconditioners[m]
-                for m in modules
-            ]
-        else:
-            q_list = [
-                query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules
-            ]
+        # Query grads arrive fully preprocessed; just transfer and cat
+        q_list = [
+            query_grads[m].to(device=self.device, dtype=self.dtype) for m in modules
+        ]
         # Pre-transpose for scoring: [total_dim, n_queries]
         self.query_grads_t = torch.cat(q_list, dim=-1).T
 

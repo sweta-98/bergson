@@ -289,6 +289,12 @@ class ScoreConfig:
             similar query gradient (the maximum score).
         `individual`: compute a separate score for each query gradient."""
 
+    query_aggregate: Literal["mean", "sum", "none"] = "none"
+    """How to aggregate query gradients before scoring.
+        `mean`: average all query gradients into a single query.
+        `sum`: sum all query gradients into a single query.
+        `none`: score each query gradient individually."""
+
     batch_size: int = 1024
     """Batch size for processing the query dataset."""
 

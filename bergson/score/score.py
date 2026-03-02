@@ -19,6 +19,7 @@ from bergson.data import (
     load_gradients,
 )
 from bergson.distributed import launch_distributed_run
+from bergson.process_grads import get_trackstar_preconditioner
 from bergson.score.score_writer import (
     MemmapSequenceScoreWriter,
     MemmapTokenScoreWriter,
@@ -313,11 +314,27 @@ def score_dataset(
 
     query_grads = get_query_grads(score_cfg)
 
+    # Precondition query grads before normalization/aggregation
+    preconditioners = get_trackstar_preconditioner(
+        preprocess_cfg.preconditioner_path,
+        device=preprocess_device,
+        power=-0.5 if preprocess_cfg.unit_normalize else -1,
+        return_dtype=torch.float32,
+    )
+    if preconditioners:
+        query_grads = {
+            m: query_grads[m].to(device=preprocess_device, dtype=torch.float32)
+            @ preconditioners[m]
+            for m in score_cfg.modules
+        }
+
     query_grads = preprocess_grads(
         query_grads,
         score_cfg.modules,
         preprocess_cfg.unit_normalize,
         preprocess_device,
+        aggregate_grads=score_cfg.query_aggregate,
+        normalize_aggregated_grad=preprocess_cfg.unit_normalize,
     )
 
     launch_distributed_run(

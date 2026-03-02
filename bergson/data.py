@@ -244,6 +244,8 @@ def _allocate_batches_world(
     """
     if ranks is None:
         ranks = list(range(world_size))
+    if not isinstance(doc_lengths, list):
+        doc_lengths = list(doc_lengths)
     if len(doc_lengths) < world_size:
         raise RuntimeError("Not enough documents to distribute across workers.")
 

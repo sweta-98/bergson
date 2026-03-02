@@ -75,6 +75,8 @@ def run_trackstar_scoring(
         "--query.dataset",
         query_data_path,
         "--unit_normalize",
+        "--query_aggregate",
+        "mean",
         "--overwrite",
     ]
 
@@ -96,10 +98,10 @@ def filter_by_scores(
         return
 
     scores = load_scores(Path(scores_path))
-    print(f"Loaded scores: {len(scores)} items, {scores.num_scores} queries")
+    print(f"Loaded scores: {len(scores)} items, {scores.num_scores} score(s)")
 
-    # Mean score across all induction queries
-    all_scores = scores[:].mean(axis=1)
+    # With query_aggregate=mean, there's a single score per item
+    all_scores = scores[:].mean(axis=1) if scores.num_scores > 1 else scores[:, 0]
     print(
         f"Score stats: mean={all_scores.mean():.4f}, "
         f"std={all_scores.std():.4f}, "
