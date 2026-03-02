@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -53,6 +54,9 @@ class CLIRunRecord:
     max_length: int | None = None
     token_batch_size: int | None = None
     projection_dim: int | None = None
+    # Peak VRAM (MB) per phase, measured via nvidia-smi polling
+    build_peak_vram_mb: float | None = None
+    score_peak_vram_mb: float | None = None
 
 
 @dataclass
@@ -99,28 +103,103 @@ class RunConfig:
     """Dimension to project gradients to. Matches bergson default."""
 
 
-def run_cli_command(cmd: list[str], description: str) -> tuple[bool, float, str]:
-    """Run a CLI command and return (success, elapsed_time, error_message)."""
+class VramMonitor:
+    """Poll nvidia-smi in a background thread to track peak VRAM."""
+
+    def __init__(self, gpu_index: int = 0, interval: float = 0.25):
+        self._gpu_index = gpu_index
+        self._interval = interval
+        self._peak_mb: float = 0.0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _poll(self) -> None:
+        while not self._stop.is_set():
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    f"--id={self._gpu_index}",
+                    "--query-gpu=memory.used",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                try:
+                    mb = float(result.stdout.strip())
+                    self._peak_mb = max(self._peak_mb, mb)
+                except ValueError:
+                    pass
+            self._stop.wait(self._interval)
+
+    def start(self) -> None:
+        self._peak_mb = 0.0
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._poll, daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> float:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        return self._peak_mb
+
+
+def run_cli_command(
+    cmd: list[str],
+    description: str,
+    monitor_vram: bool = False,
+    gpu_index: int = 0,
+) -> tuple[bool, float, str, float | None]:
+    """Run a CLI command and return (success, elapsed, error, peak_vram_mb)."""
     print(f"Running: {' '.join(cmd)}")
+    vram_monitor: VramMonitor | None = None
+    if monitor_vram:
+        vram_monitor = VramMonitor(gpu_index=gpu_index)
+        vram_monitor.start()
     start = time.perf_counter()
     try:
         result = subprocess.run(
             cmd,
-            capture_output=False,  # Changed to False so output is visible
+            capture_output=False,
             text=True,
         )
         elapsed = time.perf_counter() - start
+        peak_vram_mb = (
+            vram_monitor.stop() if vram_monitor else None
+        )
         if result.returncode != 0:
             return (
                 False,
                 elapsed,
-                f"{description} failed with return code {result.returncode}",
+                f"{description} failed with return code"
+                f" {result.returncode}",
+                peak_vram_mb,
             )
-        print(f"{description} completed in {elapsed:.2f}s")
-        return True, elapsed, ""
+        vram_str = (
+            f" (peak VRAM: {peak_vram_mb:.0f} MB)"
+            if peak_vram_mb is not None
+            else ""
+        )
+        print(
+            f"{description} completed in"
+            f" {elapsed:.2f}s{vram_str}"
+        )
+        return True, elapsed, "", peak_vram_mb
     except Exception as e:
         elapsed = time.perf_counter() - start
-        return False, elapsed, f"{description} error: {str(e)}"
+        peak_vram_mb = (
+            vram_monitor.stop() if vram_monitor else None
+        )
+        return (
+            False,
+            elapsed,
+            f"{description} error: {str(e)}",
+            peak_vram_mb,
+        )
 
 
 def load_records(root: Path) -> list[CLIRunRecord]:
@@ -258,9 +337,13 @@ class Run:
             "--autobatchsize",
         ]
 
-        success, _, err = run_cli_command(query_cmd, "Query index build")
+        success, _, err, _ = run_cli_command(
+            query_cmd, "Query index build"
+        )
         if not success:
-            raise RuntimeError(f"Failed to build query index: {err}")
+            raise RuntimeError(
+                f"Failed to build query index: {err}"
+            )
 
         # Read the determined batch size from the query index
         with open(query_index_path / "index_config.json", "r") as f:
@@ -299,6 +382,8 @@ class Run:
         error_message: str | None = None
         build_time: float | None = None
         score_time: float | None = None
+        build_peak_vram_mb: float | None = None
+        score_peak_vram_mb: float | None = None
 
         try:
             # Step 1: Build the gradient index (timed)
@@ -309,7 +394,13 @@ class Run:
                 *common_args,
             ]
 
-            success, build_time, err = run_cli_command(build_cmd, "Build")
+            success, build_time, err, build_peak_vram_mb = (
+                run_cli_command(
+                    build_cmd,
+                    "Build",
+                    monitor_vram=True,
+                )
+            )
             if not success:
                 raise RuntimeError(err)
 
@@ -325,7 +416,13 @@ class Run:
                 *common_args,
             ]
 
-            success, score_time, err = run_cli_command(score_cmd, "Score")
+            success, score_time, err, score_peak_vram_mb = (
+                run_cli_command(
+                    score_cmd,
+                    "Score",
+                    monitor_vram=True,
+                )
+            )
             if not success:
                 print(f"Warning: Score step failed: {err}")
                 score_time = None
@@ -369,6 +466,8 @@ class Run:
             hardware=get_hardware_info(),
             token_batch_size=token_batch_size,
             projection_dim=self.run_cfg.projection_dim,
+            build_peak_vram_mb=build_peak_vram_mb,
+            score_peak_vram_mb=score_peak_vram_mb,
         )
         save_record(benchmark_path, record, "benchmark_cli.json")
 

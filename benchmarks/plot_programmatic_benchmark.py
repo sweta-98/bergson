@@ -55,6 +55,15 @@ def create_dataframe(
                     "gpu_vram_gb": getattr(
                         r, "gpu_vram_gb", None
                     ),
+                    "query_peak_vram_mb": getattr(
+                        r, "query_peak_vram_mb", None
+                    ),
+                    "build_peak_vram_mb": getattr(
+                        r, "build_peak_vram_mb", None
+                    ),
+                    "score_peak_vram_mb": getattr(
+                        r, "score_peak_vram_mb", None
+                    ),
                     "token_batch_size": r.token_batch_size,
                     "projection_dim": r.projection_dim,
                 }

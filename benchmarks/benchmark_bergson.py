@@ -27,7 +27,7 @@ from bergson.collector.in_memory_collector import InMemoryCollector
 from bergson.config import DataConfig, IndexConfig
 from bergson.data import allocate_batches
 from bergson.gradients import GradientProcessor
-from bergson.score.score_writer import InMemoryScoreWriter
+from bergson.score.score_writer import InMemorySequenceScoreWriter
 from bergson.score.scorer import Scorer
 from bergson.utils.auto_batch_size import determine_batch_size
 from bergson.utils.utils import assert_type
@@ -73,6 +73,10 @@ class RunRecord:
     gpu_name: str | None = None
     num_gpus_available: int | None = None
     gpu_vram_gb: float | None = None
+    # Peak VRAM (MB) per phase
+    query_peak_vram_mb: float | None = None
+    build_peak_vram_mb: float | None = None
+    score_peak_vram_mb: float | None = None
 
 
 @dataclass
@@ -221,12 +225,16 @@ class Run:
             )
         )
 
-        # Initialize timing variables
+        # Initialize timing and VRAM variables
         status = "success"
         error_message: str | None = None
         build_time: float | None = None
         query_time: float | None = None
         score_time: float | None = None
+        query_peak_vram_mb: float | None = None
+        build_peak_vram_mb: float | None = None
+        score_peak_vram_mb: float | None = None
+        device = torch.device("cuda")
 
         # Create configs for data loading
         index_cfg = IndexConfig(
@@ -241,6 +249,10 @@ class Run:
             max_tokens=train_tokens,
             precision=precision,
             skip_preconditioners=self.run_cfg.skip_preconditioners,
+        )
+        run_path.mkdir(parents=True, exist_ok=True)
+        index_cfg.partial_run_path.mkdir(
+            parents=True, exist_ok=True
         )
 
         model, _ = setup_model_and_peft(index_cfg, device_map_auto=True)
@@ -298,18 +310,31 @@ class Run:
             )
 
             print("Collecting query gradients...")
+            torch.cuda.reset_peak_memory_stats(device)
+            torch.cuda.synchronize(device)
             query_start = time.perf_counter()
             query_computer.run_with_collector_hooks(desc="query gradients")
+            torch.cuda.synchronize(device)
             query_time = time.perf_counter() - query_start
-            print(f"Query phase completed in " f"{query_time:.2f} seconds")
+            query_peak_vram_mb = (
+                torch.cuda.max_memory_allocated(device)
+                / (1024**2)
+            )
+            print(
+                f"Query phase completed in "
+                f"{query_time:.2f} seconds"
+                f" (peak VRAM: {query_peak_vram_mb:.0f} MB)"
+            )
 
-            query_grads = {
-                name: torch.cat(grads, dim=0)
-                for name, grads in query_collector.gradients.items()
-            }
+            query_grads = {}
+            for name, grads in query_collector.gradients.items():
+                if isinstance(grads, list):
+                    query_grads[name] = torch.cat(grads, dim=0)
+                else:
+                    query_grads[name] = grads
             modules = list(query_grads.keys())
             num_queries = len(query_grads[modules[0]])
-            writer = InMemoryScoreWriter(len(ds), num_queries, dtype=torch.bfloat16)
+            writer = InMemorySequenceScoreWriter(len(ds), num_queries, dtype=torch.bfloat16)
             scorer = Scorer(
                 query_grads=query_grads,
                 modules=modules,
@@ -333,10 +358,21 @@ class Run:
             )
 
             print("Collecting training gradients...")
+            torch.cuda.reset_peak_memory_stats(device)
+            torch.cuda.synchronize(device)
             score_start = time.perf_counter()
             score_computer.run_with_collector_hooks(desc="training gradients")
+            torch.cuda.synchronize(device)
             score_time = time.perf_counter() - score_start
-            print(f"Score phase completed in " f"{score_time:.2f} seconds")
+            score_peak_vram_mb = (
+                torch.cuda.max_memory_allocated(device)
+                / (1024**2)
+            )
+            print(
+                f"Score phase completed in "
+                f"{score_time:.2f} seconds"
+                f" (peak VRAM: {score_peak_vram_mb:.0f} MB)"
+            )
 
         # Build phase: Save gradients to disk
         if not self.run_cfg.skip_build:
@@ -354,10 +390,21 @@ class Run:
                 batches=batches,
                 cfg=index_cfg,
             )
+            torch.cuda.reset_peak_memory_stats(device)
+            torch.cuda.synchronize(device)
             build_start = time.perf_counter()
             build_computer.run_with_collector_hooks(desc="building index")
+            torch.cuda.synchronize(device)
             build_time = time.perf_counter() - build_start
-            print(f"Build phase completed in " f"{build_time:.2f} seconds")
+            build_peak_vram_mb = (
+                torch.cuda.max_memory_allocated(device)
+                / (1024**2)
+            )
+            print(
+                f"Build phase completed in "
+                f"{build_time:.2f} seconds"
+                f" (peak VRAM: {build_peak_vram_mb:.0f} MB)"
+            )
 
         record = RunRecord(
             schema_version=SCHEMA_VERSION,
@@ -381,6 +428,9 @@ class Run:
             error=error_message,
             token_batch_size=optimal_token_batch_size,
             projection_dim=self.run_cfg.projection_dim,
+            query_peak_vram_mb=query_peak_vram_mb,
+            build_peak_vram_mb=build_peak_vram_mb,
+            score_peak_vram_mb=score_peak_vram_mb,
             **vars(get_hardware_details()),
         )
         save_record(run_path, record)

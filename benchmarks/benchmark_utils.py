@@ -85,7 +85,7 @@ def prepare_benchmark_ds_path():
                 split="train",
                 truncation=True,
             ),
-            autobatchsize=True,
+            auto_batch_size=True,
         )
         ds = setup_data_pipeline(index_cfg)
         ds.save_to_disk(benchmark_ds_path)

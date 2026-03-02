@@ -134,9 +134,12 @@ class InMemoryCollector(HookCollectorBase):
             buf = self.builder.grad_buffer
             offset = 0
             for name, dim in grad_sizes.items():
-                self.gradients[name] = torch.from_numpy(
-                    buf[:, offset : offset + dim].copy()
-                )
+                chunk = buf[:, offset : offset + dim].copy()
+                if hasattr(chunk.dtype, 'name') and 'bfloat16' in chunk.dtype.name:
+                    chunk = chunk.astype('float32')
+                    self.gradients[name] = torch.from_numpy(chunk).to(torch.bfloat16)
+                else:
+                    self.gradients[name] = torch.from_numpy(chunk)
                 offset += dim
 
         if self.scorer is not None:

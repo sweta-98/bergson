@@ -44,6 +44,12 @@ def create_cli_dataframe(
                     "run_path": r.run_path,
                     "num_gpus": r.num_gpus,
                     "hardware": r.hardware,
+                    "build_peak_vram_mb": getattr(
+                        r, "build_peak_vram_mb", None
+                    ),
+                    "score_peak_vram_mb": getattr(
+                        r, "score_peak_vram_mb", None
+                    ),
                 }
             )
     return pd.DataFrame(rows)
