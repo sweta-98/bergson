@@ -15,7 +15,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from kronfluence.analyzer import Analyzer, prepare_model
 from kronfluence.arguments import FactorArguments, ScoreArguments
 from kronfluence.task import Task
@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM
 
 from benchmarks.benchmark_utils import (
     MODEL_SPECS,
-    get_hardware_info,
+    get_hardware_details,
     get_run_path,
     prepare_benchmark_ds_path,
     save_record,
@@ -178,7 +178,11 @@ class RunRecord:
     run_path: str
     notes: str | None
     error: str | None
-    hardware: str
+    hardware: str | None = None
+    gpu_name: str | None = None
+    num_gpus_available: int | None = None
+    gpu_vram_gb: float | None = None
+    peak_vram_mb: float | None = None
 
 
 def parse_examples(value: str) -> int:
@@ -333,7 +337,11 @@ class Run:
             )
         )
 
+        device = torch.device("cuda")
+        peak_vram_mb: float | None = None
         start_wall = timestamp()
+        torch.cuda.reset_peak_memory_stats(device)
+        torch.cuda.synchronize(device)
         start = time.perf_counter()
         status = "success"
         error_message: str | None = None
@@ -346,10 +354,30 @@ class Run:
             model.cuda()  # type: ignore
 
             # Load datasets
-            train_dataset = assert_type(
-                Dataset,
-                load_dataset(self.run_cfg.dataset, split=self.run_cfg.train_split),
-            )
+            dataset_path = Path(self.run_cfg.dataset)
+            if dataset_path.exists():
+                full_dataset = load_from_disk(
+                    str(dataset_path)
+                )
+                if isinstance(full_dataset, dict):
+                    train_dataset = assert_type(
+                        Dataset,
+                        full_dataset[
+                            self.run_cfg.train_split
+                        ],
+                    )
+                else:
+                    train_dataset = assert_type(
+                        Dataset, full_dataset
+                    )
+            else:
+                train_dataset = assert_type(
+                    Dataset,
+                    load_dataset(
+                        self.run_cfg.dataset,
+                        split=self.run_cfg.train_split,
+                    ),
+                )
             train_dataset = train_dataset.select(range(train_examples + eval_examples))
 
             eval_dataset = train_dataset.select(
@@ -419,8 +447,17 @@ class Run:
             status = "error"
             error_message = repr(exc)
 
+        torch.cuda.synchronize(device)
         runtime = time.perf_counter() - start
+        peak_vram_mb = (
+            torch.cuda.max_memory_allocated(device)
+            / (1024**2)
+        )
         end_wall = timestamp()
+        print(
+            f"Completed in {runtime:.2f}s"
+            f" (peak VRAM: {peak_vram_mb:.0f} MB)"
+        )
 
         record = RunRecord(
             schema_version=SCHEMA_VERSION,
@@ -453,7 +490,8 @@ class Run:
             run_path=str(run_path),
             notes=self.run_cfg.notes,
             error=error_message,
-            hardware=get_hardware_info(),
+            peak_vram_mb=peak_vram_mb,
+            **vars(get_hardware_details()),
         )
         save_record(run_path, record)
 

@@ -337,6 +337,7 @@ class RunRecord:
     gpu_name: str | None = None
     num_gpus_available: int | None = None
     gpu_vram_gb: float | None = None
+    peak_vram_mb: float | None = None
 
 
 @dataclass
@@ -544,6 +545,9 @@ class Run:
             collate_fn=collate_fn,
         )
 
+        device = torch.device("cuda")
+        torch.cuda.reset_peak_memory_stats(device)
+        torch.cuda.synchronize(device)
         start_time = timestamp()
         start = time.perf_counter()
         attributor.cache(train_loader)
@@ -552,8 +556,17 @@ class Run:
         with torch.no_grad():
             attributor.attribute(train_loader, test_loader)
 
+        torch.cuda.synchronize(device)
         runtime = time.perf_counter() - start
+        peak_vram_mb = (
+            torch.cuda.max_memory_allocated(device)
+            / (1024**2)
+        )
         end_time = timestamp()
+        print(
+            f"Completed in {runtime:.2f}s"
+            f" (peak VRAM: {peak_vram_mb:.0f} MB)"
+        )
 
         record = RunRecord(
             schema_version=SCHEMA_VERSION,
@@ -576,6 +589,7 @@ class Run:
             notes=self.run_cfg.notes,
             error=error_message,
             projection_dim=self.run_cfg.projection_dim,
+            peak_vram_mb=peak_vram_mb,
             **vars(get_hardware_details()),
         )
         save_record(run_path, record)
