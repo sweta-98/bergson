@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -310,7 +311,9 @@ class Run:
     def execute(self) -> None:
         """Run the benchmark."""
         if not self.run_cfg.dataset:
-            self.run_cfg.dataset = prepare_benchmark_ds_path()
+            self.run_cfg.dataset = str(
+                prepare_benchmark_ds_path()
+            )
 
         if self.run_cfg.model not in MODEL_SPECS:
             raise ValueError(f"Unknown model '{self.run_cfg.model}'")
@@ -337,7 +340,14 @@ class Run:
             )
         )
 
-        device = torch.device("cuda")
+        local_rank = int(os.environ.get("LOCAL_RANK", -1))
+        distributed = local_rank != -1
+        is_main = not distributed or local_rank == 0
+        if distributed:
+            torch.cuda.set_device(local_rank)
+            device = torch.device(f"cuda:{local_rank}")
+        else:
+            device = torch.device("cuda")
         peak_vram_mb: float | None = None
         start_wall = timestamp()
         torch.cuda.reset_peak_memory_stats(device)
@@ -347,11 +357,21 @@ class Run:
         error_message: str | None = None
 
         try:
-            # Load model and tokenizer
-            model = AutoModelForCausalLM.from_pretrained(
-                spec.hf_id, torch_dtype=torch.bfloat16, device_map="auto"
-            )
-            model.cuda()  # type: ignore
+            # Load model
+            if distributed:
+                # In distributed mode, load to CPU;
+                # Analyzer handles device placement and DDP
+                model = AutoModelForCausalLM.from_pretrained(
+                    spec.hf_id,
+                    torch_dtype=torch.bfloat16,
+                )
+            else:
+                model = AutoModelForCausalLM.from_pretrained(
+                    spec.hf_id,
+                    torch_dtype=torch.bfloat16,
+                    device_map="auto",
+                )
+                model.cuda()  # type: ignore
 
             # Load datasets
             dataset_path = Path(self.run_cfg.dataset)
@@ -454,48 +474,49 @@ class Run:
             / (1024**2)
         )
         end_wall = timestamp()
-        print(
-            f"Completed in {runtime:.2f}s"
-            f" (peak VRAM: {peak_vram_mb:.0f} MB)"
-        )
+        if is_main:
+            print(
+                f"Completed in {runtime:.2f}s"
+                f" (peak VRAM: {peak_vram_mb:.0f} MB)"
+            )
 
-        record = RunRecord(
-            schema_version=SCHEMA_VERSION,
-            status=status,
-            model_key=spec.key,
-            model_name=spec.hf_id,
-            params=spec.params,
-            train_examples=train_examples,
-            eval_examples=eval_examples,
-            dataset=self.run_cfg.dataset,
-            train_split=self.run_cfg.train_split,
-            eval_split=self.run_cfg.eval_split,
-            factors_name=self.run_cfg.factors_name,
-            scores_name=self.run_cfg.scores_name,
-            strategy=self.run_cfg.strategy,
-            use_empirical_fisher=self.run_cfg.use_empirical_fisher,
-            covariance_max_examples=self.run_cfg.covariance_max_examples,
-            per_device_batch_size=self.run_cfg.per_device_batch_size,
-            per_device_query_batch_size=self.run_cfg.per_device_query_batch_size,
-            per_device_train_batch_size=self.run_cfg.per_device_train_batch_size,
-            amp_dtype=self.run_cfg.amp_dtype,
-            activation_covariance_dtype=self.run_cfg.activation_covariance_dtype,
-            gradient_covariance_dtype=self.run_cfg.gradient_covariance_dtype,
-            per_sample_gradient_dtype=self.run_cfg.per_sample_gradient_dtype,
-            score_dtype=self.run_cfg.score_dtype,
-            offload_activations_to_cpu=self.run_cfg.offload_activations_to_cpu,
-            runtime_seconds=runtime,
-            start_time=start_wall,
-            end_time=end_wall,
-            run_path=str(run_path),
-            notes=self.run_cfg.notes,
-            error=error_message,
-            peak_vram_mb=peak_vram_mb,
-            **vars(get_hardware_details()),
-        )
-        save_record(run_path, record)
-
-        print(json.dumps(asdict(record), indent=2))
+        if is_main:
+            record = RunRecord(
+                schema_version=SCHEMA_VERSION,
+                status=status,
+                model_key=spec.key,
+                model_name=spec.hf_id,
+                params=spec.params,
+                train_examples=train_examples,
+                eval_examples=eval_examples,
+                dataset=self.run_cfg.dataset,
+                train_split=self.run_cfg.train_split,
+                eval_split=self.run_cfg.eval_split,
+                factors_name=self.run_cfg.factors_name,
+                scores_name=self.run_cfg.scores_name,
+                strategy=self.run_cfg.strategy,
+                use_empirical_fisher=self.run_cfg.use_empirical_fisher,
+                covariance_max_examples=self.run_cfg.covariance_max_examples,
+                per_device_batch_size=self.run_cfg.per_device_batch_size,
+                per_device_query_batch_size=self.run_cfg.per_device_query_batch_size,
+                per_device_train_batch_size=self.run_cfg.per_device_train_batch_size,
+                amp_dtype=self.run_cfg.amp_dtype,
+                activation_covariance_dtype=self.run_cfg.activation_covariance_dtype,
+                gradient_covariance_dtype=self.run_cfg.gradient_covariance_dtype,
+                per_sample_gradient_dtype=self.run_cfg.per_sample_gradient_dtype,
+                score_dtype=self.run_cfg.score_dtype,
+                offload_activations_to_cpu=self.run_cfg.offload_activations_to_cpu,
+                runtime_seconds=runtime,
+                start_time=start_wall,
+                end_time=end_wall,
+                run_path=str(run_path),
+                notes=self.run_cfg.notes,
+                error=error_message,
+                peak_vram_mb=peak_vram_mb,
+                **vars(get_hardware_details()),
+            )
+            save_record(run_path, record)
+            print(json.dumps(asdict(record), indent=2))
 
         if status != "success":
             sys.exit(1)

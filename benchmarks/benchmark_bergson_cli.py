@@ -104,33 +104,71 @@ class RunConfig:
 
 
 class VramMonitor:
-    """Poll nvidia-smi in a background thread to track peak VRAM."""
+    """Poll nvidia-smi in a background thread to track peak VRAM.
 
-    def __init__(self, gpu_index: int = 0, interval: float = 0.25):
+    When num_gpus > 1, polls all GPUs and tracks the max
+    per-GPU peak VRAM (the highest VRAM any single GPU hit).
+    """
+
+    def __init__(
+        self,
+        gpu_index: int = 0,
+        interval: float = 0.25,
+        num_gpus: int = 1,
+    ):
         self._gpu_index = gpu_index
         self._interval = interval
+        self._num_gpus = num_gpus
         self._peak_mb: float = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def _poll(self) -> None:
         while not self._stop.is_set():
-            result = subprocess.run(
-                [
-                    "nvidia-smi",
-                    f"--id={self._gpu_index}",
-                    "--query-gpu=memory.used",
-                    "--format=csv,noheader,nounits",
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                try:
-                    mb = float(result.stdout.strip())
-                    self._peak_mb = max(self._peak_mb, mb)
-                except ValueError:
-                    pass
+            if self._num_gpus > 1:
+                # Query all GPUs, take max
+                result = subprocess.run(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=memory.used",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split(
+                        "\n"
+                    ):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            mb = float(line)
+                            self._peak_mb = max(
+                                self._peak_mb, mb
+                            )
+                        except ValueError:
+                            pass
+            else:
+                result = subprocess.run(
+                    [
+                        "nvidia-smi",
+                        f"--id={self._gpu_index}",
+                        "--query-gpu=memory.used",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    try:
+                        mb = float(result.stdout.strip())
+                        self._peak_mb = max(
+                            self._peak_mb, mb
+                        )
+                    except ValueError:
+                        pass
             self._stop.wait(self._interval)
 
     def start(self) -> None:
@@ -153,12 +191,15 @@ def run_cli_command(
     description: str,
     monitor_vram: bool = False,
     gpu_index: int = 0,
+    num_gpus: int = 1,
 ) -> tuple[bool, float, str, float | None]:
     """Run a CLI command and return (success, elapsed, error, peak_vram_mb)."""
     print(f"Running: {' '.join(cmd)}")
     vram_monitor: VramMonitor | None = None
     if monitor_vram:
-        vram_monitor = VramMonitor(gpu_index=gpu_index)
+        vram_monitor = VramMonitor(
+            gpu_index=gpu_index, num_gpus=num_gpus
+        )
         vram_monitor.start()
     start = time.perf_counter()
     try:
@@ -334,7 +375,7 @@ class Run:
             "--overwrite",
             "--nproc_per_node",
             "1",
-            "--autobatchsize",
+            "--auto_batch_size",
         ]
 
         success, _, err, _ = run_cli_command(
@@ -399,6 +440,7 @@ class Run:
                     build_cmd,
                     "Build",
                     monitor_vram=True,
+                    num_gpus=self.run_cfg.num_gpus,
                 )
             )
             if not success:
@@ -412,7 +454,7 @@ class Run:
                 "--query_path",
                 str(query_index_path),
                 "--score",
-                "mean",
+                "nearest",
                 *common_args,
             ]
 
@@ -421,6 +463,7 @@ class Run:
                     score_cmd,
                     "Score",
                     monitor_vram=True,
+                    num_gpus=self.run_cfg.num_gpus,
                 )
             )
             if not success:
