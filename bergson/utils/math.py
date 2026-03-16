@@ -122,7 +122,64 @@ def reshape_to_nearest_square(a: Tensor) -> Tensor:
     return a.reshape(*a.shape[:-2], rows, cols)
 
 
-@torch.compile
+def _apply_damping(
+    H: Tensor,
+    damping_factor: float = 0.1,
+    dtype: torch.dtype = torch.float64,
+    regularizer: Tensor | None = None,
+) -> Tensor:
+    """Add adaptive damping to a PSD matrix for numerical stability.
+
+    Args:
+        H: Positive semi-definite matrix.
+        damping_factor: Multiplier for the damping term (default: 0.1). Set to
+            0 to disable damping.
+        dtype: Dtype for intermediate computation (default: float64 for stability).
+        regularizer: Optional matrix to use as regularizer instead of identity.
+            If provided, returns H + damping_factor * regularizer.
+            If None (default), uses scaled identity:
+            H + damping_factor * |H|_mean * I.
+
+    Returns:
+        The damped matrix in the specified dtype.
+    """
+    H = H.to(dtype=dtype)
+    if regularizer is not None:
+        regularizer = regularizer.to(dtype=dtype, device=H.device)
+        H = H + damping_factor * regularizer
+    else:
+        damping_val = damping_factor * H.abs().mean()
+        H = H + damping_val * torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
+    return H
+
+
+def damped_eigh(
+    H: Tensor,
+    damping_factor: float = 0.1,
+    dtype: torch.dtype = torch.float64,
+    regularizer: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Eigendecomposition of a PSD matrix with adaptive damping.
+
+    Args:
+        H: Positive semi-definite matrix.
+        damping_factor: Multiplier for the damping term (default: 0.1). Set to
+            0 to disable damping.
+        dtype: Dtype for intermediate computation (default: float64 for stability).
+        regularizer: Optional matrix to use as regularizer instead of identity.
+            If provided, computes eigh(H + damping_factor * regularizer).
+            If None (default), uses scaled identity:
+            eigh(H + damping_factor * |H|_mean * I).
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors) in the original dtype.
+    """
+    original_dtype = H.dtype
+    H_damped = _apply_damping(H, damping_factor, dtype, regularizer)
+    eigval, eigvec = torch.linalg.eigh(H_damped)
+    return eigval.to(original_dtype), eigvec.to(original_dtype)
+
+
 def damped_psd_power(
     H: Tensor,
     power: float,
@@ -149,15 +206,8 @@ def damped_psd_power(
         The damped power of H in the original dtype.
     """
     original_dtype = H.dtype
-    H = H.to(dtype=dtype)
-    if regularizer is not None:
-        regularizer = regularizer.to(dtype=dtype, device=H.device)
-        H = H + damping_factor * regularizer
-    else:
-        damping_val = damping_factor * H.abs().mean()
-        H = H + damping_val * torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
-
-    eigval, eigvec = torch.linalg.eigh(H)
+    H_damped = _apply_damping(H, damping_factor, dtype, regularizer)
+    eigval, eigvec = torch.linalg.eigh(H_damped)
     return (eigvec * eigval.pow(power) @ eigvec.mH).to(original_dtype)
 
 

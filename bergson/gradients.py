@@ -263,7 +263,6 @@ class AdafactorNormalizer(Normalizer):
                 self.bias_avg_sq.ndim == 1
             ), f"Expected 1D tensor for bias_avg_sq, got {self.bias_avg_sq.ndim}D"
 
-    @torch.compile
     def normalize_weight(
         self,
         grad: Tensor,
@@ -303,7 +302,6 @@ class AdafactorNormalizer(Normalizer):
 
         return grad
 
-    @torch.compile
     def normalize_bias(
         self,
         grad: Tensor,
@@ -345,7 +343,6 @@ class AdamNormalizer(Normalizer):
     weight_avg_sq: Tensor
     bias_avg_sq: Tensor | None = None
 
-    @torch.compile
     def normalize_weight(
         self,
         grad: Tensor,
@@ -356,7 +353,6 @@ class AdamNormalizer(Normalizer):
         denom = self.weight_avg_sq.sqrt()
         return grad.div_(denom.add_(eps))
 
-    @torch.compile
     def normalize_bias(
         self,
         grad: Tensor,

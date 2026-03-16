@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 
 from bergson.gradients import GradientProcessor
+from bergson.utils.math import damped_eigh
 
 
 def process_preconditioners(
@@ -30,11 +31,11 @@ def process_preconditioners(
         print("Computing preconditioner eigen decompositions...")
 
     for name in preconditioners.keys():
-        prec = preconditioners[name].to(dtype=torch.float64, device=device)
-        eigvals, eigvecs = torch.linalg.eigh(prec)
+        prec = preconditioners[name].to(device=device)
+        eigvals, eigvecs = damped_eigh(prec)
         preconditioners_eigen[name] = (
-            eigvals.to(dtype=dtype).contiguous().cpu(),
-            eigvecs.to(dtype=dtype).contiguous().cpu(),
+            eigvals.contiguous().cpu(),
+            eigvecs.contiguous().cpu(),
         )
 
     if not dist.is_initialized():

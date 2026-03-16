@@ -3,7 +3,7 @@
 
 Usage::
 
-    python scripts/wikitext_wmdp_trackstar.py ablations/my_experiment.yaml
+    python scripts/wmdp_trackstar.py ablations/my_experiment.yaml
 
 The YAML file specifies all bergson trackstar arguments. Results are saved to
 a CSV with the same stem next to the YAML (e.g. ``ablations/my_experiment.csv``).

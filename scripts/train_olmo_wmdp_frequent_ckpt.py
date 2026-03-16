@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""LoRA finetune OLMo-2-7B-Instruct on the mixed WMDP bio dataset.
+"""LoRA finetune OLMo-2-7B-Instruct with frequent checkpoint saves.
 
-Expects the mixed dataset to already exist at data/wmdp_mixed (created by
-prepare_wmdp_mixed.py). Saves the LoRA adapter locally.
+Saves optimizer state every epoch (every 153 steps) so we can extract
+Adam second moments at different training stages.
 
-Usage::
-
-    # Single GPU
-    python scripts/train_olmo_wmdp.py
-
-    # Multi-GPU via torchrun
-    torchrun --nproc_per_node=4 scripts/train_olmo_wmdp.py
+Usage:
+    torchrun --nproc_per_node=4 scripts/train_olmo_wmdp_frequent_ckpt.py
 """
 
 import os
@@ -25,9 +20,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
 
-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-OUTPUT_DIR = f"runs/olmo_wmdp_lora/{timestamp}"
+OUTPUT_DIR = f"runs/olmo_wmdp_lora_frequent/{timestamp}"
 MODEL_NAME = "allenai/OLMo-2-1124-7B-Instruct"
 DATASET_DIR = "data/wmdp_mixed"
 
@@ -42,7 +37,6 @@ def main():
     if "LOCAL_RANK" in os.environ:
         dist.init_process_group("nccl", device_id=torch.device(f"cuda:{rank}"))
 
-    # Load the mixed dataset
     ds = load_from_disk(DATASET_DIR)
     if not isinstance(ds, Dataset):
         raise TypeError(f"Expected Dataset, got {type(ds)}")
@@ -57,16 +51,15 @@ def main():
     peft_config = LoraConfig(
         r=128,
         lora_alpha=256,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj"
-        ],
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj"],
         lora_dropout=0.1,
         use_rslora=True,
         bias="none",
         task_type="CAUSAL_LM",
     )
 
+    # 153 steps/epoch with bs=16 on 4 GPUs and 9780 examples
+    # Save every 153 steps = every epoch
     trainer = NoShuffleSFTTrainer(
         model=model,
         train_dataset=ds,
@@ -84,8 +77,8 @@ def main():
             output_dir=OUTPUT_DIR,
             per_device_train_batch_size=16,
             report_to="wandb",
-            run_name=f"olmo_wmdp_lora",
-            save_steps=500,
+            run_name="olmo_wmdp_lora_frequent",
+            save_steps=153,
             warmup_steps=50,
             weight_decay=0.01,
         ),
