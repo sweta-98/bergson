@@ -1,0 +1,24 @@
+run_path: runs/olmo_wmdp_lora_trackstar
+model: runs/olmo_wmdp_lora/final_adapter
+normalizer: adafactor
+stats_sample_size: 10000
+index_cfg.precision: bf16
+token_batch_size: 1024
+projection_dim: 16
+fsdp: true
+
+data.dataset: data/wmdp_mixed
+data.split: train
+data.truncation: true
+
+query.dataset: cais/wmdp
+query.split: test
+query.subset: wmdp-bio
+query.format_template: bergson/templates/mcqa.yaml
+query.truncation: true
+
+unit_normalize: true
+aggregation: mean
+normalize_aggregated_grad: true
+nproc_per_node: 4
+overwrite: true
