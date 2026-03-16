@@ -55,13 +55,13 @@ def main():
     model = prepare_model_for_kbit_training(model)
 
     peft_config = LoraConfig(
-        r=16,
-        lora_alpha=16,
+        r=128,
+        lora_alpha=256,
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
-        lora_dropout=0.0,
+            "gate_proj"
+        ], # "up_proj", "down_proj",
+        lora_dropout=0.1,
         use_rslora=True,
         bias="none",
         task_type="CAUSAL_LM",
