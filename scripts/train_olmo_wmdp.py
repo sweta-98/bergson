@@ -18,9 +18,9 @@ import os
 import torch
 import torch.distributed as dist
 from datasets import Dataset, load_from_disk
-from peft import LoraConfig, prepare_model_for_kbit_training
+from peft import LoraConfig
 from torch.utils.data import SequentialSampler
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
 
@@ -45,14 +45,11 @@ def main():
         raise TypeError(f"Expected Dataset, got {type(ds)}")
     print(f"Loaded {len(ds)} examples from {DATASET_DIR}")
 
-    # Load model in 8-bit
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         device_map={"": f"cuda:{rank}"},
-        quantization_config=BitsAndBytesConfig(load_in_8bit=True),
     )
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = prepare_model_for_kbit_training(model)
 
     peft_config = LoraConfig(
         r=128,
@@ -72,8 +69,8 @@ def main():
         train_dataset=ds,
         args=SFTConfig(
             ddp_find_unused_parameters=False,
-            fp16=True,
-            gradient_accumulation_steps=2,
+            bf16=True,
+            gradient_accumulation_steps=1,
             learning_rate=1e-4,
             logging_steps=1,
             lr_scheduler_type="cosine",
@@ -82,7 +79,7 @@ def main():
             num_train_epochs=4,
             optim="adamw_8bit",
             output_dir=OUTPUT_DIR,
-            per_device_train_batch_size=8,
+            per_device_train_batch_size=32,
             report_to="wandb",
             run_name="olmo_wmdp_lora",
             save_steps=500,
