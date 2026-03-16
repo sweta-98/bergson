@@ -14,6 +14,7 @@ Usage::
 """
 
 import os
+from datetime import datetime
 
 import torch
 import torch.distributed as dist
@@ -24,7 +25,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
 
-OUTPUT_DIR = "runs/olmo_wmdp_lora"
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+OUTPUT_DIR = f"runs/olmo_wmdp_lora/{timestamp}"
 MODEL_NAME = "allenai/OLMo-2-1124-7B-Instruct"
 DATASET_DIR = "data/wmdp_mixed"
 
@@ -79,9 +82,9 @@ def main():
             num_train_epochs=4,
             optim="adamw_8bit",
             output_dir=OUTPUT_DIR,
-            per_device_train_batch_size=32,
+            per_device_train_batch_size=16,
             report_to="wandb",
-            run_name="olmo_wmdp_lora",
+            run_name=f"olmo_wmdp_lora",
             save_steps=500,
             warmup_steps=50,
             weight_decay=0.01,
