@@ -85,8 +85,13 @@ def build_worker(
         "preprocess_cfg": preprocess_cfg,
     }
 
+    def _make_batches(lengths):
+        if index_cfg.skip_batching:
+            return [[i] for i in range(len(lengths))]
+        return allocate_batches(lengths, index_cfg.token_batch_size)
+
     if isinstance(ds, Dataset):
-        batches = allocate_batches(ds["length"][:], index_cfg.token_batch_size)
+        batches = _make_batches(ds["length"][:])
         kwargs["batches"] = batches
         collect_gradients(**kwargs)
     else:
@@ -98,9 +103,7 @@ def build_worker(
             if not buf:
                 return
             ds_shard = assert_type(Dataset, Dataset.from_list(buf))
-            batches = allocate_batches(
-                ds_shard["length"][:], index_cfg.token_batch_size
-            )
+            batches = _make_batches(ds_shard["length"][:])
             kwargs["ds"] = ds_shard
             kwargs["batches"] = batches
             collect_gradients(**kwargs)

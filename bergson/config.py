@@ -154,6 +154,12 @@ class IndexConfig:
     """Whether to automatically determine the optimal token batch size.
     Experimental feature only enabled for `build`."""
 
+    attn_implementation: str | None = None
+    """Attention implementation to use (e.g. 'flash_attention_2', 'eager', 'sdpa').
+    'eager' is good for Pythia because SDPA produces different results for different
+    batch sizes in bf16, causing ~20% argmax disagreement between batched
+    and unbatched inference. Set to None to use the model's default."""
+
     processor_path: str = ""
     """Path to a precomputed processor."""
 
@@ -215,6 +221,17 @@ class IndexConfig:
     distributed: DistributedConfig = field(default_factory=DistributedConfig)
     """Configuration for multi-node distributed preconditioner computation."""
 
+    skip_batching: bool = False
+    """Process one example per batch instead of packing multiple examples.
+    Slower but produces more accurate per-example gradients, as bf16
+    matmuls give different results at different batch sizes."""
+
+    disable_half_reduction: bool = False
+    """Disable bf16 reduced precision reduction in CUDA matmuls.
+    Improves run-to-run cosine similarity by ~0.05 at a small speed cost."""
+
+    tf32: bool = False
+
     max_tokens: int | None = None
     """Max tokens to process. If None, all tokens processed. Dataset only.
     This experimental feature may be removed in the future."""
@@ -225,6 +242,10 @@ class IndexConfig:
 
     modules: list[str] = field(default_factory=list)
     """Modules to use for the query. If empty, all modules will be used."""
+
+    autocast: bool = False
+
+    deterministic: bool = False
 
     @property
     def partial_run_path(self) -> Path:
@@ -240,6 +261,19 @@ class IndexConfig:
 
         if isinstance(self.distributed, dict):
             self.distributed = DistributedConfig(**self.distributed)
+
+        if self.deterministic:
+            torch.use_deterministic_algorithms(True)
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
+
+        if self.disable_half_reduction:
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+
+        if self.tf32:
+            torch.backends.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
 
 @dataclass

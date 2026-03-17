@@ -57,6 +57,7 @@ def main():
             fsdp_config={
                 "fsdp_transformer_layer_cls_to_wrap": "Olmo2DecoderLayer",
                 "activation_checkpointing": True,
+                "fsdp_state_dict_type": "SHARDED_STATE_DICT",
             },
             gradient_checkpointing=False,
             gradient_accumulation_steps=8,

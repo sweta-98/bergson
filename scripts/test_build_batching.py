@@ -56,7 +56,30 @@ def print_cosine_stats(cosines, label):
         print(f"    idx={i} cosine={cosines[i]:.6f}")
 
 
-def collect_grads(model, data, batches, precision="bf16", projection_dim=16):
+def collect_logits(model, all_toks, batches, autocast_dtype=None):
+    """Collect per-example logits for the given batch structure.
+
+    Returns dict mapping example index -> logits tensor (seq_len, vocab).
+    """
+    from contextlib import nullcontext
+
+    from bergson.data import pad_and_tensor
+
+    device = next(model.parameters()).device
+    ctx = torch.autocast("cuda", dtype=autocast_dtype) if autocast_dtype else nullcontext()
+    result = {}
+    with torch.no_grad(), ctx:
+        for batch in batches:
+            toks_list = [all_toks[i] for i in batch]
+            x, _, _ = pad_and_tensor(toks_list, device=device)
+            logits = model(x).logits  # (B, S, V)
+            for j, idx in enumerate(batch):
+                seq_len = len(all_toks[idx])
+                result[idx] = logits[j, :seq_len].float().cpu()
+    return result
+
+
+def collect_grads(model, data, batches, precision="bf16", projection_dim=16, autocast=False):
     """Collect per-example projected gradients via InMemoryCollector."""
     run_path = tempfile.mkdtemp()
     os.makedirs(run_path + ".part", exist_ok=True)
@@ -68,6 +91,7 @@ def collect_grads(model, data, batches, precision="bf16", projection_dim=16):
         skip_preconditioners=True,
         skip_index=True,
         overwrite=True,
+        autocast=autocast,
     )
     preprocess = PreprocessConfig(
         unit_normalize=True,
@@ -99,7 +123,7 @@ def collect_grads(model, data, batches, precision="bf16", projection_dim=16):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--precision", default="bf16", choices=["bf16", "fp32", "fp16"])
+    parser.add_argument("--precision", default="bf16", choices=["bf16", "fp32", "fp16", "autocast_bf16", "tf32"])
     parser.add_argument("--n", type=int, default=20)
     parser.add_argument("--projection_dim", type=int, default=16)
     parser.add_argument("--mode", default="batched_vs_unbatched",
@@ -111,10 +135,27 @@ def main():
     print(f"Model: {MODEL}")
     print(f"precision={args.precision}, N={n}, proj_dim={pdim}, mode={args.mode}")
 
+    if args.precision == "bf16":
+        model_dtype = torch.bfloat16
+    elif args.precision == "fp16":
+        model_dtype = torch.float16
+    elif args.precision == "tf32":
+        model_dtype = torch.float32
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    else:  # fp32 and autocast_bf16 both load in fp32
+        model_dtype = torch.float32
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL, dtype=torch.bfloat16 if args.precision == "bf16" else torch.float32,
-        device_map="cuda",
+        MODEL, dtype=model_dtype, device_map="cuda",
     )
+
+    # Map to bergson precision string
+    if args.precision == "autocast_bf16":
+        build_precision = "bf16"
+    elif args.precision == "tf32":
+        build_precision = "fp32"
+    else:
+        build_precision = args.precision
     tok = AutoTokenizer.from_pretrained(MODEL)
     ds = load_dataset("NeelNanda/pile-10k", split=f"train[:{n}]")
     all_toks = [tok(ds[i]["text"], truncation=True, max_length=1024)["input_ids"]
@@ -128,21 +169,53 @@ def main():
     print(f"Batched: {len(batched_batches)} batches, "
           f"sizes {min(len(b) for b in batched_batches)}-{max(len(b) for b in batched_batches)}")
 
+    autocast_dtype = torch.bfloat16 if args.precision == "autocast_bf16" else None
+    use_autocast = args.precision == "autocast_bf16"
+
     if args.mode == "batched_vs_unbatched":
         print("\nCollecting with batching...")
-        a = collect_grads(model, data, batched_batches, args.precision, pdim)
+        a = collect_grads(model, data, batched_batches, build_precision, pdim, autocast=use_autocast)
         print("Collecting without batching...")
-        b = collect_grads(model, data, unbatched_batches, args.precision, pdim)
+        b = collect_grads(model, data, unbatched_batches, build_precision, pdim, autocast=use_autocast)
         label = f"{args.precision} batched vs unbatched (N={n}, proj_dim={pdim})"
     else:
         print("\nCollecting with batching (run 1)...")
-        a = collect_grads(model, data, batched_batches, args.precision, pdim)
+        a = collect_grads(model, data, batched_batches, build_precision, pdim, autocast=use_autocast)
         print("Collecting with batching (run 2)...")
-        b = collect_grads(model, data, batched_batches, args.precision, pdim)
+        b = collect_grads(model, data, batched_batches, build_precision, pdim, autocast=use_autocast)
         label = f"{args.precision} batched run 1 vs run 2 (N={n}, proj_dim={pdim})"
 
     cosines = np.array([cosine(a[i], b[i]) for i in range(n)])
     print_cosine_stats(cosines, label)
+
+    # Logit comparison
+    if args.mode == "batched_vs_unbatched":
+        print("\nComparing logits (batched vs unbatched)...")
+        logits_batched = collect_logits(model, all_toks, batched_batches, autocast_dtype)
+        logits_unbatched = collect_logits(model, all_toks, unbatched_batches, autocast_dtype)
+
+        logit_cosines = []
+        logit_max_diffs = []
+        for i in range(n):
+            lb = logits_batched[i].numpy().flatten()
+            lu = logits_unbatched[i].numpy().flatten()
+            logit_cosines.append(cosine(lb, lu))
+            logit_max_diffs.append(np.abs(lb - lu).max())
+        logit_cosines = np.array(logit_cosines)
+        logit_max_diffs = np.array(logit_max_diffs)
+
+        print_cosine_stats(logit_cosines, "Logit cosine: batched vs unbatched")
+
+        print(f"\n  Logit max abs diff: min={logit_max_diffs.min():.6e} "
+              f"mean={logit_max_diffs.mean():.6e} max={logit_max_diffs.max():.6e}")
+
+        # Show correlation between gradient outliers and logit outliers
+        grad_worst = np.argsort(cosines)[:10]
+        print(f"\n  Gradient worst 10 vs their logit cosine:")
+        print(f"  {'idx':>5} {'grad_cos':>10} {'logit_cos':>10} {'logit_maxdiff':>14} {'len':>5}")
+        for i in grad_worst:
+            print(f"  {i:>5} {cosines[i]:>10.6f} {logit_cosines[i]:>10.6f} "
+                  f"{logit_max_diffs[i]:>14.6e} {lengths[i]:>5}")
 
 
 if __name__ == "__main__":

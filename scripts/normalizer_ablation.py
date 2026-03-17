@@ -65,6 +65,34 @@ MODEL_CONFIGS = {
             "opt_fp32_adam": "runs/olmo_retain_pile_sft/20260316_233724/checkpoint-932",
         },
     },
+    "lora_rp_fp32": {
+        "model": "runs/olmo_retain_pile_lora_fp32/20260317_004243/final_adapter",
+        "type": "lora",
+        "opt_ckpts": {
+            "opt_fp32_adam": "runs/olmo_retain_pile_lora_fp32/20260317_004243/checkpoint-932",
+        },
+    },
+    "lora_fp32": {
+        "model": "runs/olmo_wmdp_lora_fp32/20260316_235720/final_adapter",
+        "type": "lora",
+        "opt_ckpts": {
+            "opt_fp32_adam": "runs/olmo_wmdp_lora_fp32/20260316_235720/checkpoint-500",
+        },
+    },
+    "lora_fp": {
+        "model": "runs/olmo_forget_pile_lora/20260317_024032/final_adapter",
+        "type": "lora",
+        "opt_ckpts": {
+            "opt_fp32_adam": "runs/olmo_forget_pile_lora/20260317_024032/checkpoint-932",
+        },
+    },
+    "sft_fp": {
+        "model": "runs/olmo_forget_pile_sft/20260317_024028/final_model",
+        "type": "sft",
+        "opt_ckpts": {
+            "opt_fp32_adam": "runs/olmo_forget_pile_sft/20260317_024028/checkpoint-932",
+        },
+    },
 }
 
 DATASETS = {
@@ -90,6 +118,7 @@ def build_index(
     processor_path: str | None = None,
     normalizer: str = "none",
     stats_sample_size: int | None = None,
+    projection_dim: int = 32,
 ):
     """Build a gradient index with normalizer applied pre-projection."""
     if Path(run_path, "gradients.bin").exists():
@@ -115,7 +144,7 @@ def build_index(
         normalizer=normalizer,
         precision=precision,
         token_batch_size=1024,
-        projection_dim=32,
+        projection_dim=projection_dim,
         fsdp=False,
         overwrite=True,
         skip_preconditioners=True,
@@ -189,7 +218,7 @@ def get_normalizer_config(norm_name, model_key, model_path, prefix):
         raise ValueError(f"Unknown normalizer: {norm_name}")
 
 
-def build_for_normalizer(norm_name, model_key, model_path, precision, prefix):
+def build_for_normalizer(norm_name, model_key, model_path, precision, prefix, projection_dim=32):
     """Build query + all value indices for a single normalizer."""
     norm_arg, proc_path, stats_size = get_normalizer_config(
         norm_name, model_key, model_path, prefix,
@@ -201,7 +230,7 @@ def build_for_normalizer(norm_name, model_key, model_path, precision, prefix):
     build_index(
         query_path, model_path, QUERY_DATA, precision,
         processor_path=proc_path, normalizer=norm_arg,
-        stats_sample_size=stats_size,
+        stats_sample_size=stats_size, projection_dim=projection_dim,
     )
 
     # Value datasets
@@ -211,7 +240,7 @@ def build_for_normalizer(norm_name, model_key, model_path, precision, prefix):
         build_index(
             vp, model_path, ds_cfg, precision,
             processor_path=proc_path, normalizer=norm_arg,
-            stats_sample_size=stats_size,
+            stats_sample_size=stats_size, projection_dim=projection_dim,
         )
 
 
@@ -282,12 +311,16 @@ def main():
     parser.add_argument("--precision", default="bf16", choices=["bf16", "fp32"])
     parser.add_argument("--normalizer", type=str, default=None,
                         help="Build indices for this normalizer only")
+    parser.add_argument("--projection-dim", type=int, default=32,
+                        help="Projection dimension per module (default: 32)")
     parser.add_argument("--score-only", action="store_true",
                         help="Skip building, just score all completed indices")
     args = parser.parse_args()
 
     model_path = MODEL_CONFIGS[args.model]["model"]
-    prefix = Path(f"runs/ablation_{args.precision}_{args.model}")
+    proj_dim = args.projection_dim
+    suffix = f"_p{proj_dim}" if proj_dim != 32 else ""
+    prefix = Path(f"runs/ablation_{args.precision}_{args.model}{suffix}")
     prefix.mkdir(parents=True, exist_ok=True)
 
     if args.score_only:
@@ -298,7 +331,7 @@ def main():
         parser.error("--normalizer is required when not using --score-only")
 
     build_for_normalizer(
-        args.normalizer, args.model, model_path, args.precision, prefix,
+        args.normalizer, args.model, model_path, args.precision, prefix, proj_dim,
     )
 
     # After building, score everything that's available

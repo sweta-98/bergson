@@ -2,7 +2,7 @@
 """Full SFT of OLMo-2-7B-Instruct on retain+pile in FP32 with FSDP.
 
 Usage::
-    torchrun --nproc_per_node=4 scripts/train_olmo_retain_pile_sft_fp32_fsdp.py
+    torchrun --nproc_per_node=4 scripts/train_olmo_forget_pile_sft_fp32_fsdp.py
 """
 
 import os
@@ -17,9 +17,9 @@ from trl import SFTConfig, SFTTrainer
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-OUTPUT_DIR = f"runs/olmo_retain_pile_sft_fp32/{timestamp}"
+OUTPUT_DIR = f"runs/olmo_forget_pile_sft_fp32/{timestamp}"
 MODEL_NAME = "allenai/OLMo-2-1124-7B-Instruct"
-DATASET_DIR = "data/wmdp_retain_pile"
+DATASET_DIR = "data/wmdp_forget_pile"
 
 
 class NoShuffleSFTTrainer(SFTTrainer):
@@ -67,7 +67,7 @@ def main():
             output_dir=OUTPUT_DIR,
             per_device_train_batch_size=2,
             report_to="wandb",
-            run_name=f"olmo_retain_pile_sft_fp32_{timestamp}",
+            run_name=f"olmo_forget_pile_sft_fp32_{timestamp}",
             save_steps=500,
             warmup_steps=50,
             weight_decay=0.01,

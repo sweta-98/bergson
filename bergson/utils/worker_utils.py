@@ -162,14 +162,19 @@ def setup_model_and_peft(
     except ValueError:
         peft_config = None
 
+    attn_kwargs = {}
+    if cfg.attn_implementation is not None:
+        attn_kwargs["attn_implementation"] = cfg.attn_implementation
+
     if peft_config is None:
         # Load regular model
         model = AutoModelForCausalLM.from_pretrained(
             cfg.model,
             device_map=device_map,
             quantization_config=quantization_config,
-            torch_dtype=dtype,
+            torch_dtype=torch.float32 if cfg.autocast else dtype,
             revision=cfg.revision,
+            **attn_kwargs,
         )
         target_modules = None
 
@@ -179,8 +184,9 @@ def setup_model_and_peft(
             peft_config.base_model_name_or_path,  # type: ignore
             device_map=device_map,
             quantization_config=quantization_config,
-            torch_dtype=dtype,
+            torch_dtype=torch.float32 if cfg.autocast else dtype,
             revision=cfg.revision,
+            **attn_kwargs,
         )
 
         model = PeftModel.from_pretrained(

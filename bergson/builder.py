@@ -75,7 +75,7 @@ class Builder:
         self.preprocess_cfg = preprocess_cfg
         total_grad_dim = sum(grad_sizes.values())
 
-        # ── Device & precomputed preconditioner ──────────────────────────────────────
+        # Device & precomputed preconditioner
         device = torch.device("cuda", torch.cuda.current_device())
         self.h_inv = get_trackstar_preconditioner(
             preprocess_cfg.preconditioner_path,
@@ -83,7 +83,7 @@ class Builder:
             device=device,
         )
 
-        # ── Aggregation buffer (sequence-level only) ─────────────────────
+        # Aggregation buffer (sequence-level only)
         if preprocess_cfg.aggregation != "none":
             np_dtype = np.float32
             num_grads = 1

@@ -752,38 +752,47 @@ def fwd_bwd_factory(cfg: IndexConfig) -> Callable:
             batch: Original batch dict, used only for "advantage" if present.
         Returns a tensor of shape [batch_size] with one loss value per sample.
     """
+    _AUTOCAST_DTYPES = {"bf16": torch.bfloat16, "fp16": torch.float16}
+    autocast_dtype = _AUTOCAST_DTYPES.get(cfg.precision)
 
     def fwd_bwd(model, x: Tensor, y: Tensor, batch: dict):
-        logits = model(x).logits[:, :-1]
-        masks = y[:, 1:] != -100
-        denoms = (
-            masks.sum(dim=1, dtype=model.dtype) if cfg.loss_reduction == "mean" else 1.0
+        device_type = "cuda" if x.is_cuda else "cpu"
+        amp = (
+            torch.autocast(device_type, dtype=autocast_dtype)
+            if autocast_dtype and cfg.autocast
+            else nullcontext()
         )
+        with amp:
+            logits = model(x).logits[:, :-1]
+            masks = y[:, 1:] != -100
+            denoms = (
+                masks.sum(dim=1, dtype=model.dtype) if cfg.loss_reduction == "mean" else 1.0
+            )
 
-        if cfg.loss_fn == "kl":
-            with torch.inference_mode():
-                set_peft_enabled(model, False)
-                ref_lps = torch.log_softmax(model(x).logits[:, :-1], dim=-1)
-                set_peft_enabled(model, True)
+            if cfg.loss_fn == "kl":
+                with torch.inference_mode():
+                    set_peft_enabled(model, False)
+                    ref_lps = torch.log_softmax(model(x).logits[:, :-1], dim=-1)
+                    set_peft_enabled(model, True)
 
-            ft_lps = torch.log_softmax(logits, dim=-1)
+                ft_lps = torch.log_softmax(logits, dim=-1)
 
-            # Compute average KL across all unmasked tokens
-            kls = torch.sum(ft_lps.exp() * (ft_lps - ref_lps), dim=-1)
-            losses = torch.sum(kls * masks, dim=-1) / denoms
-            if "advantage" in batch:
-                losses *= torch.tensor(batch["advantage"], device=losses.device)
+                # Compute average KL across all unmasked tokens
+                kls = torch.sum(ft_lps.exp() * (ft_lps - ref_lps), dim=-1)
+                losses = torch.sum(kls * masks, dim=-1) / denoms
+                if "advantage" in batch:
+                    losses *= torch.tensor(batch["advantage"], device=losses.device)
 
-        else:
-            losses = F.cross_entropy(
-                logits.reshape(-1, logits.size(-1)),
-                y[:, 1:].flatten(),
-                reduction="none",
-                label_smoothing=cfg.label_smoothing,
-            ).reshape_as(y[:, 1:])
-            losses = losses.sum(1) / denoms
-            if "advantage" in batch:
-                losses *= torch.tensor(batch["advantage"], device=losses.device)
+            else:
+                losses = F.cross_entropy(
+                    logits.reshape(-1, logits.size(-1)),
+                    y[:, 1:].flatten(),
+                    reduction="none",
+                    label_smoothing=cfg.label_smoothing,
+                ).reshape_as(y[:, 1:])
+                losses = losses.sum(1) / denoms
+                if "advantage" in batch:
+                    losses *= torch.tensor(batch["advantage"], device=losses.device)
 
         losses.sum().backward()
         model.zero_grad()

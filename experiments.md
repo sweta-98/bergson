@@ -99,15 +99,94 @@ Each cell = AUROC. Only showing comparisons matching training data:
 
 ## bf16 Batching Nondeterminism
 
-SDPA attention produces different logits for different batch sizes (~20% argmax
-disagreement). Fixed by defaulting to `attn_implementation="eager"`.
+Script: `scripts/test_batching_cosine.py`
+
+SDPA attention produces different logits for different batch sizes.
+On pythia-160m, ~20% argmax disagreement between batch_size=1 and batch_size=2.
+Fixed by defaulting to `attn_implementation="eager"`.
 
 With eager attention, bf16 backward pass still produces batch-size-dependent
-per-example gradients due to CUDA matmul precision (sum(sep) vs batched cos=0.997
-for OLMo-7B). FP32 is perfectly deterministic. FP32+TF32 gives cos=0.9998.
+per-example parameter gradients due to CUDA matmul precision. This is a
+PyTorch/CUDA issue, not bergson — tested without any bergson hooks.
 
-| Precision | OLMo-7B sum(sep) vs batched |
-|-----------|---------------------------|
-| bf16 eager | 0.997 |
-| fp32+tf32 eager | 0.9998 |
-| fp32 eager | 1.000 |
+This is not a padding issue, because it occurs even when all sequences are 
+length-matched such that there is no padding. It is not a multi-GPU issue,
+as it occurs on a single device. 
+
+### Pythia-160m (eager attention, 2x 1024-token sequences, no bergson hooks)
+
+Cosine similarity of sum(separate per-example grads) vs batched grad:
+
+| Precision | sep vs sep | sum(sep) vs batched |
+|-----------|-----------|---------------------|
+| bf16 | 1.000 | 0.484 |
+| fp32+tf32 | 1.000 | 0.967 |
+| fp32 | 1.000 | 1.000 |
+| autocast bf16 | 1.000 | 0.498 |
+
+### OLMo-2-7B-Instruct (eager attention, 2x ~1024-token sequences, no bergson hooks)
+
+| Precision | sep vs sep | sum(sep) vs batched |
+|-----------|-----------|---------------------|
+| bf16 | 1.000 | 0.997 |
+| fp32+tf32 | 1.000 | 0.9998 |
+| fp32 | 1.000 | 1.000 |
+
+The effect is much smaller on OLMo-7B than pythia-160m, likely an issue with Pythia
+being trained in FP16 or using a less stable architecture.
+
+However, test_padding_ratio.py uses OLMo on index builds and finds that while the mean
+similarity is high, the minimum similarity is very low - 0.086.
+
+## Filtered Fine-tuning Experiment
+
+Tests whether attribution scores can identify high/low-influence training examples.
+For each scoring method, selects top 10% and bottom 10% of examples from `data/wmdp_mixed`
+(978 examples each), then fine-tunes LoRA adapters on each subset. Evaluates on WMDP Bio.
+
+Training config matches original: LoRA r=128, alpha=256, targets=[q,k,v,o,gate_proj],
+lr=1e-4, cosine schedule, 4 epochs, adamw_torch, bf16.
+
+### Score distributions
+
+| Scoring method | Top 10% forget% | Bottom 10% forget% |
+|----------------|-----------------|-------------------|
+| TrackStar nonorm | 49.2% | 50.7% |
+| TrackStar adafactor | 47.1% | 49.9% |
+| Raw cosine none | 49.5% | 51.0% |
+| TrackStar opt_fp32 adam | 49.3% | 50.7% |
+| Raw cosine opt_fp32 adam | 51.1% | 47.8% |
+
+Note: all ~50% forget — scores don't separate forget from retain (consistent with AUROC ~0.50).
+
+### Training runs (RUNNING)
+
+| Scoring | Subset | Dataset |
+|---------|--------|---------|
+| TrackStar nonorm | top 10% | data/filtered_trackstar_nonorm_top |
+| TrackStar nonorm | bottom 10% | data/filtered_trackstar_nonorm_bottom |
+| TrackStar adafactor | top 10% | data/filtered_trackstar_adafactor_top |
+| TrackStar adafactor | bottom 10% | data/filtered_trackstar_adafactor_bottom |
+| Raw cosine none | top 10% | data/filtered_raw_cosine_none_top |
+| Raw cosine none | bottom 10% | data/filtered_raw_cosine_none_bottom |
+| TrackStar opt_fp32 adam | top 10% | data/filtered_trackstar_opt_fp32_top |
+| TrackStar opt_fp32 adam | bottom 10% | data/filtered_trackstar_opt_fp32_bottom |
+| Raw cosine opt_fp32 adam | top 10% | data/filtered_raw_cosine_opt_fp32_top |
+| Raw cosine opt_fp32 adam | bottom 10% | data/filtered_raw_cosine_opt_fp32_bottom |
+
+### WMDP Bio Accuracy (pending evaluation)
+
+| Model | WMDP Bio Acc |
+|-------|-------------|
+| Base (no adapter) | pending |
+| Original adapter (full mixed) | pending |
+| TrackStar nonorm top 10% | pending |
+| TrackStar nonorm bottom 10% | pending |
+| TrackStar adafactor top 10% | pending |
+| TrackStar adafactor bottom 10% | pending |
+| Raw cosine none top 10% | pending |
+| Raw cosine none bottom 10% | pending |
+| TrackStar opt_fp32 top 10% | pending |
+| TrackStar opt_fp32 bottom 10% | pending |
+| Raw cosine opt_fp32 top 10% | pending |
+| Raw cosine opt_fp32 bottom 10% | pending |

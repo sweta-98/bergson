@@ -137,6 +137,12 @@ class RunConfig:
     skip_build: bool = False
     """Skip the disk-based build phase."""
 
+    precision: str = "bf16"
+    """Model precision (bf16, fp32)."""
+
+    tf32: bool = False
+    """Enable TF32 for matmul and cuDNN (only affects fp32)."""
+
     notes: str | None = None
     """Optional notes for the run."""
 
@@ -184,7 +190,11 @@ class Run:
 
     def execute(self) -> None:
         """Run the benchmark."""
-        precision = "bf16"
+        precision = self.run_cfg.precision
+
+        if self.run_cfg.tf32:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
 
         if not self.run_cfg.dataset:
             self.run_cfg.dataset = str(prepare_benchmark_ds_path())

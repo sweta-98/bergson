@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Full SFT of OLMo-2-7B-Instruct on retain+pile in FP32 with FSDP.
+"""Full SFT of OLMo-2-7B-Instruct on retain + pile (no forget data).
 
 Usage::
-    torchrun --nproc_per_node=4 scripts/train_olmo_retain_pile_sft_fp32_fsdp.py
+    torchrun --nproc_per_node=4 scripts/train_olmo_forget_pile_sft.py
 """
 
 import os
@@ -17,9 +17,9 @@ from trl import SFTConfig, SFTTrainer
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-OUTPUT_DIR = f"runs/olmo_retain_pile_sft_fp32/{timestamp}"
+OUTPUT_DIR = f"runs/olmo_forget_pile_sft/{timestamp}"
 MODEL_NAME = "allenai/OLMo-2-1124-7B-Instruct"
-DATASET_DIR = "data/wmdp_retain_pile"
+DATASET_DIR = "data/wmdp_forget_pile"
 
 
 class NoShuffleSFTTrainer(SFTTrainer):
@@ -39,7 +39,8 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.float32,
+        device_map={"": f"cuda:{rank}"},
+        torch_dtype=torch.bfloat16,
     )
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -47,16 +48,10 @@ def main():
         model=model,
         train_dataset=ds,
         args=SFTConfig(
-            bf16=False,
-            fp16=False,
-            fsdp="full_shard auto_wrap",
-            fsdp_config={
-                "fsdp_transformer_layer_cls_to_wrap": "Olmo2DecoderLayer",
-                "activation_checkpointing": True,
-                "fsdp_state_dict_type": "SHARDED_STATE_DICT",
-            },
-            gradient_checkpointing=False,
-            gradient_accumulation_steps=8,
+            ddp_find_unused_parameters=False,
+            bf16=True,
+            gradient_checkpointing=True,
+            gradient_accumulation_steps=4,
             learning_rate=2e-5,
             logging_steps=1,
             lr_scheduler_type="cosine",
@@ -65,9 +60,9 @@ def main():
             num_train_epochs=4,
             optim="adamw_torch",
             output_dir=OUTPUT_DIR,
-            per_device_train_batch_size=2,
+            per_device_train_batch_size=4,
             report_to="wandb",
-            run_name=f"olmo_retain_pile_sft_fp32_{timestamp}",
+            run_name=f"olmo_forget_pile_sft_{timestamp}",
             save_steps=500,
             warmup_steps=50,
             weight_decay=0.01,
