@@ -588,6 +588,7 @@ def tokenize(
         return_attention_mask=False,
         return_length=True,
         truncation=args.truncation,
+        add_special_tokens=False,
     )
     if args.truncation and max_length is not None:
         kwargs["max_length"] = max_length
@@ -624,7 +625,7 @@ def tokenize(
                 continue
 
             ans = msg["content"]
-            start = strings[i].rfind(ans, pos)
+            start = strings[i].rfind(ans[:10], pos)
             if start < 0:
                 raise RuntimeError(
                     "Failed to find completion in the chat-formatted conversation. "

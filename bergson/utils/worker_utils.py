@@ -405,4 +405,20 @@ def setup_data_pipeline(cfg: IndexConfig) -> Dataset | IterableDataset:
         if columns_to_remove:
             ds = ds.remove_columns(columns_to_remove)
 
+    if cfg.loss_fn == "vector_projection":
+        if not isinstance(ds, Dataset):
+            raise ValueError("vector_projection requires a non-streaming dataset")
+        if not cfg.vector_path:
+            raise ValueError("vector_path must be set for vector_projection loss")
+
+        from safetensors.torch import load_file
+
+        tensors = load_file(cfg.vector_path)
+     
+
+        vector = tensors[cfg.vector_key][cfg.vector_layer]
+
+        vector_list = [vector.cpu().tolist()] * len(ds)
+        ds = ds.add_column("vector", vector_list, new_fingerprint="vector")
+
     return ds

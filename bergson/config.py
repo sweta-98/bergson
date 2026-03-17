@@ -173,8 +173,14 @@ class IndexConfig:
     """Only save the new dataset columns. If false, the original dataset
     columns will be saved as well."""
 
-    loss_fn: Literal["ce", "kl"] = "ce"
+    loss_fn: Literal["ce", "kl", "vector_projection"] = "ce"
     """Loss function to use."""
+
+    vector_path: str = ""
+    """Path to a safetensors file containing a vector for vector_projection loss."""
+    
+    vector_layer: int = -1
+    """Layer index whose hidden states are used for vector_projection loss."""
 
     loss_reduction: Literal["mean", "sum"] = "mean"
     """Reduction method for the loss function."""

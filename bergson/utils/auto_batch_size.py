@@ -180,8 +180,13 @@ def _try_validate(
             dtype=torch.long,
         )
 
+        use_hidden_states = False
+        cfg = getattr(collector, "cfg", None)
+        if cfg is not None and getattr(cfg, "loss_fn", None) == "vector_projection":
+            use_hidden_states = True
+
         with collector:
-            logits = model(input_ids).logits
+            logits = model(input_ids, output_hidden_states=use_hidden_states).logits
             shift_logits = logits[:, :-1].contiguous()
             shift_labels = labels[:, 1:].contiguous()
             loss = torch.nn.functional.cross_entropy(
