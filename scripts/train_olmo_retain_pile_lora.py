@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""LoRA finetune OLMo-2-7B-Instruct on pile + WMDP bio (forget + retain) in FP32.
+"""LoRA finetune OLMo-2-7B-Instruct on retain + pile (no forget data).
 
 Usage::
-
-    # Single GPU
-    python scripts/train_olmo_wmdp_fp32.py
-
-    # Multi-GPU via torchrun
-    torchrun --nproc_per_node=4 scripts/train_olmo_wmdp_fp32.py
+    torchrun --nproc_per_node=4 scripts/train_olmo_retain_pile_lora.py
 """
 
 import os
@@ -15,7 +10,7 @@ from datetime import datetime
 
 import torch
 import torch.distributed as dist
-from datasets import Dataset, concatenate_datasets, load_dataset, load_from_disk
+from datasets import Dataset, load_from_disk
 from peft import LoraConfig
 from torch.utils.data import SequentialSampler
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -23,8 +18,9 @@ from trl import SFTConfig, SFTTrainer
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-OUTPUT_DIR = f"runs/olmo_wmdp_lora_fp32/{timestamp}"
+OUTPUT_DIR = f"runs/olmo_retain_pile_lora/{timestamp}"
 MODEL_NAME = "allenai/OLMo-2-1124-7B-Instruct"
+DATASET_DIR = "data/wmdp_retain_pile"
 
 
 class NoShuffleSFTTrainer(SFTTrainer):
@@ -32,41 +28,19 @@ class NoShuffleSFTTrainer(SFTTrainer):
         return SequentialSampler(train_dataset)
 
 
-def prepare_dataset() -> Dataset:
-    """Combine pile-10k + WMDP bio forget + WMDP bio retain."""
-    # Load the existing mixed dataset (forget + retain)
-    wmdp_mixed = load_from_disk("data/wmdp_mixed")
-    if not isinstance(wmdp_mixed, Dataset):
-        raise TypeError(f"Expected Dataset, got {type(wmdp_mixed)}")
-
-    # Load pile-10k
-    pile = load_dataset("NeelNanda/pile-10k", split="train")
-
-    # Add source column to pile
-    pile = pile.add_column("source", ["pile"] * len(pile))
-
-    # Keep only the 'text' and 'source' columns in both
-    wmdp_mixed = wmdp_mixed.select_columns(["text", "source"])
-    pile = pile.select_columns(["text", "source"])
-
-    combined = concatenate_datasets([wmdp_mixed, pile])
-    print(f"Combined dataset: {len(combined)} examples")
-    print(f"  WMDP mixed: {len(wmdp_mixed)} (forget + retain)")
-    print(f"  Pile-10k: {len(pile)}")
-    return combined
-
-
 def main():
     rank = int(os.environ.get("LOCAL_RANK", 0))
     if "LOCAL_RANK" in os.environ:
         dist.init_process_group("nccl", device_id=torch.device(f"cuda:{rank}"))
 
-    ds = prepare_dataset()
+    ds = load_from_disk(DATASET_DIR)
+    if not isinstance(ds, Dataset):
+        raise TypeError(f"Expected Dataset, got {type(ds)}")
+    print(f"Loaded {len(ds)} examples from {DATASET_DIR}")
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         device_map={"": f"cuda:{rank}"},
-        torch_dtype=torch.float32,
     )
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -88,8 +62,7 @@ def main():
         train_dataset=ds,
         args=SFTConfig(
             ddp_find_unused_parameters=False,
-            bf16=False,
-            fp16=False,
+            bf16=True,
             gradient_accumulation_steps=1,
             learning_rate=1e-4,
             logging_steps=1,
@@ -101,7 +74,7 @@ def main():
             output_dir=OUTPUT_DIR,
             per_device_train_batch_size=16,
             report_to="wandb",
-            run_name=f"olmo_wmdp_lora_fp32_{timestamp}",
+            run_name=f"olmo_retain_pile_lora_{timestamp}",
             save_steps=500,
             warmup_steps=50,
             weight_decay=0.01,

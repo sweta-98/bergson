@@ -285,8 +285,94 @@ def _parse_cli_patch(
     return patch_dict
 
 
+def _extract_dotted_overrides(
+    cli_args: list[str], command: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Extract ``--section.key value`` overrides from CLI args.
+
+    Translates dotted args like ``--index.run_path X`` into a nested dict
+    using the command's section aliases, and returns the remaining CLI args
+    that were not consumed.
+
+    For example, with command ``trackstar``::
+
+        --index.run_path runs/foo --index.normalizer none --query.dataset X
+
+    becomes::
+
+        {"index_cfg": {"run_path": "runs/foo", "normalizer": "none"},
+         "trackstar_cfg": {"query": {"dataset": "X"}}}
+    """
+    spec = _COMMAND_SPECS[command]
+    # Only handle YAML-style aliases (e.g. --index.foo) that simple_parsing
+    # doesn't understand. Field-name-style args (--index_cfg.foo) already
+    # work via _parse_cli_patch and may need special handling for list args,
+    # so we leave those alone.
+    section_map: dict[str, str] = dict(spec.section_aliases)
+    # Exclude field names that simple_parsing already handles
+    for field_name in spec.section_aliases.values():
+        section_map.pop(field_name, None)
+
+    overrides: dict[str, Any] = {}
+    passthrough: list[str] = []
+    i = 0
+    while i < len(cli_args):
+        arg = cli_args[i]
+        if arg.startswith("--") and "." in arg:
+            key = arg[2:]  # strip --
+            section = key.split(".")[0]
+
+            if section not in section_map:
+                # Not a known section — pass through entirely
+                passthrough.append(arg)
+                i += 1
+                continue
+
+            # Handle --key=value and --key value forms
+            if "=" in key:
+                key, value_str = key.split("=", 1)
+            elif i + 1 < len(cli_args) and not cli_args[i + 1].startswith("--"):
+                value_str = cli_args[i + 1]
+                i += 1
+            else:
+                # Boolean flag like --index_cfg.overwrite
+                value_str = None
+
+            parts = key.split(".")
+            field_name = section_map[section]
+            rest = parts[1:]
+
+            # Parse the value
+            if value_str is None:
+                value: Any = True
+            elif value_str.lower() in ("true", "false"):
+                value = value_str.lower() == "true"
+            else:
+                # Try int, then float, then string
+                try:
+                    value = int(value_str)
+                except ValueError:
+                    try:
+                        value = float(value_str)
+                    except ValueError:
+                        value = value_str
+
+            # Build nested dict
+            path = (field_name, *rest)
+            _set_nested(overrides, path, value)
+        else:
+            passthrough.append(arg)
+        i += 1
+
+    return overrides, passthrough
+
+
 def load_main_from_yaml(args: list[str]) -> Main | None:
-    """Load and merge a structured YAML config if ``--config`` is present."""
+    """Load and merge a structured YAML config if ``--config`` is present.
+
+    Supports dotted CLI overrides like ``--index.run_path X`` which are
+    translated using the command's section aliases before merging.
+    """
     config_path, remaining_args = _split_config_arg(list(args))
     if config_path is None:
         return None
@@ -317,10 +403,17 @@ def load_main_from_yaml(args: list[str]) -> Main | None:
     if any(arg in _HELP_FLAGS for arg in remaining_args):
         _show_help(resolved_command)
 
+    # Extract dotted overrides (--index.foo, --score.bar, etc.) before
+    # passing remaining args to the simple_parsing-based CLI patch.
+    dotted_overrides, cli_args = _extract_dotted_overrides(
+        cli_args, resolved_command
+    )
+
     yaml_payload = _normalize_yaml_sections(doc, resolved_command)
     cli_patch = _parse_cli_patch(resolved_command, cli_args, yaml_payload)
 
     merged_payload = _deep_merge(_command_skeleton(resolved_command), yaml_payload)
+    merged_payload = _deep_merge(merged_payload, dotted_overrides)
     merged_payload = _deep_merge(merged_payload, cli_patch)
 
     command_cfg = from_dict(

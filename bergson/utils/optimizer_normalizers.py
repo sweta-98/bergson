@@ -96,13 +96,17 @@ def load_from_optimizer(
     optimizer_state = torch.load(state_path, map_location="cpu", weights_only=True)
 
     # The optimizer state is keyed by position in the trainable parameter list.
-    # For LoRA checkpoints, only include LoRA params.
-    # Otherwise include all params.
+    # For LoRA checkpoints, only LoRA params are optimized.
+    # For full SFT with HF Trainer, params are ordered as:
+    #   [2D+ params with weight_decay, then 1D params without weight_decay]
     lora_params = [(n, p) for n, p in model.named_parameters() if "lora" in n]
     if lora_params:
         params_for_index = lora_params
     else:
-        params_for_index = list(model.named_parameters())
+        all_params = list(model.named_parameters())
+        decay_params = [(n, p) for n, p in all_params if p.dim() >= 2]
+        no_decay_params = [(n, p) for n, p in all_params if p.dim() < 2]
+        params_for_index = decay_params + no_decay_params
 
     target_param_index_to_name: dict[int, str] = {}
     param_shapes: dict[int, torch.Size] = {}
