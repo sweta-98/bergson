@@ -299,33 +299,33 @@ class GradientCollectorCallback(TrainerCallback):
                 elif (eas := p_state.get("exp_avg_sq")) is not None:
                     layer_second_moments[layer_name][param_type] = eas
 
-        # Build normalizers from collected second moments
-        for layer_name, moments in layer_second_moments.items():
-            lr = moments["lr"]
+                # Build normalizers from collected second moments
+                for layer_name, moments in layer_second_moments.items():
+                    lr = moments["lr"]
 
-            lr_sq = lr**2
+                    lr_sq = lr**2
 
-            # Adam-like: has weight exp_avg_sq
-            if "weight" in moments:
-                weight_eas = moments["weight"] / lr_sq
-                bias_eas = moments.get("bias")
-                bias_eas = bias_eas / lr_sq if bias_eas is not None else None
+                    # Adam-like: has weight exp_avg_sq
+                    if "weight" in moments:
+                        weight_eas = moments["weight"] / lr_sq
+                        bias_eas = moments.get("bias")
+                        bias_eas = bias_eas / lr_sq if bias_eas is not None else None
 
-                norm = AdamNormalizer(weight_eas, bias_eas)
+                        norm = AdamNormalizer(weight_eas, bias_eas)
 
-            # Adafactor-like: has row/col factorization
-            elif "row" in moments and "col" in moments:
-                row = moments["row"] / lr_sq
-                col = moments["col"] / lr_sq
-                bias_eas = moments.get("bias")
-                bias_eas = bias_eas / lr_sq if bias_eas is not None else None
+                    # Adafactor-like: has row/col factorization
+                    elif "row" in moments and "col" in moments:
+                        row = moments["row"] / lr_sq
+                        col = moments["col"] / lr_sq
+                        bias_eas = moments.get("bias")
+                        bias_eas = bias_eas / lr_sq if bias_eas is not None else None
 
-                norm = AdafactorNormalizer(row, col, bias_eas)
-            else:
-                # No weight moments found - skip this layer
-                continue
+                        norm = AdafactorNormalizer(row, col, bias_eas)
+                    else:
+                        # No weight moments found - skip this layer
+                        continue
 
-            normalizers[layer_name] = norm
+                    normalizers[layer_name] = norm
 
         proc.normalizers = normalizers
 
