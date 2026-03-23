@@ -752,6 +752,10 @@ def fwd_bwd_factory(cfg: IndexConfig) -> Callable:
             batch: Original batch dict, used only for "advantage" if present.
         Returns a tensor of shape [batch_size] with one loss value per sample.
     """
+    vector_base = None
+    if cfg.loss_fn == "vector_projection":
+        vector_base = torch.load(cfg.vector_path, weights_only=False) 
+        vector_base = vector_base[cfg.vector_layer]
 
     def fwd_bwd(model, x: Tensor, y: Tensor, batch: dict):
         if cfg.loss_fn == "vector_projection":
@@ -765,12 +769,9 @@ def fwd_bwd_factory(cfg: IndexConfig) -> Callable:
             masked_h = layer_h * masks.unsqueeze(-1)
             denom = masks.sum(dim=1, dtype=layer_h.dtype).clamp_min(1)
             response_avg = masked_h.sum(dim=1) / denom.unsqueeze(-1)
-            vector = torch.as_tensor(
-                batch["vector"],
-                device=response_avg.device,
-                dtype=response_avg.dtype,
-            )
-    
+            vector = vector_base.to(response_avg.device).to(response_avg.dtype)
+            vector = vector.unsqueeze(0).expand_as(response_avg)
+
             # projection length of response_avg onto vector
             proj = (response_avg * vector).sum(dim=-1)
             denom = vector.norm(dim=-1).clamp_min(1e-12)
