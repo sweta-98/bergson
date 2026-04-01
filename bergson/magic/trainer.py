@@ -493,6 +493,10 @@ class Trainer:
             # (loaded tensors may retain requires_grad from the previous traced step)
             fwd_state.detach_()
 
+            # Detach after loading so that replay steps can use in-place ops
+            # (loaded tensors may retain requires_grad from the previous traced step)
+            fwd_state.detach_()
+
             # Only delete this checkpoint if it's the one we expected to load. If it's
             # not, we need to keep it around, and step forward through training
             if idx == expected_idx:

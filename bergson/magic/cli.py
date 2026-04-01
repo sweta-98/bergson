@@ -17,11 +17,14 @@ from torch.distributed.nn.functional import all_reduce as differentiable_all_red
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from ..config import AttributionConfig, DataConfig, TrainingConfig
 from ..distributed import grad_tree, launch_distributed_run, simple_fsdp
 from ..utils.logging import wandb_log_fn
 from ..utils.worker_utils import (
+    BIG_NUM,
+    max_tokens_for_model,
     setup_data_pipeline,
     setup_model_and_peft,
 )
@@ -61,6 +64,9 @@ class MagicConfig(AttributionConfig, TrainingConfig):
 
     backward_save_every: int = 0
     """How often (in steps) to save backward state for resume."""
+
+    per_token: bool = False
+    """Whether to compute attribution scores per token (instead of per sequence)."""
 
     def __post_init__(self):
         assert not self.fsdp, "PyTorch FSDP is not currently supported for MAGIC."
@@ -279,6 +285,8 @@ def pad_dataset_to_batch_size(
     total = len(dataset)
     pad_indices = list(range(total)) + [total - 1] * pad_count
     dataset = dataset.select(pad_indices)
+
+    # Update the number of documents to include the padded examples
     if "doc_ids" not in dataset.column_names:
         num_docs = len(dataset)
     if global_rank == 0:
@@ -324,12 +332,26 @@ def worker(
         train_dataset, run_cfg.batch_size, num_train_docs, "Train", global_rank
     )
 
+    if run_cfg.per_token:
+        seq_len = run_cfg.data.chunk_length
+        if seq_len <= 0:
+            tokenizer = AutoTokenizer.from_pretrained(run_cfg.model)
+            seq_len = max_tokens_for_model(tokenizer, run_cfg.model, run_cfg.revision)
+            if seq_len >= BIG_NUM:
+                raise ValueError(
+                    "Model has no maximum context length; specify chunk_length > 0"
+                )
+
+        w_shape = (len(train_dataset), seq_len)
+    else:
+        w_shape = (num_train_docs,)
+
     stream = DataStream(
         train_dataset,
         run_cfg.batch_size,
         device=f"cuda:{rank}",
         input_key=run_cfg.data.prompt_column,
-        num_docs=num_train_docs,
+        weight_shape=w_shape,
     )
     if pad_count:
         stream.weights.data[-pad_count:] = 0.0
@@ -386,7 +408,7 @@ def worker(
         run_cfg.batch_size,
         device=f"cuda:{rank}",
         input_key=run_cfg.query.prompt_column,
-        num_docs=num_query_docs,
+        weight_shape=(num_query_docs,),
     )
     if query_pad_count:
         query_stream.weights.data[-query_pad_count:] = 0.0
@@ -423,7 +445,7 @@ def worker(
     if global_rank == 0:
         print(f"Baseline loss: {baseline}")
 
-        summ = describe(scores)
+        summ = describe(scores.flatten())
         print(f"Score summary: {summ}")
 
         score_path = os.path.join(run_cfg.run_path, "scores.pt")

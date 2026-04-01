@@ -13,7 +13,7 @@ class DataStream:
         *,
         device: torch.device | str = "cpu",
         input_key: str = "text",
-        num_docs: int | None = None,
+        weight_shape: tuple[int, ...] | None = None,
     ):
         self.batch_size = batch_size
         self.dataset = dataset
@@ -22,12 +22,13 @@ class DataStream:
         self.n = len(dataset)
         self.num_batches = self.n // batch_size
 
+        # If a shape isn't provided, assume that each sequence contains one document
+        if weight_shape is None:
+            weight_shape = (self.n,)
+
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
-
-        # If num_docs isn't provided, assume that each sequence contains one document
-        num_docs = num_docs or self.n
-        self.weights = torch.nn.Parameter(torch.ones(num_docs, device=self.device))
+        self.weights = torch.nn.Parameter(torch.ones(*weight_shape, device=device))
 
     @property
     def requires_grad(self) -> bool:
@@ -53,7 +54,9 @@ class DataStream:
             labels=batch.get("labels"),
             device=self.device,
         )
-        if "doc_ids" in batch:
+        # If the weights are 1D, we assume they correspond to documents and look for
+        # "doc_ids" in the batch to index them. If they're 2D, they correspond to tokens
+        if self.weights.ndim == 1 and "doc_ids" in batch:
             indices = torch.tensor(batch["doc_ids"], device=self.device)
 
         return {
