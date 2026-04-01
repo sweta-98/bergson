@@ -1,6 +1,7 @@
 run_path: runs/gpt2_wikitext
 model: gpt2
 overwrite: true
+fsdp: true
 
 data:
   dataset: Salesforce/wikitext
@@ -16,7 +17,7 @@ query:
 
 distributed:
   nproc_per_node: 4
-  num_nodes: 4
+  nnode: 4
 
 batch_size: 256
 num_epochs: 4
