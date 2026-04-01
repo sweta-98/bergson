@@ -1,7 +1,6 @@
 import shutil
 import warnings
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -22,14 +21,12 @@ from transformers import (
 
 from bergson.config import AttributionConfig, DataConfig, IndexConfig, ModelConfig
 from bergson.data import (
-    allocate_batches,
     load_data_string,
     tokenize,
     tokenize_and_chunk,
 )
 from bergson.format import apply_format
 from bergson.gradients import GradientProcessor, Normalizer
-from bergson.normalizer.fit_normalizers import fit_normalizers
 from bergson.utils import assert_type, get_layer_list, weighted_causal_lm_ce
 
 BIG_NUM = np.iinfo(np.int64).max
@@ -52,48 +49,12 @@ def validate_run_path(index_cfg: IndexConfig):
             )
 
 
-def create_normalizers(
-    model: PreTrainedModel,
-    ds: Dataset | IterableDataset,
-    cfg: IndexConfig,
-    target_modules: set[str] | None = None,
-) -> dict[str, Normalizer]:
-    """Create normalizers for the model"""
-    if cfg.normalizer != "none":
-        # Evenly sample `stats_sample_size` examples to compute statistics
-        if isinstance(ds, Dataset):
-            if cfg.stats_sample_size is not None and cfg.stats_sample_size < len(ds):
-                stats_ds = ds.shuffle(seed=0).select(range(cfg.stats_sample_size))
-            else:
-                stats_ds = ds
-        else:
-            if cfg.stats_sample_size is None:
-                stats_iterable_ds = ds
-            else:
-                stats_iterable_ds = ds.shuffle(seed=0).take(cfg.stats_sample_size)
-
-            stats_ds = assert_type(
-                Dataset, Dataset.from_generator(lambda: iter(stats_iterable_ds))
-            )
-
-        return fit_normalizers(
-            model,
-            stats_ds,
-            cfg,
-            batches=allocate_batches(stats_ds["length"][:], cfg.token_batch_size),
-            target_modules=target_modules,
-        )
-
-    return {}
-
-
 def create_processor(
-    model: PreTrainedModel,
-    ds: Dataset | IterableDataset,
+    model: PreTrainedModel | PeftModel,
     cfg: IndexConfig,
     target_modules: set[str] | None = None,
 ) -> GradientProcessor:
-    """Handle processor creation and normalizer fitting"""
+    """Handle processor creation and normalizer loading."""
     local_rank = cfg.distributed.local_rank
     rank = cfg.distributed.rank
 
@@ -108,7 +69,16 @@ def create_processor(
             skip_preconditioners=cfg.skip_preconditioners,
         )
     else:
-        normalizers = create_normalizers(model, ds, cfg, target_modules)
+        normalizers: dict[str, Normalizer] = {}
+        if cfg.optimizer_state_path:
+            from bergson.utils.load_from_optimizer import load_from_optimizer
+
+            normalizers = load_from_optimizer(
+                model,
+                cfg.optimizer_state_path,
+                include_bias=cfg.include_bias,
+                target_modules=target_modules,
+            )
 
         processor = GradientProcessor(
             normalizers,
@@ -141,7 +111,7 @@ def setup_model_and_peft(
     cfg: ModelConfig,
     device_map_auto: bool = False,
     **model_kwargs,
-) -> tuple[PreTrainedModel, set | None]:
+) -> tuple[PreTrainedModel | PeftModel, set | None]:
     """Handle model loading, quantization, FSDP, and PEFT detection"""
     apply_force_math_sdp(cfg)
     local_rank = cfg.distributed.local_rank
@@ -240,8 +210,6 @@ def setup_model_and_peft(
         for layer in get_layer_list(model):  # type: ignore
             fully_shard(layer)
         fully_shard(model)
-
-    model = cast(PreTrainedModel, model)
 
     return model, target_modules  # type: ignore
 
