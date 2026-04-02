@@ -56,7 +56,10 @@ class DataStream:
         )
         # If the weights are 1D, we assume they correspond to documents and look for
         # "doc_ids" in the batch to index them. If they're 2D, they correspond to tokens
-        if self.weights.ndim == 1 and "doc_ids" in batch:
+        if self.weights.ndim == 2:
+            # Truncate to the max sequence length in the batch to avoid indexing errors
+            indices = (indices, slice(None, x.shape[1]))
+        elif "doc_ids" in batch:
             indices = torch.tensor(batch["doc_ids"], device=self.device)
 
         return {

@@ -16,14 +16,11 @@ from torch.distributed.nn.functional import all_reduce as differentiable_all_red
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
-from transformers import AutoTokenizer
 
 from ..config import AttributionConfig, DataConfig, TrainingConfig
 from ..distributed import grad_tree, launch_distributed_run, simple_fsdp
 from ..utils.logging import wandb_log_fn
 from ..utils.worker_utils import (
-    BIG_NUM,
-    max_tokens_for_model,
     setup_data_pipeline,
     setup_model_and_peft,
 )
@@ -277,12 +274,8 @@ def worker(
     if run_cfg.per_token:
         seq_len = run_cfg.data.chunk_length
         if seq_len <= 0:
-            tokenizer = AutoTokenizer.from_pretrained(run_cfg.model)
-            seq_len = max_tokens_for_model(tokenizer, run_cfg.model, run_cfg.revision)
-            if seq_len >= BIG_NUM:
-                raise ValueError(
-                    "Model has no maximum context length; specify chunk_length > 0"
-                )
+            seq_len = max(train_dataset["length"])
+            print(f"Using max sequence length {seq_len} for per-token attribution")
 
         w_shape = (len(train_dataset), seq_len)
     else:
