@@ -16,7 +16,7 @@ Building a train‑time raw gradient store is also available through a HF Traine
 
 ### Attribute Post-Hoc 
 
-Bergson provides a gradient store for efficient serial queries. Collection-time gradient compression makes the store space-efficient, and a FAISS integration enables fast KNN search over large stores. See `bergson build` and `bergson query`.
+Bergson provides a gradient store for efficient serial queries. Collection-time gradient compression makes the store space-efficient, and a FAISS integration enables fast KNN search over large stores. See `bergson build` and `bergson query` (`Attributor` in the programmatic interface).
 
 For small queries and methods that don't use gradient compression (e.g., EK-FAC), score a dataset in a single pass using an in-memory query index of precomputed gradients. Dataset items may be scored using max, mean, and individual scoring strategies, enabling [LESS](https://arxiv.org/pdf/2402.04333)-style data filtering. See `bergson score`, `bergson build`, and `bergson reduce`.
 
@@ -59,9 +59,11 @@ To collect TrackStar attribution scores for an I.I.D sample query:
 bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
 ```
 
-# Usage
+# Documentation
 
-Aside from our pre-configured attribution algorithms, there are two ways to use Bergson. The first is to write an index of dataset gradients to disk using `build` then query it programmatically or using the `Attributor` or `query` CLI. The second is to specify your query upfront, then map over the dataset and collect and process gradients on the fly. When using this second strategy only influence scores will be saved.
+Full documentation is available at https://bergson.readthedocs.io/.
+
+## Gradient Collection
 
 You can build an index of gradients for each training sample from the command line, using `bergson` as a CLI tool:
 
@@ -78,23 +80,21 @@ At the lowest level of abstraction, the `GradientCollector` context manager allo
 1. Using a `closure` argument, which enables you to make use of the per-example gradients immediately after they are computed, during the backward pass. If you're computing summary statistics or other per-example metrics, this is the most efficient way to do it.
 2. Without a `closure` argument, in which case the gradients are collected and returned as a dictionary mapping module names to batches of gradients. This is the simplest and most flexible approach but is a bit more memory-intensive.
 
-## On-the-fly Query
+## Score a Dataset
 
-You can score a large dataset against a previously built query index held in memory. Score each query index item individually, or aggregate the query index items into one using `--aggregation mean` or `aggregation sum`:
+You can score a dataset against an existing query index that is held in memory without saving its gradients to disk. Score each query index item individually, or aggregate the query index items into one using `--aggregation mean` or `aggregation sum`:
 
 ```bash
 bergson score <output_path> --model <model_name> --dataset <dataset_name> --query_path <existing_index_path> --score individual --aggregation mean
 ```
 
-You can also reduce a dataset into a single mean or sum query gradient as it's built:
+You can also aggregate your query dataset into a single mean or sum gradient as it's built:
 
 ```bash
 bergson build <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize --preconditioner_path <path_to_preconditioner>
 ```
 
-All commands have programmatic equivalents - see `InMemoryCollector`.
-
-## Index Query
+## Query an On-Disk Gradient Index
 
 We provide a query Attributor which supports unit normalized gradients and KNN search out of the box. Access it via CLI with
 
@@ -128,7 +128,7 @@ with attr.trace(model.base_model, 5) as result:
     model.zero_grad()
 ```
 
-## Training Gradients
+## Collect Raw Training Gradients
 
 Gradient collection during training is supported via an integration with HuggingFace's Trainer and SFTTrainer classes. Training gradients are saved in the original order corresponding to their dataset items, and when the `track_order` flag is set the training steps associated with each training item are separately saved.
 
@@ -150,7 +150,7 @@ trainer = prepare_for_gradient_collection(trainer)
 trainer.train()
 ```
 
-## Attention Head Gradients
+## Collect Individual Attention Head Gradients
 
 By default Bergson collects gradients for named parameter matrices, but per-attention head gradients may be collected by configuring an AttentionConfig for each module of interest.
 
@@ -172,7 +172,7 @@ collect_gradients(
 )
 ```
 
-## GRPO
+## Collect GRPO Loss Gradients
 
 Where a reward signal is available we compute gradients using a weighted advantage estimate based on Dr. GRPO:
 
@@ -180,9 +180,9 @@ Where a reward signal is available we compute gradients using a weighted advanta
 bergson build <output_path> --model <model_name> --dataset <dataset_name> --reward_column <reward_column_name>
 ```
 
-## Numerical Stability
+# Numerical Stability
 
-Some models produce inconsistent per-example gradients when batched together. This is caused by nondeterminism in optimized SDPA attention backends (flash, memory-efficient) — the diagnostic tests both padding-induced and equal-length batch divergence to pinpoint the source.
+Some models produce inconsistent per-example gradients when batched together. This is caused by nondeterminism in optimized SDPA attention backends (flash, memory-efficient). This diagnostic tests both padding-induced and equal-length batch divergence to pinpoint the source.
 
 Use the built-in diagnostic to check your model:
 
@@ -201,7 +201,7 @@ bergson build <output_path> --model <model_name> --precision fp32 --use_tf32_mat
 bergson build <output_path> --model <model_name> --precision fp32 --force_math_sdp
 ```
 
-### Performance impact
+## Performance impact
 
 Benchmarked on A100-80GB with 500 documents from pile-10k:
 
