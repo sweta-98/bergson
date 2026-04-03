@@ -5,25 +5,30 @@ Influence functions estimate the effect on a behavior of interest of removing in
 
 ## Core features
 
-- Gradient store for serial queries. We provide collection-time gradient compression for efficient storage, and integrate with FAISS for fast KNN search over large stores.
-- On-the-fly queries. Query gradients without disk I/O overhead via a single pass over a dataset with a set of precomputed query gradients.
-  - Experiment with multiple query strategies based on [LESS](https://arxiv.org/pdf/2402.04333).
-  - Ideal for compression-free gradients.
-- Per-token scores.
-- Train‑time gradient collection. Capture gradients produced during training with a ~17% performance overhead.
-- Scalable. We use [FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html), BitsAndBytes, and other performance optimizations to support large models, datasets, and clusters.
-- Integrated with HuggingFace Transformers and Datasets. We also support on-disk datasets in a variety of formats.
-- Structured gradient views and per-attention head gradient collection. Bergson enables mechanistic interpretability via easy access to per‑module or per-attention head gradients.
+Per-token and per-sequence attribution is enabled everywhere. Bergson uses [FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html) or SimpleFSDP, BitsAndBytes, and other performance optimizations to support large models, datasets, and clusters. Bergson integrates with HuggingFace Transformers and Datasets, and also support on-disk datasets in a variety of formats.
+
+### Attribute through Training
+
+Bergson provides a fully functional and scalable MAGIC Trainer to train metasmooth models which can be near-optimally attributed by backpropagating through the training process to 
+compute the gradient of the loss with respect to an implicit weighting placed on each training item.
+
+Building a train‑time raw gradient store is also available through a HF Trainer callback, at a ~17% performance overhead.
+
+### Attribute Post-Hoc 
+
+Bergson provides a gradient store for efficient serial queries. Collection-time gradient compression makes the store space-efficient, and a FAISS integration enables fast KNN search over large stores.
+
+For small queries and methods that don't use gradient compression (e.g., EK-FAC), `score` a dataset in a single pass using an in-memory query index of precomputed gradients. Dataset items may be scored using max, mean, and individual scoring strategies, enabling [LESS](https://arxiv.org/pdf/2402.04333)-style data filtering.
+
+
+
+Structured gradient views and per-attention head gradient collection. Bergson enables mechanistic interpretability via easy access to per‑module or per-attention head gradients.
 
 # Announcements
 
-**March 2026**
+**January - April 2026**
 - Support MAGIC
-
-**February 2026**
-- Support per-token gradients
-
-**January 2026**
+- Support per-token attribution
 - Support EK-FAC
 - [Experimental] Support distributing preconditioners across nodes and devices for VRAM-efficient computation through the GradientCollectorWithDistributedPreconditioners. If you would like this functionality exposed via the CLI please get in touch! https://github.com/EleutherAI/bergson/pull/100
 
@@ -35,27 +40,27 @@ pip install bergson
 
 # Quickstart
 
-To construct an index of randomly projected gradients:
-
-```bash
-bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
-```
-
-To collect Trackstar attribution scores:
-
-```bash
-bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
-```
-
 To use MAGIC on a GPT-2 WikiText fine-tune:
 
 ```bash
 bergson magic examples/magic/gpt2_wikitext_tiny.yaml
 ```
 
+To construct an on-disk index of randomly projected gradients in the style of Trak or TrackStar:
+
+```bash
+bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
+```
+
+To collect TrackStar attribution scores:
+
+```bash
+bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
+```
+
 # Usage
 
-There are two ways to use Bergson. The first is to write an index of dataset gradients to disk using `build` then query it programmatically or using the `Attributor` or `query` CLI. The second is to specify your query upfront, then map over the dataset and collect and process gradients on the fly. When using this second strategy only influence scores will be saved.
+Aside from our pre-configured attribution algorithms, there are two ways to use Bergson. The first is to write an index of dataset gradients to disk using `build` then query it programmatically or using the `Attributor` or `query` CLI. The second is to specify your query upfront, then map over the dataset and collect and process gradients on the fly. When using this second strategy only influence scores will be saved.
 
 You can build an index of gradients for each training sample from the command line, using `bergson` as a CLI tool:
 
@@ -74,16 +79,16 @@ At the lowest level of abstraction, the `GradientCollector` context manager allo
 
 ## On-the-fly Query
 
+We provide a utility to reduce a dataset into its mean or sum query gradient:
+
+```bash
+bergson reduce <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize
+```
+
 You can score a large dataset against a previously built query index without saving its gradients to disk:
 
 ```bash
 bergson score <output_path> --model <model_name> --dataset <dataset_name> --query_path <existing_index_path> --score individual --aggregation mean
-```
-
-We provide a utility to reduce a dataset into its mean or sum query gradient, for use as a query index:
-
-```bash
-bergson reduce <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize
 ```
 
 ## Index Query
