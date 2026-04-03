@@ -1,7 +1,7 @@
 # Bergson
-This library enables you to trace the memory of deep neural nets with gradient-based data attribution techniques. We currently focus on TrackStar, as described in [Scalable Influence and Fact Tracing for Large Language Model Pretraining](https://arxiv.org/abs/2410.17413v3) by Chang et al. (2024), [Magic](https://arxiv.org/abs/2504.16430), and also include support for several alternative influence functions.
+Bergson is a python library which provides scalable, state-of-the-art influence functions for large language models, including  [EK-FAC](https://arxiv.org/abs/2308.03296) (2023), [TrackStar](https://arxiv.org/abs/2410.17413v3) (2024), and [Magic](https://arxiv.org/abs/2504.16430) (2025), alongside simple baselines such as gradient cosine similarity.
 
-We view attribution as a counterfactual question: **_If we "unlearned" this training sample, how would the model's behavior change?_** This formulation ties attribution to some notion of what it means to "unlearn" a training sample. Here we focus on a very simple notion of unlearning: taking a gradient _ascent_ step on the loss with respect to the training sample.
+Influence functions trade off usefulness for costliness. Our most costly and powerful method, MAGIC, uses 3-5x the compute of training a single model to produce per-token or per-sequence scores that correlate with the effects of leave-k-out retraining at ρ=0.9 or higher. Faster methods like EK-FAC and TrackStar run at less than the cost of training the attributed model on the dataset of interest, but tend to correlate with leave-k-out retraining at ρ=0.3 or lower and may be more profitably modeled as corresponding to the [proximal Bregman response function](https://arxiv.org/abs/2209.05364).
 
 ## Core features
 
