@@ -5,7 +5,7 @@ Influence functions estimate the effect on a behavior of interest of removing in
 
 ## Core features
 
-Per-token and per-sequence attribution is available everywhere. Bergson uses [FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html) or SimpleFSDP, BitsAndBytes, and other performance optimizations to support large models, datasets, and clusters. Bergson integrates with HuggingFace Transformers and Datasets, and also support on-disk datasets in a variety of formats.
+Per-token and per-sequence attribution is available everywhere. Bergson uses [FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html) or SimpleFSDP, BitsAndBytes, and other performance optimizations to support large models, datasets, and clusters. Bergson integrates with HuggingFace Transformers and Datasets, and also supports on-disk datasets in a variety of formats.
 
 ### Attribute through Training
 
@@ -20,9 +20,9 @@ Bergson provides a gradient store for efficient serial queries. Collection-time 
 
 For small queries and methods that don't use gradient compression (e.g., EK-FAC), score a dataset in a single pass using an in-memory query index of precomputed gradients. Dataset items may be scored using max, mean, and individual scoring strategies, enabling [LESS](https://arxiv.org/pdf/2402.04333)-style data filtering. See `bergson score`, `bergson build`, and `bergson reduce`.
 
-Structured gradient views and per-attention head gradient collection. Bergson enables mechanistic interpretability via easy access to per‑module or per-attention head gradients.
+Per-module and per-attention head gradient storage to enable mechanistic interpretability.
 
-At a higher level, we provide a command to pipeline the necessary steps to run TrackStar. See `bergson trackstar`.
+At a higher level, `bergson trackstar` pipelines all necessary steps for TrackStar-based attribution. See `bergson trackstar`.
 
 # Announcements
 
