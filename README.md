@@ -10,19 +10,19 @@ Per-token and per-sequence attribution is available everywhere. Bergson uses [FS
 ### Attribute through Training
 
 Bergson provides a fully functional and scalable MAGIC Trainer to train metasmooth models which can be near-optimally attributed by backpropagating through the training process to 
-compute the gradient of the loss with respect to an implicit weighting placed on each training item.
+compute the gradient of the loss with respect to an implicit weighting placed on each training item. See `bergson magic`.
 
 Building a train‑time raw gradient store is also available through a HF Trainer callback, at a ~17% performance overhead.
 
 ### Attribute Post-Hoc 
 
-Bergson provides a gradient store for efficient serial queries. Collection-time gradient compression makes the store space-efficient, and a FAISS integration enables fast KNN search over large stores.
+Bergson provides a gradient store for efficient serial queries. Collection-time gradient compression makes the store space-efficient, and a FAISS integration enables fast KNN search over large stores. See `bergson build` and `bergson query`.
 
-For small queries and methods that don't use gradient compression (e.g., EK-FAC), `score` a dataset in a single pass using an in-memory query index of precomputed gradients. Dataset items may be scored using max, mean, and individual scoring strategies, enabling [LESS](https://arxiv.org/pdf/2402.04333)-style data filtering.
-
-
+For small queries and methods that don't use gradient compression (e.g., EK-FAC), score a dataset in a single pass using an in-memory query index of precomputed gradients. Dataset items may be scored using max, mean, and individual scoring strategies, enabling [LESS](https://arxiv.org/pdf/2402.04333)-style data filtering. See `bergson score`, `bergson build`, and `bergson reduce`.
 
 Structured gradient views and per-attention head gradient collection. Bergson enables mechanistic interpretability via easy access to per‑module or per-attention head gradients.
+
+At a higher level, we provide a command to pipeline the necessary steps to run TrackStar. See `bergson trackstar`.
 
 # Announcements
 
