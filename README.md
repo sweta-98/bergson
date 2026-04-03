@@ -46,13 +46,14 @@ To use MAGIC on a GPT-2 WikiText fine-tune:
 bergson magic examples/magic/gpt2_wikitext_tiny.yaml
 ```
 
-To construct an on-disk index of randomly projected gradients in the style of Trak or TrackStar:
+To construct and query an on-disk index of randomly projected gradients in the style of Trak or TrackStar:
 
 ```bash
-bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096
+bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096 --projection_dim 16
+bergson query --index runs/index
 ```
 
-To collect TrackStar attribution scores:
+To collect TrackStar attribution scores for an I.I.D sample query:
 
 ```bash
 bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
