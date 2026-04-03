@@ -9,8 +9,8 @@ Per-token and per-sequence attribution is available everywhere. Bergson uses [FS
 
 ### Attribute through Training
 
-Bergson provides a fully functional and scalable MAGIC Trainer to train metasmooth models which can be near-optimally attributed by backpropagating through the training process to 
-compute the gradient of the loss with respect to an implicit weighting placed on each training item. See `bergson magic`.
+Bergson provides a functional MAGIC Trainer with distributed support that enables near-optimal data attribution, by backpropagating through the training process to 
+compute the gradient of a loss with respect to an implicit weighting placed on each training item. See `bergson magic`.
 
 Building a train‑time raw gradient store is also available through a HF Trainer callback, at a ~17% performance overhead.
 
