@@ -46,7 +46,7 @@ To use MAGIC on a GPT-2 WikiText fine-tune:
 bergson magic examples/magic/gpt2_wikitext_tiny.yaml
 ```
 
-To construct and query an on-disk index of randomly projected gradients in the style of Trak or TrackStar:
+To construct and query an on-disk index of randomly projected gradients:
 
 ```bash
 bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096 --projection_dim 16
