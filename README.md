@@ -50,7 +50,7 @@ To construct and query an on-disk index of randomly projected gradients:
 
 ```bash
 bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096 --projection_dim 16
-bergson query --index runs/index
+bergson query --index runs/index --unit_norm
 ```
 
 To collect TrackStar attribution scores for an I.I.D sample query:
