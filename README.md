@@ -20,7 +20,7 @@ Bergson provides a gradient store for efficient serial queries. Collection-time 
 
 For small queries and methods that don't use gradient compression (e.g., EK-FAC), score a dataset in a single pass using an in-memory query index of precomputed gradients. Dataset items may be scored using max, mean, and individual scoring strategies, enabling [LESS](https://arxiv.org/pdf/2402.04333)-style data filtering. See `bergson score`, `bergson build`, and `bergson reduce`.
 
-Per-module and per-attention head gradient storage to enable mechanistic interpretability.
+Per-module and per-attention head gradient storage enables mechanistic interpretability.
 
 At a higher level, `bergson trackstar` pipelines all necessary steps for TrackStar-based attribution. See `bergson trackstar`.
 
@@ -80,17 +80,19 @@ At the lowest level of abstraction, the `GradientCollector` context manager allo
 
 ## On-the-fly Query
 
-We provide a utility to reduce a dataset into its mean or sum query gradient:
-
-```bash
-bergson reduce <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize
-```
-
-You can score a large dataset against a previously built query index without saving its gradients to disk:
+You can score a large dataset against a previously built query index held in memory. Score each query index item individually, or aggregate the query index items into one using `--aggregation mean` or `aggregation sum`:
 
 ```bash
 bergson score <output_path> --model <model_name> --dataset <dataset_name> --query_path <existing_index_path> --score individual --aggregation mean
 ```
+
+You can also reduce a dataset into a single mean or sum query gradient as it's built:
+
+```bash
+bergson build <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize --preconditioner_path <path_to_preconditioner>
+```
+
+All commands have programmatic equivalents - see `InMemoryCollector`.
 
 ## Index Query
 
