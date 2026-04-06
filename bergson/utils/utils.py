@@ -85,6 +85,10 @@ def simple_parse_kwargs_string(args_string: str) -> dict:
     """Parses something like `args1=val1,arg2=val2` into a dictionary."""
     args_dict = {}
 
+    # Skip empty strings
+    if not args_string.strip():
+        return args_dict
+
     for elem in args_string.split(","):
         lvalue, sep, rvalue = elem.partition("=")
 
