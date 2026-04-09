@@ -5,7 +5,9 @@ Influence functions estimate the effect on a behavior of interest of removing in
 
 ## Core features
 
-Per-token and per-sequence attribution is available everywhere. Bergson uses [FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html) or SimpleFSDP, BitsAndBytes, and other performance optimizations to support large models, datasets, and clusters. Bergson integrates with HuggingFace Transformers and Datasets, and also supports on-disk datasets in a variety of formats. Almost every feature is available through both the CLI and a programmatic interface.
+Per-token and per-sequence attribution is available everywhere. Bergson uses FSDP2 or SimpleFSDP, BitsAndBytes, and low-level performance optimizations to support large models, datasets, and clusters. Almost every feature is available through both the CLI and a programmatic interface, which use a shared set of configuration dataclasses. To understand every available configuration option, [check out the documentation](https://bergson.readthedocs.io/en/latest/api.html#bergson.IndexConfig).
+
+Bergson integrates with HuggingFace Transformers and Datasets, and also supports on-disk datasets in a variety of formats.
 
 ### Attribute through Training
 
