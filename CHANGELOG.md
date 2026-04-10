@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.9.1 (2026-04-10)
+
+### Bug Fixes
+
+- Preconditioner bug in attributor.py
+  ([`6232d1e`](https://github.com/EleutherAI/bergson/commit/6232d1e3464ec4fc9056a5c45b5efc7b4c421318))
+
+
 ## v0.9.0 (2026-03-18)
 
 ### Bug Fixes
