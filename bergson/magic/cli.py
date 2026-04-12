@@ -66,6 +66,10 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     per_token: bool = False
     """Whether to compute attribution scores per token (instead of per sequence)."""
 
+    use_modula: bool = False
+    """Normalize weight updates in the modular norm (modula package).
+    Improves metasmoothness of the training trajectory for better attribution."""
+
     def __post_init__(self):
         assert not self.fsdp, "PyTorch FSDP is not currently supported for MAGIC."
 
@@ -157,6 +161,13 @@ def prepare_trainer(
     )
     model.to(f"cuda:{rank}")  # type: ignore[reportArgumentType]
 
+    normalizer = None
+    use_modula = getattr(cfg, "use_modula", False)
+    if use_modula:
+        from .modula_norm import ModulaNormalizer
+
+        normalizer = ModulaNormalizer(model.config, device=f"cuda:{rank}")
+
     if target_modules:
         # Only train the PEFT adapter parameters
         model.requires_grad_(False)
@@ -202,7 +213,7 @@ def prepare_trainer(
         case other:
             raise ValueError(f"Unsupported optimizer: {other}")
 
-    trainer, fwd_state = Trainer.initialize(model, opt)
+    trainer, fwd_state = Trainer.initialize(model, opt, normalizer=normalizer)
     return trainer, fwd_state, model
 
 

@@ -221,6 +221,7 @@ class Trainer:
         cls,
         model: nn.Module,
         optimizer: GradientTransformation,
+        normalizer=None,
     ) -> tuple["Trainer", TrainerState]:
         """Convenience method for initializing the trainer and state."""
         # Create new tensor objects for the parameters and buffers to ensure that they
@@ -236,10 +237,21 @@ class Trainer:
         buffers = shallow_copy(dict(model.named_buffers(remove_duplicate=False)))
         opt_state = optimizer.init(params)
 
-        state = TrainerState(params, opt_state, buffers)
-        return cls(model, optimizer), state
+        # Warm up power iteration vectors on the actual weights, then normalize
+        # so training starts on the modular norm constraint surface
+        if normalizer is not None:
+            normalizer.warmup(params)
+            normalizer.normalize(params, trace=False)
 
-    def __init__(self, model: nn.Module, optimizer: GradientTransformation):
+        state = TrainerState(params, opt_state, buffers)
+        return cls(model, optimizer, normalizer), state
+
+    def __init__(
+        self,
+        model: nn.Module,
+        optimizer: GradientTransformation,
+        normalizer=None,
+    ):
         # Move only trainable parameters to the meta device, leaving frozen params
         # on device so they don't need to be managed by TrainerState.
         for mod in model.modules():
@@ -251,6 +263,7 @@ class Trainer:
 
         self.model = model
         self.optimizer = optimizer
+        self.normalizer = normalizer
 
     def step(
         self,
@@ -300,6 +313,10 @@ class Trainer:
             grads, state.opt_state, inplace=inplace, params=state.params
         )
         new_params = torchopt.apply_updates(state.params, updates, inplace=inplace)
+
+        if self.normalizer is not None:
+            new_params = self.normalizer.normalize(new_params, trace=trace)
+
         state = TrainerState(
             new_params,
             new_state,
