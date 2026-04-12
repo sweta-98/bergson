@@ -27,6 +27,20 @@ Usage
        --query.split "train[:8]" \
        --model EleutherAI/pythia-14m
 
+Meta Smoothness
+---------------
+
+MAGIC is valid when the function you are differentiating through is meta smooth. There a few heuristics known to encourage meta smoothness:
+
+* Increase batch size
+* Scale model outputs down
+* Clip gradients
+* Pre-activation batch norm
+* QK norm
+* Tune weight decay
+
+Many of these methods boil down to "Identify and manage spikes in your training loss."
+
 Core components
 ^^^^^^^^^^^^^^^
 
