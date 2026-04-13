@@ -1,3 +1,4 @@
+import io
 import os
 import socket
 from contextlib import nullcontext, redirect_stdout
@@ -43,7 +44,7 @@ def dist_worker(
 ):
     try:
         rank = int(os.environ.get("RANK", 0))
-        with nullcontext() if rank == 0 else redirect_stdout(None):
+        with nullcontext() if rank == 0 else redirect_stdout(io.StringIO()):
             worker(*worker_args)
     finally:
         if dist.is_initialized():

@@ -109,11 +109,13 @@ def compute_query_gradients(
         loss_accum /= n_batches
 
     if dist.is_initialized():
+        op = dist.ReduceOp.SUM if method == "sum" else dist.ReduceOp.AVG
         if not fsdp:
             for k in grad_accum:
-                differentiable_all_reduce(grad_accum[k], op=dist.ReduceOp.SUM)
+                differentiable_all_reduce(grad_accum[k], op=op)
+
         # Loss is never a DTensor
-        dist.all_reduce(loss_accum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(loss_accum, op=op)
 
     return grad_accum, float(loss_accum)
 
