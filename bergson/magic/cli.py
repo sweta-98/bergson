@@ -1,5 +1,6 @@
 import csv
 import os
+import random
 import shutil
 import time
 from dataclasses import asdict, dataclass
@@ -47,6 +48,9 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     save_mode: Literal["all", "sqrt"] = "sqrt"
     """Checkpoint saving mode. 'all' saves every checkpoint, 'sqrt' saves every
     sqrt(N) steps, and rematerializes checkpoints when needed."""
+
+    subset_jitter_std: float = 0.0
+    """Standard deviation of Gaussian noise added to scores for subset selection."""
 
     num_subsets: int = 100
     """Number of leave-k-out subsets for Spearman correlation."""
@@ -396,8 +400,23 @@ def worker(
     diffs = []
     score_sums = []
 
-    perm = scores.argsort()
-    subsets = perm.chunk(run_cfg.num_subsets)
+    if run_cfg.subset_jitter_std > 0.0:
+        rng = torch.Generator().manual_seed(run_cfg.seed)
+
+        scale = scores.std()
+        jitter = torch.randn_like(scores, generator=rng) * run_cfg.subset_jitter_std
+        perm = torch.argsort(scores + jitter * scale)
+    else:
+        perm = scores.argsort()
+
+    # Shuffle the order of the subsets so that the estimate of correlation on the
+    # progress bar is unbiased. This does not change the final correlation since all
+    # subsets are eventually evaluated, but prevents the early subsets from being
+    # biased towards higher or lower scores.
+    subsets = list(perm.chunk(run_cfg.num_subsets))
+    rng = random.Random(run_cfg.seed)
+    rng.shuffle(subsets)
+
     csv_path = os.path.join(run_cfg.run_path, "validation.csv")
     val_csv_writer = CSVWriter(
         csv_path,
