@@ -14,18 +14,12 @@ query:
   split: "train[:4608]"
   chunk_length: 512
 
-# Adjust nproc_per_node for your hardware.
-# The backward pass requires ~48 GB per GPU at 16 examples/GPU.
-# batch_size / nproc_per_node must equal 16 to avoid OOM.
-#   4 GPUs -> batch_size: 64
-#   8 GPUs -> batch_size: 128
-#  16 GPUs -> batch_size: 256  (original paper config, multi-node)
 distributed:
   nproc_per_node: 4
+  nnode: 1
 
 batch_size: 64
 num_epochs: 4
-grad_checkpointing: true
 
 lr_schedule:
   lr_scheduler_type: polynomial

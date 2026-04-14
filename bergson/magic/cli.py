@@ -71,7 +71,7 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     Improves metasmoothness of the training trajectory for better attribution."""
 
     def __post_init__(self):
-        assert not self.fsdp, "PyTorch FSDP is not currently supported for MAGIC."
+        pass
 
 
 def compute_query_gradients(
@@ -113,13 +113,11 @@ def compute_query_gradients(
         loss_accum /= n_batches
 
     if dist.is_initialized():
-        op = dist.ReduceOp.SUM if method == "sum" else dist.ReduceOp.AVG
         if not fsdp:
             for k in grad_accum:
-                differentiable_all_reduce(grad_accum[k], op=op)
-
+                differentiable_all_reduce(grad_accum[k], op=dist.ReduceOp.SUM)
         # Loss is never a DTensor
-        dist.all_reduce(loss_accum, op=op)
+        dist.all_reduce(loss_accum, op=dist.ReduceOp.SUM)
 
     return grad_accum, float(loss_accum)
 
@@ -270,7 +268,7 @@ def worker(
             "cpu:gloo,cuda:nccl",
             init_method=f"tcp://{addr}:{port}",
             device_id=torch.device(f"cuda:{rank}"),
-            rank=rank,
+            rank=global_rank,
             world_size=world_size,
         )
 
