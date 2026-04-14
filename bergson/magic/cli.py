@@ -49,7 +49,7 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     sqrt(N) steps, and rematerializes checkpoints when needed."""
 
     num_subsets: int = 100
-    """Number of leave-one-out subsets for Spearman correlation."""
+    """Number of leave-k-out subsets for Spearman correlation."""
 
     seed: int = 42
     """Random seed for subset permutation."""
@@ -396,11 +396,8 @@ def worker(
     diffs = []
     score_sums = []
 
-    gen = torch.Generator().manual_seed(run_cfg.seed)
-    num_real = len(stream.weights) - pad_count
-    perm = torch.randperm(num_real, generator=gen)
+    perm = scores.argsort()
     subsets = perm.chunk(run_cfg.num_subsets)
-
     csv_path = os.path.join(run_cfg.run_path, "validation.csv")
     val_csv_writer = CSVWriter(
         csv_path,
