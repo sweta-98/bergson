@@ -136,7 +136,7 @@ class GradientProcessor:
         Load the normalizers and preconditioners from a file.
         """
         path = Path(path)
-        cfg_path = path / "processor_config.json"
+        cfg_path = path / "processor_config.yaml"
         norm_path = path / "normalizers.pth"
         precond_path = path / "preconditioners.pth"
         precond_eigen_path = path / "preconditioners_eigen.pth"
@@ -188,7 +188,7 @@ class GradientProcessor:
         """
         path.mkdir(parents=True, exist_ok=True)
 
-        cfg_path = path / "processor_config.json"
+        cfg_path = path / "processor_config.yaml"
         norm_path = path / "normalizers.pth"
         precond_path = path / "preconditioners.pth"
         precond_eigen_path = path / "preconditioners_eigen.pth"

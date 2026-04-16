@@ -1,14 +1,16 @@
+import math
 import os
+from abc import ABC
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import torch
-from simple_parsing import field
+from simple_parsing import Serializable, field
 
 
 @dataclass
-class DataConfig:
+class DataConfig(Serializable):
     dataset: str = "NeelNanda/pile-10k"
     """Dataset identifier to build the index from."""
 
@@ -44,33 +46,32 @@ class DataConfig:
     and optionally `doc_to_target` and `doc_to_choice`. MCQA YAML
     available at `bergson/templates/mcqa.yaml`."""
 
-    data_args: str = ""
+    data_kwargs: str = ""
     """Arguments to pass to the dataset constructor in the format
     arg1=val1,arg2=val2."""
 
+    chunk_length: int = 0
+    """When positive, concatenate and chunk the documents into fixed-length token
+    sequences of this length. Incompatible with truncation and format_template."""
+
+    def __post_init__(self):
+        if self.chunk_length > 0:
+            if self.truncation:
+                raise ValueError("chunk_length and truncation cannot both be True")
+            if self.format_template:
+                raise ValueError(
+                    "chunk_length and format_template cannot both be specified"
+                )
+
 
 @dataclass
-class AttentionConfig:
-    """Config for splitting an attention module into head matrices."""
-
-    num_heads: int = 0
-    """Number of attention heads."""
-
-    head_size: int = 0
-    """Size of each attention head."""
-
-    head_dim: int = 0
-    """Axis index for `num_heads` in the weight matrix."""
-
-
-@dataclass
-class DistributedConfig:
-    """Configuration for multi-node preconditioner computation."""
+class DistributedConfig(Serializable):
+    """Configuration for multi-node computation."""
 
     nnode: int = 1
-    """The number of nodes to use for preconditioner computation."""
+    """The number of nodes to use for computation."""
 
-    nproc_per_node: int = field(default_factory=lambda: torch.cuda.device_count())
+    nproc_per_node: int = field(default_factory=torch.cuda.device_count)
     """The number of processes per node."""
 
     node_rank: int | None = None
@@ -114,32 +115,223 @@ class DistributedConfig:
 
 
 @dataclass
-class IndexConfig:
-    """Config for building the index and running the model/dataset pipeline."""
+class ModelConfig(ABC):
+    """Base config for model loading."""
 
     run_path: str = field(positional=True)
-    """Name of the run. Used to create a directory for run artifacts."""
-
-    data: DataConfig = field(default_factory=DataConfig)
-    """Specification of the data on which to build the index."""
+    """Directory to save results."""
 
     model: str = "EleutherAI/pythia-160m"
     """Name of the model to load."""
 
-    tokenizer: str = ""
-    """Name of the tokenizer to use. If not set the model tokenizer is used."""
-
-    fsdp: bool = False
-    """Whether to use Fully Sharded Data Parallel (FSDP) for collecting gradients."""
-
     precision: Literal["auto", "bf16", "fp16", "fp32", "int4", "int8"] = "fp32"
     """Precision (dtype) to use for the model parameters."""
 
-    use_tf32: bool = False
-    """Enable TF32 matmuls. Recommended for large FP32 runs."""
+    revision: str | None = None
+    """Revision of the model."""
 
-    set_float32_matmul_precision_high: bool = False
+    distributed: DistributedConfig = field(default_factory=DistributedConfig)
+    """Configuration for multi-node distributed computation."""
+
+    fsdp: bool = False
+    """Whether to use PyTorch Fully Sharded Data Parallel (FSDP)"""
+
+    peft_init_kwargs: str = ""
+    """peft.LoraConfig arguments for initializing a PEFT adapter on the
+    base model in the format 'arg1=val1,arg2=val2'.
+    Use | to separate list values, e.g. target_modules=q_proj|k_proj|v_proj."""
+
+    model_kwargs: str = ""
+    """HF Model kwargs for in the format 'arg1=val1,arg2=val2'."""
+
+
+@dataclass
+class LRScheduleConfig(Serializable):
+    """Learning rate schedule configuration."""
+
+    lr: float = 1e-5
+    """The peak learning rate."""
+
+    lr_scheduler_type: Literal[
+        "linear",
+        "cosine",
+        "cosine_with_restarts",
+        "polynomial",
+        "constant",
+        "constant_with_warmup",
+    ] = "linear"
+    """The learning rate scheduler type."""
+
+    lr_start: float = 0.0
+    """Initial learning rate at the beginning of warmup."""
+
+    lr_end: float = 0.0
+    """Final learning rate after decay (only available for polynomial)."""
+
+    warmup_steps: float = 0
+    """Number of warmup steps before applying base lr.
+    A value >= 1 is an exact step count; a value in [0, 1)
+    is interpreted as a fraction of total training steps."""
+
+    num_cycles: float = 0.5
+    """Number of cosine cycles (used by cosine and cosine_with_restarts).
+    Default 0.5 gives a single half-cosine decay."""
+
+    power: float = 1.0
+    """Exponent for polynomial decay."""
+
+    def get_schedule(self, num_steps: int):
+        """Return a learning rate schedule function: step → lr.
+
+        Supports HF-compatible scheduler types and an optional non-zero warmup
+        start (``lr_start``).
+        """
+        if self.warmup_steps >= 1:
+            warmup_steps = int(self.warmup_steps)
+        else:
+            warmup_steps = math.ceil(num_steps * self.warmup_steps)
+
+        lr = self.lr
+        lr_start = self.lr_start
+        decay_steps = max(num_steps - warmup_steps, 1)
+
+        def _warmup(step):
+            """Linear warmup from lr_start to lr."""
+            progress = step / max(warmup_steps, 1)
+            return lr_start + (lr - lr_start) * progress
+
+        match self.lr_scheduler_type:
+            case "constant":
+                return lambda step: lr
+            case "constant_with_warmup":
+                return lambda step: _warmup(step) if step < warmup_steps else lr
+            case "linear":
+
+                def lin_schedule(step):
+                    if step < warmup_steps:
+                        return _warmup(step)
+                    progress = (step - warmup_steps) / decay_steps
+                    return lr * (1 - progress)
+
+                return lin_schedule
+            case "cosine":
+
+                def cos_schedule(step):
+                    if step < warmup_steps:
+                        return _warmup(step)
+                    progress = (step - warmup_steps) / decay_steps
+                    omega = math.pi * self.num_cycles * 2.0 * progress
+                    return lr * 0.5 * (1 + math.cos(omega))
+
+                return cos_schedule
+            case "cosine_with_restarts":
+
+                def cos_restart_schedule(step):
+                    if step < warmup_steps:
+                        return _warmup(step)
+                    progress = (step - warmup_steps) / decay_steps
+                    omega = math.pi * 2.0 * ((self.num_cycles * progress) % 1.0)
+                    return lr * 0.5 * (1 + math.cos(omega))
+
+                return cos_restart_schedule
+            case "polynomial":
+
+                def poly_schedule(step):
+                    if step < warmup_steps:
+                        return _warmup(step)
+                    progress = (step - warmup_steps) / decay_steps
+                    return (
+                        self.lr_end + (lr - self.lr_end) * (1 - progress) ** self.power
+                    )
+
+                return poly_schedule
+            case other:
+                raise ValueError(f"Unknown lr_scheduler_type: {other!r}")
+
+
+@dataclass
+class TrainingConfig(ModelConfig, Serializable):
+    """Configuration for the MAGIC trainer."""
+
+    lr_schedule: LRScheduleConfig = field(default_factory=LRScheduleConfig)
+    """Learning rate schedule configuration."""
+
+    batch_size: int = 16
+    """Batch size for both training and query streams.
+    Adjust based on GPU memory."""
+
+    num_epochs: int = 1
+    """Number of full passes over the training data."""
+
+    adam_beta1: float = 0.95
+    """Beta1 for AdamW optimizer."""
+
+    adam_beta2: float = 0.975
+    """Beta2 for AdamW optimizer."""
+
+    eps_root: float = 1e-8
+    """Epsilon root for AdamW optimizer."""
+
+    optimizer: Literal["adamw", "muon", "sgd"] = "adamw"
+    """Optimizer to use for the training steps. Muon is an efficient
+    optimizer that can reduce memory usage and speed up training."""
+
+    weight_decay: float = 0.01
+    """Weight decay coefficient for AdamW and Muon."""
+
+    grad_checkpointing: bool = False
+    """Whether to use gradient checkpointing during the forward pass."""
+
+
+@dataclass
+class AttributionConfig(ModelConfig, ABC):
+    """Base config for attribution methods."""
+
+    data: DataConfig = field(default_factory=DataConfig)
+    """Specification of the data on which to build the index."""
+
+    tokenizer: str = ""
+    """Name of the tokenizer to use. If not set the model tokenizer is used."""
+
+    drop_columns: bool = True
+    """Only save the new dataset columns. If false, the original dataset
+    columns will be saved as well."""
+
+    max_tokens: int | None = None
+    """Max tokens to process. If None, all tokens processed. Dataset only.
+    This experimental feature may be removed in the future."""
+
+    overwrite: bool = False
+    """Whether to overwrite any existing index in the run path."""
+
+    use_tf32_matmuls: bool = False
     """Set matmul precision to 'high'."""
+
+    debug: bool = False
+    """Whether to enable debug mode with additional logging."""
+
+    def __post_init__(self):
+        if self.use_tf32_matmuls:
+            torch.set_float32_matmul_precision("high")
+
+
+@dataclass
+class AttentionConfig:
+    """Config for splitting an attention module into head matrices."""
+
+    num_heads: int = 0
+    """Number of attention heads."""
+
+    head_size: int = 0
+    """Size of each attention head."""
+
+    head_dim: int = 0
+    """Axis index for `num_heads` in the weight matrix."""
+
+
+@dataclass
+class IndexConfig(AttributionConfig, Serializable):
+    """Config for building the index and running the model/dataset pipeline."""
 
     projection_dim: int = 16
     """Dimension of the random projection for the index, or 0 to disable it."""
@@ -163,10 +355,10 @@ class IndexConfig:
     processor_path: str = ""
     """Path to a precomputed processor."""
 
-    normalizer: Literal["none"] = "none"  # "adafactor", "adam",
-    """Type of normalizer to use for the gradients. We are disabling
-    optimizers due to lack of empirical validation - contact Eleuther
-    if you'd like to use them."""
+    optimizer_state_path: str = ""
+    """Path to a training checkpoint directory containing an optimizer.pt
+    or directly to an optimizer state file. Loads exp_avg_sq second
+    moments to normalize gradients."""
 
     skip_preconditioners: bool = False
     """Whether to skip estimating preconditioner statistics"""
@@ -177,10 +369,6 @@ class IndexConfig:
     stats_sample_size: int | None = 10_000
     """Number of examples to use for estimating normalizer statistics."""
 
-    drop_columns: bool = True
-    """Only save the new dataset columns. If false, the original dataset
-    columns will be saved as well."""
-
     loss_fn: Literal["ce", "kl", "vector_projection"] = "ce"
     """Loss function to use."""
 
@@ -190,7 +378,7 @@ class IndexConfig:
     vector_layer: int = -1
     """Layer index whose hidden states are used for vector_projection loss."""
 
-    loss_reduction: Literal["mean", "sum"] = "mean"
+    loss_reduction: Literal["mean", "sum"] = "sum"
     """Reduction method for the loss function."""
 
     label_smoothing: float = 0.0
@@ -200,9 +388,6 @@ class IndexConfig:
 
     stream_shard_size: int = 400_000
     """Shard size for streaming the dataset into Dataset objects."""
-
-    revision: str | None = None
-    """Revision of the model."""
 
     split_attention_modules: list[str] = field(default_factory=list)
     """Modules to split into head matrices."""
@@ -215,23 +400,17 @@ class IndexConfig:
     """Whether to enable profiling during gradient collection.
     If true, by default the first 4 steps will be profiled."""
 
-    debug: bool = False
-    """Whether to enable debug mode with additional logging."""
-
     filter_modules: str | None = None
     """If provided, a glob pattern to filter out modules from gradient collection.
     For example, "transformer.h.*.mlp.*" will exclude all MLP layers in a
     standard transformer architecture."""
 
-    overwrite: bool = False
-    """Whether to overwrite any existing index in the run path."""
-
-    distributed: DistributedConfig = field(default_factory=DistributedConfig)
-    """Configuration for multi-node distributed preconditioner computation."""
-
-    max_tokens: int | None = None
-    """Max tokens to process. If None, all tokens processed. Dataset only.
-    This experimental feature may be removed in the future."""
+    force_math_sdp: bool = False
+    """Disable flash and memory-efficient SDPA backends, forcing the
+    math-only kernel. Some models produce inconsistent gradients across
+    different padding lengths when using optimized attention backends.
+    Run `bergson test_model_configuration` to check whether your model
+    needs this."""
 
     attribute_tokens: bool = False
     """Whether to compute per-token gradients instead of per-example.
@@ -245,25 +424,9 @@ class IndexConfig:
         """Temporary path to use while writing build artifacts."""
         return Path(self.run_path + ".part")
 
-    def __post_init__(self):
-        if isinstance(self.data, dict):
-            self.data = DataConfig(**self.data)
-
-        if isinstance(self.attention, dict):
-            self.attention = AttentionConfig(**self.attention)
-
-        if isinstance(self.distributed, dict):
-            self.distributed = DistributedConfig(**self.distributed)
-
-        if self.use_tf32:
-            torch.backends.cuda.matmul.allow_tf32 = True
-
-        if self.set_float32_matmul_precision_high:
-            torch.set_float32_matmul_precision("high")
-
 
 @dataclass
-class QueryConfig:
+class QueryConfig(Serializable):
     """Config for querying an existing gradient index."""
 
     index: str = ""
@@ -295,7 +458,7 @@ class QueryConfig:
 
 
 @dataclass
-class PreprocessConfig:
+class PreprocessConfig(Serializable):
     """Config for gradient preprocessing, shared across build, reduce, and score."""
 
     unit_normalize: bool = False
@@ -315,7 +478,7 @@ class PreprocessConfig:
 
 
 @dataclass
-class ScoreConfig:
+class ScoreConfig(Serializable):
     """Config for querying an index on the fly."""
 
     query_path: str = ""
@@ -339,7 +502,7 @@ class ScoreConfig:
 
 
 @dataclass
-class HessianConfig:
+class HessianConfig(Serializable):
     """Config for reducing the gradients."""
 
     method: Literal["kfac", "tkfac", "shampoo"] = "kfac"
@@ -393,11 +556,29 @@ class FaissConfig:
 
 
 @dataclass
+class HessianPipelineConfig:
+    """Config for the Hessian-preconditioned influence pipeline."""
+
+    query: DataConfig = field(default_factory=DataConfig)
+    """Query dataset specification."""
+
+    lambda_damp_factor: float = 0.1
+    """Damping factor for EKFAC eigenvalue correction."""
+
+    resume: bool = False
+    """Skip pipeline steps whose output directory already exists."""
+
+
+@dataclass
 class TrackstarConfig:
     """Config for the trackstar pipeline query dataset."""
 
     query: DataConfig = field(default_factory=DataConfig)
     """Query dataset specification."""
+
+    preprocess_cfg: PreprocessConfig = field(default_factory=PreprocessConfig)
+
+    score_cfg: ScoreConfig = field(default_factory=ScoreConfig)
 
     target_downweight_components: int = 1000
     """Number of gradient components to downweight via automatic lambda

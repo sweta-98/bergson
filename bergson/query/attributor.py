@@ -71,10 +71,10 @@ class Attributor:
         # Precompute preconditioners
         self.h_inv: dict[str, Tensor] = {}
         for name, H in self.processor.preconditioners.items():
-            if "two-sided":
+            if self.precondition == "two-sided":
                 # Two-sided: precompute H^(-1) for two-sided application
                 self.h_inv[name] = damped_psd_power(H, power=-0.5).to(device)
-            elif "one-sided":
+            elif self.precondition == "one-sided":
                 # One-sided: precompute H^(-1) for query-side application in search()
                 self.h_inv[name] = damped_psd_power(H, power=-1.0).to(device)
 
@@ -87,7 +87,7 @@ class Attributor:
             )
             faiss_path = index_path / faiss_index_name
 
-            if not (faiss_path / "config.json").exists():
+            if not (faiss_path / "config.yaml").exists():
                 FaissIndex.create_index(
                     index_path,
                     faiss_path,

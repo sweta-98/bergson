@@ -2,45 +2,33 @@ import torch
 import torch.distributed as dist
 from datasets import Dataset
 
+from ..data import pad_and_tensor
+
 
 class DataStream:
     def __init__(
         self,
         dataset: Dataset,
-        processor,
         batch_size: int,
-        num_batches: int = 0,
         *,
         device: torch.device | str = "cpu",
         input_key: str = "text",
-        max_length: int = 256,
+        weight_shape: tuple[int, ...] | None = None,
     ):
-        self.dataset = dataset
-        self.processor = processor
-        self.input_key = input_key
-        self.max_length = max_length
-
         self.batch_size = batch_size
-        self.device = device
-        self.num_batches = num_batches or len(self.dataset) // self.batch_size
+        self.dataset = dataset
+        self.device = torch.device(device)
+        self.input_key = input_key
+        self.n = len(dataset)
+        self.num_batches = self.n // batch_size
+
+        # If a shape isn't provided, assume that each sequence contains one document
+        if weight_shape is None:
+            weight_shape = (self.n,)
 
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
-        if self.batch_size % self.world_size != 0:
-            raise ValueError(
-                f"Batch size {self.batch_size} must be divisible by world size "
-                f"{self.world_size}"
-            )
-
-        needed = self.batch_size * self.num_batches
-        assert len(self.dataset) >= needed, (
-            f"Dataset has {len(self.dataset)} examples but {self.num_batches} "
-            f"batches of size {self.batch_size} require {needed}. "
-            f"Pass a larger split or reduce --num_batches."
-        )
-
-        n = self.batch_size * self.num_batches
-        self.weights = torch.nn.Parameter(torch.ones(n, device=device))
+        self.weights = torch.nn.Parameter(torch.ones(*weight_shape, device=device))
 
     @property
     def requires_grad(self) -> bool:
@@ -51,43 +39,43 @@ class DataStream:
         self.weights.requires_grad = value
 
     def __getitem__(self, i: int) -> dict:
-        if i < 0 or i >= self.num_batches:
+        if i < 0 or i >= len(self):
             raise IndexError("DataStream index out of range")
 
-        # Fetch only this rank's interleaved slice of the batch directly from the
-        # dataset, avoiding tokenizing examples that will just be discarded.
-        indices = list(
-            range(
-                i * self.batch_size + self.rank,
-                (i + 1) * self.batch_size,
-                self.world_size,
-            )
+        rng = range(
+            i * self.batch_size,
+            min((i + 1) * self.batch_size, len(self.dataset)),
         )
-        raw = self.dataset[indices]
+        indices = list(rng)[self.rank :: self.world_size]
 
-        # padding="max_length" ensures uniform shape across ranks without needing
-        # to process all ranks' examples together.
-        x = self.processor(
-            raw[self.input_key],
-            max_length=self.max_length,
-            padding="max_length",
-            return_tensors="pt",
-            truncation=True,
+        batch = self.dataset[indices]
+        x, y, valid_mask = pad_and_tensor(
+            batch["input_ids"],
+            labels=batch.get("labels"),
+            device=self.device,
         )
-        x["labels"] = x["input_ids"]
-        x["example_weight"] = self.weights[
-            i * self.batch_size
-            + self.rank : (i + 1) * self.batch_size : self.world_size
-        ]
-        return {k: v.to(self.device) for k, v in x.items()}
+        # If the weights are 1D, we assume they correspond to documents and look for
+        # "doc_ids" in the batch to index them. If they're 2D, they correspond to tokens
+        if self.weights.ndim == 2:
+            # Truncate to the max sequence length in the batch to avoid indexing errors
+            indices = (indices, slice(None, x.shape[1]))
+        elif "doc_ids" in batch:
+            indices = torch.tensor(batch["doc_ids"], device=self.device)
+
+        return {
+            "input_ids": x,
+            "labels": y,
+            "example_weight": self.weights[indices],
+            "valid_mask": valid_mask,
+        }
 
     def __iter__(self):
-        for i in range(self.num_batches):
+        for i in range(len(self)):
             yield self[i]
 
     def __len__(self):
         return self.num_batches
 
     def __reversed__(self):
-        for i in reversed(range(self.num_batches)):
+        for i in reversed(range(len(self))):
             yield self[i]

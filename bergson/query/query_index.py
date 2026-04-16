@@ -1,5 +1,4 @@
 import csv
-import json
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -57,8 +56,7 @@ def query(
         Configuration describing the index path, HF model to load, and dataset field
         used to print the retrieved documents.
     """
-    with open(Path(query_cfg.index) / "index_config.json", "r") as f:
-        index_cfg = IndexConfig(**json.load(f))
+    index_cfg = IndexConfig.load_yaml(Path(query_cfg.index) / "index_config.yaml")
 
     if index_cfg.debug:
         setup_reproducibility()
@@ -84,7 +82,7 @@ def query(
         index_cfg.data.dataset,
         index_cfg.data.split,
         index_cfg.data.subset,
-        index_cfg.data.data_args,
+        index_cfg.data.data_kwargs,
     )
 
     faiss_cfg = FaissConfig() if query_cfg.faiss else None

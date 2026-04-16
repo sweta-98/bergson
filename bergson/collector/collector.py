@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset
 from jaxtyping import Float
+from peft import PeftModel
 from torch import Tensor
 from torch.profiler import (
     ProfilerActivity,
@@ -157,7 +158,9 @@ class HookCollectorBase(ContextDecorator, ABC):
             if target_modules is not None and name not in target_modules:
                 continue
 
-            if filter_modules and fnmatchcase(name, filter_modules):
+            if filter_modules and any(
+                fnmatchcase(name, pat.strip()) for pat in filter_modules.split(",")
+            ):
                 continue
 
             collect_bias = getattr(layer, "bias", None) is not None and include_bias
@@ -594,7 +597,7 @@ class CollectorComputer:
 
     def __init__(
         self,
-        model: PreTrainedModel,
+        model: PreTrainedModel | PeftModel,
         data: Dataset,
         *,
         collector: HookCollectorBase,
@@ -615,7 +618,7 @@ class CollectorComputer:
         """
         # Model
         self.model = model
-        self.device = model.device
+        self.device = torch.device(model.device)  # type: ignore[attr-defined]
 
         # Data
         self.data = data
@@ -639,7 +642,11 @@ class CollectorComputer:
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
 
-        self.logger.info("Computing with collector for target modules.")
+        self.logger.info(
+            "Tracking %d modules: %s",
+            len(collector.target_info),
+            list(collector.target_info.keys()),
+        )
 
     def _setup_profiler(self):
         """Set up profiler if profiling is enabled."""
@@ -679,7 +686,7 @@ class CollectorComputer:
         Args:
             desc: Optional description string for the tqdm progress bar.
         """
-        total_processed = torch.tensor(0, device=self.model.device)
+        total_processed = torch.tensor(0, device=self.device)
         prof = self._setup_profiler()
         step = 0
         with prof:
@@ -694,7 +701,7 @@ class CollectorComputer:
                 x, y, valid_mask = pad_and_tensor(
                     batch["input_ids"],
                     labels=batch.get("labels"),
-                    device=self.model.device,
+                    device=self.device,
                 )
                 total_processed += valid_mask.sum()
 
