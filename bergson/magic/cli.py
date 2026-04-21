@@ -360,14 +360,13 @@ def worker(
     diffs = []
     score_sums = []
 
-    if run_cfg.subset_jitter_std > 0.0:
+    if run_cfg.subset_strategy == "random":
         rng = torch.Generator().manual_seed(run_cfg.seed)
-
-        scale = scores.std()
-        jitter = torch.randn_like(scores, generator=rng) * run_cfg.subset_jitter_std
-        perm = torch.argsort(scores + jitter * scale)
-    else:
+        perm = torch.randperm(len(scores), generator=rng)
+    elif run_cfg.subset_strategy == "sorted":
         perm = scores.argsort()
+    else:
+        raise ValueError(f"Unsupported subset strategy: {run_cfg.subset_strategy}")
 
     # Shuffle the order of the subsets so that the estimate of correlation on the
     # progress bar is unbiased. This does not change the final correlation since all

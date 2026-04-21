@@ -34,8 +34,8 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     space is not a concern.
     """
 
-    subset_jitter_std: float = 0.0
-    """Standard deviation of Gaussian noise added to scores for subset selection."""
+    subset_strategy: Literal["random", "sorted"] = "sorted"
+    """Strategy for selecting leave-k-out subsets for validation."""
 
     num_subsets: int = 100
     """Number of leave-k-out subsets for Spearman correlation."""
