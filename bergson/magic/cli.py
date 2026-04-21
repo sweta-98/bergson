@@ -28,6 +28,7 @@ from ..utils.worker_utils import (
 from .data_stream import DataStream
 from .dtensor_patch import apply_dtensor_patch
 from .fsdp import simple_fsdp
+from .modula_optim import modula_adamw
 from .optim import muon
 from .trainer import BackwardState, Trainer, TrainerState
 
@@ -201,6 +202,22 @@ def prepare_trainer(
             opt = torchopt.sgd(
                 schedule,
                 momentum=cfg.adam_beta1,
+                weight_decay=cfg.weight_decay,
+            )
+        case "modula":
+            spec_fn = getattr(model, "modula_optim_spec", None)
+            if spec_fn is None:
+                raise ValueError(
+                    "optimizer='modula' requires model.modula_optim_spec() "
+                    "(see bergson.models.modula_gpt.ModulaGPTForCausalLM). "
+                    f"Got model type: {type(model).__name__}"
+                )
+            opt = modula_adamw(
+                schedule,
+                atom_spec=spec_fn(),
+                beta1=cfg.adam_beta1,
+                beta2=cfg.adam_beta2,
+                eps_root=cfg.eps_root,
                 weight_decay=cfg.weight_decay,
             )
         case other:

@@ -272,9 +272,10 @@ class TrainingConfig(ModelConfig, Serializable):
     eps_root: float = 1e-8
     """Epsilon root for AdamW optimizer."""
 
-    optimizer: Literal["adamw", "muon", "sgd"] = "adamw"
+    optimizer: Literal["adamw", "muon", "sgd", "modula"] = "adamw"
     """Optimizer to use for the training steps. Muon is an efficient
-    optimizer that can reduce memory usage and speed up training."""
+    optimizer that can reduce memory usage and speed up training. "modula"
+    requires the model to expose modula_optim_spec() (see ModulaGPTForCausalLM)."""
 
     weight_decay: float = 0.01
     """Weight decay coefficient for AdamW and Muon."""

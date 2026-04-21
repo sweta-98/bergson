@@ -325,7 +325,7 @@ def max_tokens_for_model(tokenizer, model_str: str, revision: str | None) -> int
     except ValueError:
         pass
 
-    model_cfg = AutoConfig.from_pretrained(model_str, revision=revision)
+    model_cfg = AutoConfig.from_pretrained(model_str, revision=revision, trust_remote_code=True)
     model_max_length = getattr(tokenizer, "model_max_length", BIG_NUM)
     max_pos_emb = getattr(model_cfg, "max_position_embeddings", BIG_NUM)
     return min(model_max_length, max_pos_emb)
