@@ -17,7 +17,7 @@ def test_large_gradients_build(tmp_path: Path, dataset):
     config = AutoConfig.from_pretrained(
         "EleutherAI/pythia-1.4b", trust_remote_code=True
     )
-    model = AutoModelForCausalLM.from_config(config)
+    model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.float32)
     collector = GradientCollector(
         model=model.base_model, data=dataset, cfg=IndexConfig(run_path=str(tmp_path))
     )

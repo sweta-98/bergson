@@ -70,10 +70,6 @@ class GradientCollectorCallback(TrainerCallback):
         self.use_optimizer_state = use_optimizer_state
         self.order: list[dict] | None = [] if track_order else None
 
-        self.eval_grad_buffers: dict[str, np.memmap] = {}
-        self.eval_step_idxs: dict[str, int] = {}
-        self.eval_indices: dict[str, list[int]] = {}
-
         self.mod_grads = {}
         self.batch_indices: Tensor | None = None
 
@@ -137,7 +133,6 @@ class GradientCollectorCallback(TrainerCallback):
         state: TrainerState,
         control: TrainerControl,
         *,
-        eval_dataloader: DataLoader | dict[str, DataLoader],
         train_dataloader: DataLoader,
         **kwargs,
     ):
@@ -160,26 +155,6 @@ class GradientCollectorCallback(TrainerCallback):
         )
         self.train_step_idx = 0
 
-        # Set up the gradient buffers for the evaluation datasets
-        if eval_dataloader is None:
-            return
-        elif isinstance(eval_dataloader, dict):
-            eval_datasets = eval_dataloader
-        else:
-            eval_datasets = {"eval": eval_dataloader}
-
-        for dataset_name, dataloader in eval_datasets.items():
-            self.eval_grad_buffers[dataset_name] = create_index(
-                self.path / (dataset_name + epoch_suffix),
-                num_grads=len(dataloader),
-                grad_sizes=self.grad_sizes,
-                dtype=self.dtype,
-            )
-            self.eval_step_idxs[dataset_name] = 0
-            self.eval_indices[dataset_name] = [
-                i.item() for batch in dataloader for i in batch["_idx"]
-            ]
-
     def on_epoch_end(
         self,
         args: TrainingArguments,
@@ -198,12 +173,14 @@ class GradientCollectorCallback(TrainerCallback):
 
         # Ensure the gradients are written to disk
         self.train_grad_buffer.flush()
-        for eval_grad_buffer in self.eval_grad_buffers.values():
-            eval_grad_buffer.flush()
 
-    def on_forward_begin(self, _: torch.nn.Module, args, kwargs: dict):
-        # Record the original indices of this batch
-        self.batch_indices = kwargs.pop("_idx").to("cpu", non_blocking=True)
+    def on_forward_begin(self, module: torch.nn.Module, args, kwargs: dict):
+        # Always pop _idx to prevent it from being passed to the model
+        idx = kwargs.pop("_idx", None)
+
+        if module.training and idx is not None:
+            self.batch_indices = idx.to("cpu", non_blocking=True)
+
         return args, kwargs
 
     def on_module_backward(self, name: str, g: Tensor):
@@ -238,7 +215,6 @@ class GradientCollectorCallback(TrainerCallback):
         **kwargs,
     ):
         self.on_substep_end(args, state, control)
-        print("Step end")
 
         # Record training order if enabled
         if self.order is not None:
@@ -270,7 +246,7 @@ class GradientCollectorCallback(TrainerCallback):
             for name, param in model.named_parameters()
             if param.requires_grad
         }
-        normalizers: dict[str, AdafactorNormalizer] = {}
+        normalizers: dict[str, AdafactorNormalizer | AdamNormalizer] = {}
 
         assert self.collector is not None
         proc = self.collector.processor
@@ -278,38 +254,80 @@ class GradientCollectorCallback(TrainerCallback):
 
         # Read normalizers off of the optimizer state. We need to figure out
         # what type of optimizer this is first.
+        # Collect references to both weight and bias second moments per layer
+        layer_second_moments: dict[str, dict[str, Tensor]] = {}
+
         for group in optimizer.param_groups:
-            lr_sqrt = group["lr"] ** 0.5
+            group_lr = group["lr"]
 
             for param in group["params"]:
-                name = param_to_name[param].removesuffix(".weight")
-                if name not in self.collector.target_info:
+                param_name = param_to_name[param]
+
+                # Extract layer name (remove .weight or .bias suffix)
+                if param_name.endswith(".weight"):
+                    param_type = "weight"
+                    layer_name = param_name.removesuffix(".weight")
+                elif param_name.endswith(".bias"):
+                    param_type = "bias"
+                    layer_name = param_name.removesuffix(".bias")
+                else:
+                    continue
+
+                if layer_name not in self.collector.target_info:
                     continue
 
                 p_state = optimizer.state[param]
 
-                # Adam-like optimizer
-                if (eas := p_state.get("exp_avg_sq")) is not None:
-                    norm = AdamNormalizer(eas).to_adafactor()
+                # Initialize layer dict if needed, storing this group's learning rate
+                if layer_name not in layer_second_moments:
+                    layer_second_moments[layer_name] = {"lr": group_lr}
 
-                # Adafactor-like optimizer
-                elif (vr := p_state.get("exp_avg_sq_row")) is not None:
+                # Check for Adafactor FIRST (more specific than Adam)
+                # Adafactor-like optimizer: weights have factorized moments
+                if (vr := p_state.get("exp_avg_sq_row")) is not None:
                     vc = p_state.get("exp_avg_sq_col")
-                    norm = AdafactorNormalizer(vr, vc)
-                else:
-                    continue
+                    if param_type == "weight":
+                        # Factorized second moments for weights
+                        layer_second_moments[layer_name]["row"] = vr
+                        layer_second_moments[layer_name]["col"] = vc
+                    elif param_type == "bias":
+                        # Adafactor stores bias as regular exp_avg_sq
+                        bias_eas = p_state.get("exp_avg_sq")
+                        if bias_eas is not None:
+                            layer_second_moments[layer_name]["bias"] = bias_eas
+                # Adam-like optimizer: has exp_avg_sq for both weight and bias
+                elif (eas := p_state.get("exp_avg_sq")) is not None:
+                    layer_second_moments[layer_name][param_type] = eas
 
-                # Scale the gradient by the current learning rate. It's factorized
-                # so we multiply each factor by the square root of the LR.
-                norm.row *= lr_sqrt
-                norm.col *= lr_sqrt
-                normalizers[name] = norm
+                # Build normalizers from collected second moments
+                for layer_name, moments in layer_second_moments.items():
+                    lr = moments["lr"]
+
+                    lr_sq = lr**2
+
+                    # Adam-like: has weight exp_avg_sq
+                    if "weight" in moments:
+                        weight_eas = moments["weight"] / lr_sq
+                        bias_eas = moments.get("bias")
+                        bias_eas = bias_eas / lr_sq if bias_eas is not None else None
+
+                        norm = AdamNormalizer(weight_eas, bias_eas)
+
+                    # Adafactor-like: has row/col factorization
+                    elif "row" in moments and "col" in moments:
+                        row = moments["row"] / lr_sq
+                        col = moments["col"] / lr_sq
+                        bias_eas = moments.get("bias")
+                        bias_eas = bias_eas / lr_sq if bias_eas is not None else None
+
+                        norm = AdafactorNormalizer(row, col, bias_eas)
+                    else:
+                        # No weight moments found - skip this layer
+                        continue
+
+                    normalizers[layer_name] = norm
 
         proc.normalizers = normalizers
-
-    def on_prediction_step(self, args, state, control, **kwargs):
-        dataset_name = kwargs["inputs"]["dataset_name"]
-        self.write_grads(self.eval_grad_buffers[dataset_name])
 
     def on_train_end(
         self,

@@ -18,6 +18,7 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -28,7 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Run Claude Code
         id: claude
@@ -47,6 +48,7 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           claude_args: >-
+            --max-turns 20
             --allowedTools "Read,Write,Edit,Glob,Grep,
             Bash(git checkout:*),
             Bash(git branch:*),
@@ -63,4 +65,5 @@ jobs:
             Bash(gh api:*),
             Bash(pytest:*),
             Bash(python:*),
-            Bash(pip:*)"
+            Bash(pip:*),
+            Bash(pip install:*)"

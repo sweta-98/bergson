@@ -47,6 +47,23 @@ Benchmarks
 
    benchmarks/index
 
+Preprocessing
+-------------
+
+.. toctree::
+   :maxdepth: 2
+
+   preprocessing
+
+Experiments
+-----------
+
+.. toctree::
+   :maxdepth: 2
+
+   experiments
+   magic
+
 API Reference
 --------------
 
@@ -58,8 +75,23 @@ API Reference
 .. toctree::
    :maxdepth: 2
 
+   pipeline
+   trackstar
+
+.. toctree::
+   :maxdepth: 2
+
    api
    utils
+
+Experiments
+-----------
+
+.. toctree::
+   :maxdepth: 2
+
+   experiments
+   magic
 
 
 Content Index

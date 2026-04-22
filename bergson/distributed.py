@@ -1,12 +1,41 @@
+import io
 import os
 import socket
-from typing import Any, Callable
+from contextlib import nullcontext, redirect_stdout
+from typing import Any, Callable, Concatenate, Mapping, ParamSpec
 
+import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
 
-from .config import DistributedConfig
+from bergson.config import DistributedConfig
+
+
+def grad_tree(
+    outputs: torch.Tensor,
+    inputs: Mapping[str, torch.Tensor],
+    grad_outputs: dict[str, torch.Tensor] | None = None,
+    **kwargs,
+) -> dict[str, torch.Tensor]:
+    """Compute grads of loss wrt inputs dict, returning a dict with the same keys.
+
+    Args:
+        outputs: The output tensor to compute gradients for.
+        inputs: A dict of input tensors to compute gradients with respect to.
+        grad_outputs: Optional dict of gradient outputs for each output tensor.
+        **kwargs: Additional keyword arguments to pass to torch.autograd.grad.
+    """
+    if grad_outputs is not None:
+        kwargs["grad_outputs"] = list(grad_outputs.values())
+
+    grads = torch.autograd.grad(
+        outputs,
+        list(inputs.values()),
+        **kwargs,
+        allow_unused=True,
+    )
+    return dict(zip(inputs, grads))
 
 
 def dist_worker(
@@ -14,7 +43,9 @@ def dist_worker(
     *worker_args,
 ):
     try:
-        worker(*worker_args)
+        rank = int(os.environ.get("RANK", 0))
+        with nullcontext() if rank == 0 else redirect_stdout(io.StringIO()):
+            worker(*worker_args)
     finally:
         if dist.is_initialized():
             try:
@@ -87,3 +118,47 @@ def launch_distributed_run(
         finally:
             if ctx is not None:
                 ctx.close()  # Kill any processes that are still running
+
+
+Args = ParamSpec("Args")
+Worker = Callable[Concatenate[int, int, int, Args], None]
+"""A worker function for distributed training."""
+
+
+def simple_dist_worker(rank: int, world_size: int, dataset, worker: Worker):
+    try:
+        worker(rank, world_size, dataset)
+    finally:
+        dist.destroy_process_group()
+
+
+def dist_main(dataset, worker: Worker):
+    world_size = torch.cuda.device_count()
+    if world_size <= 1:
+        # Run the worker directly if no distributed training is needed. This is great
+        # for debugging purposes.
+        worker(0, 1, dataset)
+    else:
+        # Set up multiprocessing and distributed training
+        mp.set_sharing_strategy("file_system")
+
+        # Find an available port for distributed training
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            _, port = s.getsockname()
+
+        ctx = start_processes(
+            "train",
+            simple_dist_worker,
+            args={i: (i, world_size, dataset, worker) for i in range(world_size)},
+            envs={
+                i: {
+                    "LOCAL_RANK": str(i),
+                    "MASTER_ADDR": "localhost",
+                    "MASTER_PORT": str(port),
+                }
+                for i in range(world_size)
+            },
+            logs_specs=DefaultLogsSpecs(),
+        )
+        ctx.wait()

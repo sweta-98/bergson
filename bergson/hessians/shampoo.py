@@ -62,7 +62,6 @@ class ShampooCollector(HookCollectorBase):
         # g: [N, S, O], mask: [N, S] -> select valid positions
         g_bo = g[mask]  # [num_valid, O]
         a_bi = module._inputs
-        del module._inputs
         assert isinstance(a_bi, Tensor)
 
         grad_oi = torch.einsum("bi,bo->oi", a_bi, g_bo)

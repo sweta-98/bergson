@@ -10,21 +10,28 @@ CLI Benchmark
    :alt: CLI Benchmark
    :align: center
 
-1 GPU Projection Comparison
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Programmatic Benchmark
+~~~~~~~~~~~~~~~~~~~~~~
 
-.. image:: projection_comparison.png
-   :alt: 1 GPU Projection Comparison
+.. image:: programmatic_benchmark_1x_NVIDIA_GH200_120GB.png
+   :alt: Programmatic Benchmark
    :align: center
 
-In-Memory Benchmark
-~~~~~~~~~~~~~~~~~~~
+Projection Comparison
+~~~~~~~~~~~~~~~~~~~~~
 
-.. image:: inmem_benchmark_NVIDIA_GH200_120GB_NVIDIA_H100_80GB_HBM3.png
-   :alt: In-Memory Benchmark
+.. image:: projection_comparison_4x_NVIDIA_GH200_120GB.png
+   :alt: Projection Comparison
+   :align: center
+
+Factor Computation Overhead
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. image:: factor_benchmark_10k.png
+   :alt: Factor Computation Overhead
    :align: center
 
 Running Your Own Benchmarks
 ----------------------------
 
-To generate benchmarks for your specific setup, you can use the shell scripts in `benchmarks`.
+To generate benchmarks for your specific setup, see the scripts in ``benchmarks/``.

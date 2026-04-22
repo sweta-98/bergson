@@ -11,7 +11,7 @@ def model():
     torch.cuda.manual_seed(42)
 
     config = AutoConfig.from_pretrained("trl-internal-testing/tiny-Phi3ForCausalLM")
-    return AutoModelForCausalLM.from_config(config)
+    return AutoModelForCausalLM.from_config(config, torch_dtype=torch.float32)
 
 
 @pytest.fixture
