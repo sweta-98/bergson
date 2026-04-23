@@ -440,7 +440,6 @@ class HookCollectorBase(ContextDecorator, ABC):
 
         if isinstance(normalizer, AdamNormalizer):
             if self.processor.include_bias:
-                # Clone g before normalize_bias since it mutates in-place (div_)
                 if self.attribute_tokens:
                     bias_grad = normalizer.normalize_bias(g)  # [N, S, O]
                 else:
