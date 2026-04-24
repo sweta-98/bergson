@@ -24,6 +24,7 @@ dependencies = [
     "torch",
     "torchopt",
     "transformers",
+    "bitsandbytes"
 ]
 version = "0.9.1"
 [project.optional-dependencies]
