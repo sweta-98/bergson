@@ -169,6 +169,32 @@ def prepare_trainer(
     return trainer, fwd_state, model
 
 
+def attach_doc_ids_if_missing(dataset: Dataset) -> Dataset:
+    """Ensure the dataset has a ``doc_ids`` column.
+
+    ``doc_ids`` is a per-row list of length ``max_seq_len`` giving the
+    document id of every token position in that row. Chunked/packed
+    datasets already have it (multiple docs may share a chunk). For
+    one-doc-per-row datasets the column is synthesized as
+    ``[row_index] * max_seq_len`` so the two cases look identical to
+    downstream code (DataStream indexing, per-doc aggregation via
+    ``scatter_add(doc_ids, scores)``).
+
+    No-op if ``doc_ids`` is already present.
+    """
+    if "doc_ids" in dataset.column_names:
+        return dataset
+    if "length" in dataset.column_names:
+        seq_len = max(dataset["length"])
+    else:
+        seq_len = max(len(row) for row in dataset["input_ids"])
+    return dataset.map(
+        lambda _, idx: {"doc_ids": [idx] * seq_len},
+        with_indices=True,
+        desc="Attaching doc_ids",
+    )
+
+
 def pad_dataset_to_batch_size(
     dataset: Dataset,
     batch_size: int,
@@ -389,6 +415,17 @@ def worker(
         torch.save(scores, score_path)
         print(f"Saved attribution scores to {score_path}")
 
+        # Per-token scores are indexed by (shuffled_chunk_idx, token_idx).
+        # Save doc_ids alongside so downstream can aggregate per-doc with
+        # one scatter_add and no reference to the raw dataset or seed.
+        if scores.ndim == 2:
+            doc_ids = torch.tensor(train_dataset["doc_ids"])
+            if pad_count:
+                doc_ids = doc_ids[:-pad_count]
+            doc_ids_path = os.path.join(run_cfg.run_path, "doc_ids.pt")
+            torch.save(doc_ids, doc_ids_path)
+            print(f"Saved doc_ids to {doc_ids_path}")
+
     stream.requires_grad = False
 
     # Validate attribution scores via leave-subset-out retraining
@@ -511,6 +548,7 @@ def run_magic(run_cfg: MagicConfig):
             time.sleep(0.5)
 
     train_ds, train_n = setup_data_pipeline(run_cfg)
+    train_ds = attach_doc_ids_if_missing(train_ds)
 
     # Shuffle the train_ds with the seed.
     train_ds = train_ds.shuffle(seed=run_cfg.seed)
