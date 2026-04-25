@@ -1,7 +1,8 @@
-"""Benchmark Bergson using CLI subprocess calls (build, reduce, score)."""
+"""Benchmark Bergson using CLI subprocess calls (build, score)."""
 
 from __future__ import annotations
 
+import yaml
 import json
 import subprocess
 import sys
@@ -41,8 +42,9 @@ class CLIRunRecord:
     dataset: str
     batch_size: int
     build_seconds: float | None
-    reduce_seconds: float | None
     score_seconds: float | None
+    ekfac_seconds: float | None
+    trackstar_seconds: float | None
     total_runtime_seconds: float | None
     start_time: str
     end_time: str
@@ -57,6 +59,8 @@ class CLIRunRecord:
     # Peak VRAM (MB) per phase, measured via nvidia-smi polling
     build_peak_vram_mb: float | None = None
     score_peak_vram_mb: float | None = None
+    ekfac_peak_vram_mb: float | None = None
+    trackstar_peak_vram_mb: float | None = None
 
 
 @dataclass
@@ -387,8 +391,8 @@ class Run:
             )
 
         # Read the determined batch size from the query index
-        with open(query_index_path / "index_config.json", "r") as f:
-            query_cfg = IndexConfig(**json.load(f))
+        with open(query_index_path / "index_config.yaml", "r") as f:
+            query_cfg = IndexConfig(**yaml.safe_load(f))
             determined_batch_size = query_cfg.token_batch_size
         print(
             f"Using token_batch_size: {determined_batch_size}"
@@ -444,6 +448,7 @@ class Run:
                 )
             )
             if not success:
+                print(f"Warning: Build step failed: {err}")
                 raise RuntimeError(err)
 
             # Step 2: Score using 1-sequence query index (timed)
@@ -468,8 +473,57 @@ class Run:
             )
             if not success:
                 print(f"Warning: Score step failed: {err}")
+                print(score_cmd)
                 score_time = None
 
+            # Step 3: EKFAC build and score (timed)
+            new_common_args = common_args
+            #substitute dataset by data.dataset and truncation by data.truncation
+            for i, arg in enumerate(new_common_args):
+                if arg == "--dataset":
+                    new_common_args[i] = "--data.dataset"
+                elif arg == "--truncation":
+                    new_common_args[i] = "--data.truncation"
+
+            ekfac_cmd = [
+                "bergson",
+                "ekfac",
+                str(benchmark_path / "ekfac"),
+                "--hessian_dtype",
+                "bf16",
+                "--lambda_damp_factor",
+                "0.1",
+                *new_common_args,
+            ]
+
+            success, ekfac_time, err, ekfac_peak_vram_mb = run_cli_command(
+                ekfac_cmd,
+                "EKFAC",
+                monitor_vram=True,
+                num_gpus=self.run_cfg.num_gpus,
+            )
+            if not success:
+                print(f"Warning: EKFAC step failed: {err}")
+                ekfac_time = None
+
+            # Step 4: TrackStar build and score (timed)
+            trackstar_cmd = [
+                "bergson",
+                "trackstar",
+                str(benchmark_path / "trackstar"),
+                *new_common_args,
+            ]
+            
+            success, trackstar_time, err, trackstar_peak_vram_mb = run_cli_command(
+                trackstar_cmd,
+                "TrackStar",
+                monitor_vram=True,
+                num_gpus=self.run_cfg.num_gpus,
+            )
+            if not success:
+                print(f"Warning: TrackStar step failed: {err}")
+                trackstar_time = None
+    
         except Exception as exc:
             status = "error"
             error_message = repr(exc)
@@ -481,8 +535,8 @@ class Run:
         end_wall = timestamp()
 
         # Load index config
-        with open(index_path / "index_config.json", "r") as f:
-            index_cfg = IndexConfig(**json.load(f))
+        with open(index_path / "index_config.yaml", "r") as f:
+            index_cfg = IndexConfig(**yaml.safe_load(f))
             token_batch_size = index_cfg.token_batch_size
 
         record = CLIRunRecord(
@@ -496,9 +550,9 @@ class Run:
             dataset=self.run_cfg.dataset,
             batch_size=self.run_cfg.token_batch_size,
             build_seconds=build_time,
-            # Reduce step removed - same runtime as score
-            reduce_seconds=None,
             score_seconds=score_time,
+            ekfac_seconds=ekfac_time,
+            trackstar_seconds=trackstar_time,
             total_runtime_seconds=runtime,
             start_time=start_wall,
             end_time=end_wall,
@@ -511,6 +565,8 @@ class Run:
             projection_dim=self.run_cfg.projection_dim,
             build_peak_vram_mb=build_peak_vram_mb,
             score_peak_vram_mb=score_peak_vram_mb,
+            ekfac_peak_vram_mb=ekfac_peak_vram_mb,
+            trackstar_peak_vram_mb=trackstar_peak_vram_mb,
         )
         save_record(benchmark_path, record, "benchmark_cli.json")
 
@@ -522,7 +578,7 @@ class Run:
 
 @dataclass
 class Main:
-    """Benchmark Bergson CLI (build, reduce, score)."""
+    """Benchmark Bergson CLI (build, score)."""
 
     command: Run
 
@@ -535,7 +591,7 @@ def get_parser() -> ArgumentParser:
     """Get the argument parser. Used for documentation generation."""
     parser = ArgumentParser(
         conflict_resolution=ConflictResolution.EXPLICIT,
-        description="Benchmark Bergson CLI (build, reduce, score)",
+        description="Benchmark Bergson CLI (build, score)",
     )
     parser.add_arguments(Main, dest="prog")
     return parser
