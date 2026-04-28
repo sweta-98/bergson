@@ -499,7 +499,7 @@ class ScoreConfig(Serializable):
 class HessianConfig(Serializable):
     """Config for reducing the gradients."""
 
-    method: Literal["kfac", "tkfac", "shampoo"] = "kfac"
+    method: Literal["kfac", "tkfac", "shampoo", "autocorrelation"] = "autocorrelation"
     """Method for approximating the Hessian."""
 
     ev_correction: bool = False

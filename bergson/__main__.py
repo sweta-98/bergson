@@ -77,8 +77,15 @@ class Hessian(Serializable):
 
     def execute(self):
         """Compute Hessian approximation."""
+
         validate_run_path(self.index_cfg)
-        approximate_hessians(self.index_cfg, self.hessian_cfg)
+
+        if self.hessian_cfg.method == "autocorrelation":
+            self.skip_index = True
+            self.skip_preconditioners = False
+            build(self.index_cfg, PreprocessConfig())
+        else:
+            approximate_hessians(self.index_cfg, self.hessian_cfg)
 
 
 @dataclass
@@ -88,18 +95,6 @@ class Magic(MagicConfig):
     def execute(self):
         """Run MAGIC attribution."""
         run_magic(self)
-
-
-@dataclass
-class Preconditioners(IndexConfig):
-    """Compute normalizers and preconditioners without gradient collection."""
-
-    def execute(self):
-        """Compute normalizers and preconditioners."""
-        self.skip_index = True
-        self.skip_preconditioners = False
-        validate_run_path(self)
-        build(self, PreprocessConfig())
 
 
 @dataclass
@@ -185,7 +180,6 @@ class Main:
         Ekfac,
         Hessian,
         Magic,
-        Preconditioners,
         Query,
         Reduce,
         Score,
