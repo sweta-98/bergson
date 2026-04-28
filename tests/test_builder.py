@@ -60,7 +60,7 @@ def _fake_dist(rank):
     return patch("bergson.builder.dist", mock)
 
 
-def _inject_identity_preconditioner(builder, grad_sizes, device="cuda:0"):
+def _inject_identity_hessian(builder, grad_sizes, device="cuda:0"):
     """Set h_inv to identity matrices on the given device."""
     builder.h_inv = {
         name: torch.eye(dim, device=device, dtype=torch.float32)
@@ -86,12 +86,12 @@ def test_builder_multinode_rank(small_dataset, grad_sizes, tmp_path):
         Builder(small_dataset, grad_sizes, torch.float32, cfg, path=tmp_path)
 
 
-# ── Preconditioner + non-aggregation path ────────────────────────────────
+# ── Hessian + non-aggregation path ────────────────────────────────
 
 
 @requires_cuda
-def test_builder_no_agg_with_preconditioner(small_dataset, grad_sizes, tmp_path):
-    """Non-aggregation path should work when a preconditioner is active."""
+def test_builder_no_agg_with_hessian(small_dataset, grad_sizes, tmp_path):
+    """Non-aggregation path should work when a hessian is active."""
     cfg = PreprocessConfig(aggregation="none")
     builder = _make_builder(
         small_dataset,
@@ -100,7 +100,7 @@ def test_builder_no_agg_with_preconditioner(small_dataset, grad_sizes, tmp_path)
         cfg,
         path=tmp_path,
     )
-    _inject_identity_preconditioner(builder, grad_sizes)
+    _inject_identity_hessian(builder, grad_sizes)
 
     mod_grads = _make_mod_grads(grad_sizes, batch_size=2, device="cuda:0")
     builder([0, 1], mod_grads)
@@ -220,7 +220,7 @@ def test_builder_construction_with_aggregation(small_dataset, grad_sizes):
 
 @requires_cuda
 def test_disk_sequence_writes_cuda_grads(small_dataset, grad_sizes, tmp_path):
-    """Disk builder writes CUDA grads correctly (no aggregation, no precond)."""
+    """Disk builder writes CUDA grads correctly (no aggregation, no hess)."""
     cfg = PreprocessConfig(aggregation="none")
     builder = _make_builder(
         small_dataset,
@@ -305,7 +305,7 @@ def test_disk_sequence_aggregation_teardown(small_dataset, grad_sizes, tmp_path)
 
 
 @requires_cuda
-def test_inmemory_sequence_no_agg_no_precond(small_dataset, grad_sizes):
+def test_inmemory_sequence_no_agg_no_hess(small_dataset, grad_sizes):
     """In-memory sequence builder writes correct values."""
     cfg = PreprocessConfig(aggregation="none")
     builder = _make_builder(small_dataset, grad_sizes, torch.float32, cfg)
@@ -374,7 +374,7 @@ def test_unit_normalize_no_aggregation(small_dataset, grad_sizes):
     """unit_normalize=True with aggregation='none' should produce unit-norm rows."""
     cfg = PreprocessConfig(aggregation="none", unit_normalize=True)
     builder = _make_builder(small_dataset, grad_sizes, torch.float32, cfg)
-    _inject_identity_preconditioner(builder, grad_sizes)
+    _inject_identity_hessian(builder, grad_sizes)
 
     # Use non-uniform grads so norms aren't already 1
     mod_grads = {

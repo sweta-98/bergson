@@ -34,7 +34,7 @@ def _model_device(model: torch.nn.Module) -> torch.device:
     return next(model.parameters()).device
 
 
-BERGSON_FACTOR_TYPES = {"normalizer", "preconditioner", "kfac", "ekfac"}
+BERGSON_FACTOR_TYPES = {"normalizer", "hessian", "kfac", "ekfac"}
 KRONFLUENCE_FACTOR_TYPES = {"diagonal", "kfac", "ekfac"}
 DATTRI_FACTOR_TYPES = {"ekfac", "datainf", "arnoldi"}
 ALL_FACTOR_TYPES = BERGSON_FACTOR_TYPES | KRONFLUENCE_FACTOR_TYPES | DATTRI_FACTOR_TYPES
@@ -57,7 +57,7 @@ class RunConfig:
     """Method to benchmark: bergson, kronfluence, or dattri."""
 
     factor_type: str = field(positional=True)
-    """Factor type. bergson: normalizer/preconditioner/kfac/ekfac.
+    """Factor type. bergson: normalizer/hessian/kfac/ekfac.
     kronfluence: diagonal/kfac/ekfac.
     dattri: ekfac/datainf/arnoldi."""
 
@@ -74,7 +74,7 @@ class RunConfig:
     """Batch size per device for kronfluence factor computation."""
 
     projection_dim: int = 16
-    """Projection dimension for bergson preconditioner. 0 = no projection."""
+    """Projection dimension for bergson hessian. 0 = no projection."""
 
     amp_dtype: str = "bfloat16"
     """AMP dtype: float16, bfloat16, or float32."""
@@ -144,14 +144,14 @@ def _get_factor_run_path(
 # ---------------------------------------------------------------------------
 
 
-def _run_bergson_preconditioner(
+def _run_bergson_hessian(
     run_cfg: RunConfig,
     spec,
     train_tokens: int,
     run_path: Path,
     ds,
 ) -> tuple[float, float]:
-    """Run bergson preconditioner (P^T@P + eigendecomp).
+    """Run bergson hessian (P^T@P + eigendecomp).
 
     Returns (seconds, peak_mb).
     """
@@ -175,7 +175,7 @@ def _run_bergson_preconditioner(
         max_tokens=train_tokens,
         precision="bf16",
         projection_dim=run_cfg.projection_dim,
-        skip_preconditioners=False,
+        skip_hessians=False,
         skip_index=True,
     )
     Path(index_cfg.run_path).mkdir(parents=True, exist_ok=True)
@@ -199,11 +199,11 @@ def _run_bergson_preconditioner(
     )
 
     device = _model_device(model)
-    print(f"Running preconditioner over {len(batches)} batches...")
+    print(f"Running hessian over {len(batches)} batches...")
     torch.cuda.reset_peak_memory_stats(device)
     torch.cuda.synchronize(device)
     start = time.perf_counter()
-    computer.run_with_collector_hooks(desc="preconditioner")
+    computer.run_with_collector_hooks(desc="hessian")
     torch.cuda.synchronize(device)
     elapsed = time.perf_counter() - start
     peak_mb = torch.cuda.max_memory_allocated(device) / (1024**2)
@@ -242,7 +242,7 @@ def _run_bergson_kfac(
         token_batch_size=run_cfg.token_batch_size,
         max_tokens=train_tokens,
         precision="bf16",
-        skip_preconditioners=True,
+        skip_hessians=True,
         skip_index=True,
     )
     # Append method subdir like approximate_hessians does
@@ -593,8 +593,8 @@ class Run:
         try:
             result: tuple[float, float] | None = None
             if run_cfg.method == "bergson":
-                if run_cfg.factor_type == "preconditioner":
-                    result = _run_bergson_preconditioner(
+                if run_cfg.factor_type == "hessian":
+                    result = _run_bergson_hessian(
                         run_cfg, spec, train_tokens, run_path, ds
                     )
                 elif run_cfg.factor_type == "kfac":

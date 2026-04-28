@@ -1,19 +1,19 @@
-# Preconditioner Analysis
+# Hessian Analysis
 
-Analyze and compare preconditioner strategies for style suppression. Preconditioners transform the gradient space to downweight certain directions (e.g., style) before computing similarity. This skill helps understand what each preconditioner is doing and how much variance it captures.
+Analyze and compare hessian strategies for style suppression. Hessians transform the gradient space to downweight certain directions (e.g., style) before computing similarity. This skill helps understand what each hessian is doing and how much variance it captures.
 
 ## Usage
 
 ```
-/preconditioner-analysis [options]
+/hessian-analysis [options]
 ```
 
 Options:
 - `--base-path PATH` - Experiment directory (default: runs/attribute_preservation)
-- `--compare A B` - Compare two preconditioners directly
+- `--compare A B` - Compare two hessians directly
 - `--eigenspectrum` - Analyze eigenvalue distribution
 
-## Available Preconditioners
+## Available Hessians
 
 1. **R_between**: Computed from style mean differences
    - `delta = mean(style_A) - mean(style_B)`
@@ -25,7 +25,7 @@ Options:
    - Downweights directions that vary in eval set
    - Doesn't require style labels
 
-3. **R_mixed**: Combination strategies (from preconditioners.py)
+3. **R_mixed**: Combination strategies (from hessians.py)
 
 ## Instructions
 
@@ -68,20 +68,20 @@ print(f'Total variance: {grads.var():.4f}')
 print(f'Style direction explains: {projections.var() / grads.var() * 100:.1f}% of variance')
 ```
 
-### Compare preconditioner effects:
+### Compare hessian effects:
 
 ```python
 import torch
 from bergson.gradients import GradientProcessor
 
-# Load preconditioners
+# Load hessians
 r_between = GradientProcessor.load(f'{base_path}/r_between')
 h_eval = GradientProcessor.load(f'{base_path}/h_eval')
 
 # Compare a specific module
-module = list(r_between.preconditioners.keys())[0]
-R = r_between.preconditioners[module]
-H = h_eval.preconditioners[module]
+module = list(r_between.hessians.keys())[0]
+R = r_between.hessians[module]
+H = h_eval.hessians[module]
 
 print(f'Module: {module}')
 print(f'R_between rank: {torch.linalg.matrix_rank(R).item()}')

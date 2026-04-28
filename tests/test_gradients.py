@@ -165,7 +165,7 @@ def test_gradient_collector_proj_norm():
         cfg = IndexConfig(
             run_path=str(temp_dir / "run"),
             skip_index=True,
-            skip_preconditioners=p is None,
+            skip_hessians=p is None,
         )
         processor = GradientProcessor(projection_dim=p)
         collector = GradientCollector(

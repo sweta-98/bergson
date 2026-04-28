@@ -69,7 +69,7 @@ def test_force_math_sdp_persists_through_collect(
 
     cfg = IndexConfig(
         run_path=str(tmp_path / "run"),
-        skip_preconditioners=True,
+        skip_hessians=True,
         token_batch_size=1024,
         force_math_sdp=True,
         projection_dim=0,
@@ -100,7 +100,7 @@ def test_force_math_sdp_persists_through_collect(
     # Now collect with only the short doc
     cfg_alone = IndexConfig(
         run_path=str(tmp_path / "run_alone"),
-        skip_preconditioners=True,
+        skip_hessians=True,
         token_batch_size=1024,
         force_math_sdp=True,
         projection_dim=0,

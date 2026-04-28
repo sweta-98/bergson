@@ -12,7 +12,7 @@ from torch import Tensor
 from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
-from bergson.process_preconditioners import process_preconditioners
+from bergson.process_hessians import process_hessians
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import get_gradient_dtype
 
@@ -91,16 +91,16 @@ class GradientCollector(HookCollectorBase):
 
     @HookCollectorBase.split_attention_heads
     def backward_hook(self, module: nn.Module, g: Float[Tensor, "N S O"]):
-        """Compute per-sample gradient, accumulate preconditioner, and store."""
+        """Compute per-sample gradient, accumulate hessian, and store."""
         name: str = module._name  # type: ignore[assignment]
         P = self._compute_gradient(module, g)
 
-        if not self.cfg.skip_preconditioners:
+        if not self.cfg.skip_hessians:
             P = P.float()
-            if name in self.processor.preconditioners:
-                self.processor.preconditioners[name].addmm_(P.mT, P)
+            if name in self.processor.hessians:
+                self.processor.hessians[name].addmm_(P.mT, P)
             else:
-                self.processor.preconditioners[name] = P.mT @ P
+                self.processor.hessians[name] = P.mT @ P
 
         if self.save_index and self.preprocess_cfg.aggregation == "none":
             # Asynchronously move the gradient to CPU and convert to the final
@@ -134,10 +134,10 @@ class GradientCollector(HookCollectorBase):
             dist.reduce(self.per_doc_losses, dst=0)
 
         grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-        if self.processor.preconditioners:
-            process_preconditioners(
+        if self.processor.hessians:
+            process_hessians(
                 self.processor,
-                self.processor.preconditioners,
+                self.processor.hessians,
                 len(self.data),
                 grad_sizes,
                 self.rank,

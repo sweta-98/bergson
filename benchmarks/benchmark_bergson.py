@@ -118,8 +118,8 @@ class RunConfig:
     token_batch_size: int | None = None
     """Override auto-tuned token_batch_size with a fixed value."""
 
-    skip_preconditioners: bool = True
-    """Skip preconditioners."""
+    skip_hessians: bool = True
+    """Skip hessians."""
 
     projection_dim: int = 16
     """Dimension to project gradients to. 0 = no projection (full gradients)."""
@@ -239,7 +239,7 @@ class Run:
             token_batch_size=self.run_cfg.max_length,
             max_tokens=train_tokens,
             precision=precision,
-            skip_preconditioners=self.run_cfg.skip_preconditioners,
+            skip_hessians=self.run_cfg.skip_hessians,
         )
 
         model, _ = setup_model_and_peft(index_cfg, device_map_auto=True)

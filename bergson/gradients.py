@@ -85,19 +85,17 @@ class GradientProcessor:
     a normalizer, it will be skipped.
     """
 
-    preconditioners: dict[str, Tensor] = field(default_factory=dict)
+    hessians: dict[str, Tensor] = field(default_factory=dict)
     """
-    Dictionary of preconditioners for each matrix-valued parameter in the model.
+    Dictionary of hessians for each matrix-valued parameter in the model.
     These are applied after the normalization and random projection steps.
     """
 
-    preconditioners_eigen: Mapping[str, tuple[Tensor, Tensor]] = field(
-        default_factory=dict
-    )
+    hessians_eigen: Mapping[str, tuple[Tensor, Tensor]] = field(default_factory=dict)
     """
-    Dictionary of eigen decompositions of preconditioners for each matrix-valued
+    Dictionary of eigen decompositions of hessians for each matrix-valued
     parameter in the model. Each value is a tuple of (eigenvalues, eigenvectors).
-    These are used to efficiently apply inverse square-root of the preconditioners
+    These are used to efficiently apply inverse square-root of the hessians
     to the gradients."""
 
     projection_dim: int | None = None
@@ -130,16 +128,23 @@ class GradientProcessor:
         path: Path | str,
         *,
         map_location: str | torch.device | None = None,
-        skip_preconditioners: bool = False,
+        skip_hessians: bool = False,
     ) -> "GradientProcessor":
         """
-        Load the normalizers and preconditioners from a file.
+        Load the normalizers and hessians from a file.
         """
         path = Path(path)
         cfg_path = path / "processor_config.yaml"
         norm_path = path / "normalizers.pth"
-        precond_path = path / "preconditioners.pth"
-        precond_eigen_path = path / "preconditioners_eigen.pth"
+
+        # Fall back to legacy "preconditioners*.pth" filenames if the new
+        # "hessians*.pth" files don't exist on disk.
+        hess_path = path / "hessians.pth"
+        if not hess_path.exists():
+            hess_path = path / "preconditioners.pth"
+        hess_eigen_path = path / "hessians_eigen.pth"
+        if not hess_eigen_path.exists():
+            hess_eigen_path = path / "preconditioners_eigen.pth"
 
         # Load configuration
         with cfg_path.open("r") as f:
@@ -150,6 +155,16 @@ class GradientProcessor:
             cfg["projection_type"] = "normal"
         if "include_bias" not in cfg:
             cfg["include_bias"] = False
+        # Defensive: rename any legacy preconditioner* keys that may appear in
+        # configs saved by older versions of this code.
+        for legacy_key in list(cfg.keys()):
+            if "preconditioner" in legacy_key or "precond" in legacy_key:
+                new_key = (
+                    legacy_key.replace("preconditioners", "hessians")
+                    .replace("preconditioner", "hessian")
+                    .replace("precond", "hess")
+                )
+                cfg[new_key] = cfg.pop(legacy_key)
 
         # Load normalizers
         norm_state = torch.load(
@@ -162,42 +177,42 @@ class GradientProcessor:
             for name, state in norm_state.items()
         }
 
-        preconditioners, preconditioners_eigen = {}, {}
-        if not skip_preconditioners:
-            preconditioners = torch.load(
-                precond_path,
+        hessians, hessians_eigen = {}, {}
+        if not skip_hessians:
+            hessians = torch.load(
+                hess_path,
                 map_location=map_location,
                 weights_only=True,
             )
-            preconditioners_eigen = torch.load(
-                precond_eigen_path,
+            hessians_eigen = torch.load(
+                hess_eigen_path,
                 map_location=map_location,
                 weights_only=True,
             )
 
         return cls(
             normalizers=normalizers,
-            preconditioners=preconditioners,
-            preconditioners_eigen=preconditioners_eigen,
+            hessians=hessians,
+            hessians_eigen=hessians_eigen,
             **cfg,
         )
 
     def save(self, path: Path):
         """
-        Save the normalizers and preconditioners to a file.
+        Save the normalizers and hessians to a file.
         """
         path.mkdir(parents=True, exist_ok=True)
 
         cfg_path = path / "processor_config.yaml"
         norm_path = path / "normalizers.pth"
-        precond_path = path / "preconditioners.pth"
-        precond_eigen_path = path / "preconditioners_eigen.pth"
+        hess_path = path / "hessians.pth"
+        hess_eigen_path = path / "hessians_eigen.pth"
 
         # Save configuration separately
         cfg = asdict(self)
         del cfg["normalizers"]
-        del cfg["preconditioners"]
-        del cfg["preconditioners_eigen"]
+        del cfg["hessians"]
+        del cfg["hessians_eigen"]
         with cfg_path.open("w") as f:
             json.dump(cfg, f, indent=2)
 
@@ -207,8 +222,8 @@ class GradientProcessor:
             for name, normalizer in self.normalizers.items()
         }
         torch.save(norm_state, norm_path)
-        torch.save(self.preconditioners, precond_path)
-        torch.save(self.preconditioners_eigen, precond_eigen_path)
+        torch.save(self.hessians, hess_path)
+        torch.save(self.hessians_eigen, hess_eigen_path)
 
 
 class LayerAdapter:

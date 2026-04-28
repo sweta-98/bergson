@@ -22,7 +22,7 @@ from .data import (
     load_token_gradients,
 )
 from .gradients import GradientProcessor
-from .process_grads import mix_preconditioners
+from .process_grads import mix_hessians
 from .query.attributor import Attributor
 from .query.faiss_index import FaissConfig
 from .score.scorer import Scorer
@@ -54,5 +54,5 @@ __all__ = [
     "Scorer",
     "ScoreConfig",
     "QueryConfig",
-    "mix_preconditioners",
+    "mix_hessians",
 ]

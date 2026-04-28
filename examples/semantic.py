@@ -8,12 +8,12 @@ compatibility. New code should import directly from examples.semantic instead.
 from semantic import (
     build_style_indices,
     build_style_lookup,
-    compute_between_preconditioner,
-    compute_between_preconditioner_covariance,
-    compute_between_preconditioner_means,
+    compute_between_hessian,
+    compute_between_hessian_covariance,
+    compute_between_hessian_means,
     compute_metrics,
     compute_metrics_groupwise,
-    compute_mixed_preconditioner,
+    compute_mixed_hessian,
     compute_scores_fast,
     compute_scores_with_bergson,
     create_data,
@@ -23,7 +23,7 @@ from semantic import (
     load_scores_matrix,
     main,
     reword,
-    run_preconditioner_comparison,
+    run_hessian_comparison,
 )
 
 __all__ = [
@@ -39,16 +39,16 @@ __all__ = [
     "build_style_lookup",
     "compute_metrics_groupwise",
     "compute_metrics",
-    # Preconditioners
+    # Hessians
     "build_style_indices",
-    "compute_between_preconditioner_covariance",
-    "compute_between_preconditioner_means",
-    "compute_between_preconditioner",
-    "compute_mixed_preconditioner",
+    "compute_between_hessian_covariance",
+    "compute_between_hessian_means",
+    "compute_between_hessian",
+    "compute_mixed_hessian",
     # Experiment
     "create_index",
     "finetune",
-    "run_preconditioner_comparison",
+    "run_hessian_comparison",
     "main",
 ]
 

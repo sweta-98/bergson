@@ -43,11 +43,11 @@ def test_build_e2e(tmp_path: Path):
 
     processor = GradientProcessor.load(tmp_path / "test_e2e")
 
-    assert processor.preconditioners is not None
-    assert processor.preconditioners_eigen is not None
+    assert processor.hessians is not None
+    assert processor.hessians_eigen is not None
 
-    assert len(processor.preconditioners) > 0
-    assert len(processor.preconditioners_eigen) > 0
+    assert len(processor.hessians) > 0
+    assert len(processor.hessians_eigen) > 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -56,7 +56,7 @@ def test_build_consistency(tmp_path: Path, model, dataset):
 
     cfg = IndexConfig(
         run_path=str(tmp_path),
-        skip_preconditioners=True,
+        skip_hessians=True,
         token_batch_size=1024,
     )
     collect_gradients(
@@ -125,9 +125,9 @@ def test_conv1d_build(tmp_path: Path, dataset):
 
     cfg = IndexConfig(
         run_path=str(tmp_path),
-        # This build hangs in pytest with preconditioners enabled.
+        # This build hangs in pytest with hessians enabled.
         # It works when run directly so it may be a pytest issue.
-        skip_preconditioners=True,
+        skip_hessians=True,
         # GPT-2 model_max_length is 1024
         token_batch_size=1024,
     )

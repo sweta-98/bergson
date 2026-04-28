@@ -32,7 +32,7 @@ METHOD_COLORS: dict[str, str] = {
 # Hatching per factor type for visual distinction within a method
 FACTOR_HATCHES: dict[str, str] = {
     "normalizer": "",
-    "preconditioner": "//",
+    "hessian": "//",
     "kfac": "xx",
     "diagonal": "",
     "ekfac": "xx",

@@ -36,8 +36,8 @@ class Build(Serializable):
 
     def execute(self):
         """Build the gradient index."""
-        if self.index_cfg.skip_index and self.index_cfg.skip_preconditioners:
-            raise ValueError("Either skip_index or skip_preconditioners must be False")
+        if self.index_cfg.skip_index and self.index_cfg.skip_hessians:
+            raise ValueError("Either skip_index or skip_hessians must be False")
 
         validate_run_path(self.index_cfg)
 
@@ -82,7 +82,7 @@ class Hessian(Serializable):
 
         if self.hessian_cfg.method == "autocorrelation":
             self.skip_index = True
-            self.skip_preconditioners = False
+            self.skip_hessians = False
             build(self.index_cfg, PreprocessConfig())
         else:
             approximate_hessians(self.index_cfg, self.hessian_cfg)
@@ -146,7 +146,7 @@ class Score(Serializable):
 
 @dataclass
 class Trackstar(Serializable):
-    """Run preconditioners, build, and score as a single pipeline."""
+    """Run hessians, build, and score as a single pipeline."""
 
     index_cfg: IndexConfig
 

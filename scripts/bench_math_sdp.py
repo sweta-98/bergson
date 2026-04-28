@@ -68,7 +68,7 @@ def run_build(
         str(TOKEN_BATCH_SIZE),
         "--precision",
         precision,
-        "--skip_preconditioners",
+        "--skip_hessians",
         "--nproc_per_node",
         "1",
         "--overwrite",

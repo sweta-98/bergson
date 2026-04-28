@@ -5,7 +5,7 @@
 
 ### Bug Fixes
 
-- Preconditioner bug in attributor.py
+- Hessian bug in attributor.py
   ([`6232d1e`](https://github.com/EleutherAI/bergson/commit/6232d1e3464ec4fc9056a5c45b5efc7b4c421318))
 
 
@@ -50,7 +50,7 @@ Co-authored-by: Lucia Quirke <luciaquirke@users.noreply.github.com>
 - Always compute mixing coefficient in Trackstar pipeline
   ([`c990375`](https://github.com/EleutherAI/bergson/commit/c990375e69d309f348c489f9bfc9cf9cddc28f6d))
 
-Remove the conditional guard — lambda is always auto-computed from the preconditioner eigenvalues
+Remove the conditional guard — lambda is always auto-computed from the hessian eigenvalues
   since the cost is negligible.
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>

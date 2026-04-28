@@ -50,7 +50,7 @@ def _run_bergson_build(
     prompt_column: str = "fact",
     completion_column: str = "reworded",
     projection_dim: int = 16,
-    skip_preconditioners: bool = True,
+    skip_hessians: bool = True,
     label: str = "eval",
 ) -> None:
     """Run bergson build subprocess with standard arguments.
@@ -62,7 +62,7 @@ def _run_bergson_build(
         prompt_column: Column name for prompts.
         completion_column: Column name for completions.
         projection_dim: Random projection dimensionality.
-        skip_preconditioners: Whether to skip preconditioner computation.
+        skip_hessians: Whether to skip hessian computation.
         label: Description for error messages (e.g. "eval", "majority eval").
     """
     import subprocess
@@ -87,8 +87,8 @@ def _run_bergson_build(
         "--token_batch_size",
         "6000",
     ]
-    if skip_preconditioners:
-        cmd.append("--skip_preconditioners")
+    if skip_hessians:
+        cmd.append("--skip_hessians")
 
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -202,7 +202,7 @@ class AsymmetricConfig:
     # Train uses templates < cutoff, eval majority uses templates >= cutoff
     train_template_cutoff: int = 5
     # Path to style-specific indices (pirate/shakespeare) for PCA and summed loss
-    style_index_path: str = "runs/precond_comparison"
+    style_index_path: str = "runs/hess_comparison"
     # PCA k values to sweep. First value is used for the initial PCA computation;
     # all values are swept in the semantic eval section.
     pca_k_values: tuple[int, ...] = (10, 100, 500, 1000)
@@ -405,7 +405,7 @@ def create_asymmetric_index(
         index_path,
         model=analysis_model,
         dataset_path=data_path / "train.hf",
-        skip_preconditioners=False,
+        skip_hessians=False,
         label="index",
     )
 
@@ -415,7 +415,7 @@ def create_asymmetric_index(
 def score_asymmetric_eval(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     damping_factor: float = 0.1,
     regularizer_name: str | None = None,
     eval_prompt_column: str = "fact",
@@ -426,14 +426,14 @@ def score_asymmetric_eval(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner subdirectory
-            (None for no precond).
+        hessian_name: Name of hessian subdirectory
+            (None for no hess).
         damping_factor: Damping factor for matrix inversion
             (default: 0.1).
-        regularizer_name: Name of preconditioner to use as
+        regularizer_name: Name of hessian to use as
             regularizer instead of identity. If provided, computes
             inv(H + damping_factor * H_regularizer). Useful for
-            regularizing rank-deficient preconditioners like
+            regularizing rank-deficient hessians like
             r_between with a well-conditioned matrix like
             H_train or H_eval.
         eval_prompt_column: Column to use as prompt for eval
@@ -467,18 +467,17 @@ def score_asymmetric_eval(
     eval_col_suffix = ""
     if eval_prompt_column != "fact" or eval_completion_column != "reworded":
         eval_col_suffix = f"_{eval_prompt_column}_{eval_completion_column}"
-    if preconditioner_name:
+    if hessian_name:
         scores_path = (
-            base_path / f"scores_{preconditioner_name}"
+            base_path / f"scores_{hessian_name}"
             f"{damping_suffix}{reg_suffix}{eval_col_suffix}"
         )
-        precond_path = base_path / preconditioner_name
+        hess_path = base_path / hessian_name
     else:
         scores_path = (
-            base_path
-            / f"scores_no_precond{damping_suffix}{reg_suffix}{eval_col_suffix}"
+            base_path / f"scores_no_hess{damping_suffix}{reg_suffix}{eval_col_suffix}"
         )
-        precond_path = None
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -504,14 +503,14 @@ def score_asymmetric_eval(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        # Load regularizer preconditioner if specified
+    if hess_path and (hess_path / "hessians.pth").exists():
+        # Load regularizer hessian if specified
         reg_proc = None
         if regularizer_name:
             reg_path = base_path / regularizer_name
-            if (reg_path / "preconditioners.pth").exists():
+            if (reg_path / "hessians.pth").exists():
                 print(f"Loading regularizer from {reg_path}")
                 reg_proc = GradientProcessor.load(reg_path)
             else:
@@ -519,14 +518,14 @@ def score_asymmetric_eval(
                     f"Warning: regularizer {regularizer_name} not found at {reg_path}"
                 )
 
-        print(f"Loading preconditioner from {precond_path} (damping={damping_factor})")
-        proc = GradientProcessor.load(precond_path)
+        print(f"Loading hessian from {hess_path} (damping={damping_factor})")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             regularizer = None
-            if reg_proc is not None and name in reg_proc.preconditioners:
-                regularizer = reg_proc.preconditioners[name].to(device=device)
+            if reg_proc is not None and name in reg_proc.hessians:
+                regularizer = reg_proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(
                 H, power=-1, damping_factor=damping_factor, regularizer=regularizer
             )
@@ -618,7 +617,7 @@ class AsymmetricMetrics:
 def compute_asymmetric_metrics(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     damping_factor: float = 0.1,
     regularizer_name: str | None = None,
     eval_prompt_column: str = "fact",
@@ -629,10 +628,10 @@ def compute_asymmetric_metrics(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner to use.
+        hessian_name: Name of hessian to use.
         damping_factor: Damping factor for matrix inversion
             (default: 0.1).
-        regularizer_name: Name of preconditioner to use as
+        regularizer_name: Name of hessian to use as
             regularizer instead of identity.
         eval_prompt_column: Column to use as prompt for eval
             gradients (default: "fact").
@@ -654,7 +653,7 @@ def compute_asymmetric_metrics(
     scores = score_asymmetric_eval(
         config,
         base_path,
-        preconditioner_name,
+        hessian_name,
         damping_factor=damping_factor,
         regularizer_name=regularizer_name,
         eval_prompt_column=eval_prompt_column,
@@ -687,13 +686,13 @@ def print_metrics(metrics: AsymmetricMetrics, name: str) -> None:
     print(f"  Same field:      {metrics.top1_field_accuracy:.2%}")
 
 
-def compute_style_preconditioner(
+def compute_style_hessian(
     base_path: Path | str,
     config: AsymmetricConfig,
 ) -> Path:
-    """Compute R_between preconditioner that isolates the style direction.
+    """Compute R_between hessian that isolates the style direction.
 
-    This creates a rank-1 preconditioner from the difference in style means.
+    This creates a rank-1 hessian from the difference in style means.
     When used for scoring, this should downweight the style direction.
 
     Args:
@@ -701,7 +700,7 @@ def compute_style_preconditioner(
         config: Experiment configuration.
 
     Returns:
-        Path to the preconditioner.
+        Path to the hessian.
     """
     import json
 
@@ -716,11 +715,11 @@ def compute_style_preconditioner(
     data_path = base_path / "data"
     output_path = base_path / "r_between"
 
-    if (output_path / "preconditioners.pth").exists():
+    if (output_path / "hessians.pth").exists():
         print(f"Loading cached R_between from {output_path}")
         return output_path
 
-    print("Computing R_between preconditioner from style means...")
+    print("Computing R_between hessian from style means...")
 
     # Load training data and gradients
     train_ds = _load_hf_dataset(data_path / "train.hf")
@@ -746,7 +745,7 @@ def compute_style_preconditioner(
     # Load a processor to get metadata
     base_proc = GradientProcessor.load(index_path)
 
-    # Compute per-module rank-1 preconditioners
+    # Compute per-module rank-1 hessians
     between_precs = {}
     print(f"  Computing per-module R_between for {len(module_names)} modules...")
 
@@ -764,21 +763,21 @@ def compute_style_preconditioner(
         # Style direction
         delta = mu_dominant - mu_minority
 
-        # Rank-1 preconditioner: outer product
+        # Rank-1 hessian: outer product
         between_precs[name] = torch.outer(delta, delta)
 
     # Save
     output_path.mkdir(parents=True, exist_ok=True)
     between_proc = GradientProcessor(
         normalizers=base_proc.normalizers,
-        preconditioners=between_precs,
-        preconditioners_eigen={},
+        hessians=between_precs,
+        hessians_eigen={},
         projection_dim=base_proc.projection_dim,
         projection_type=base_proc.projection_type,
         include_bias=base_proc.include_bias,
     )
     between_proc.save(output_path)
-    print(f"Saved R_between preconditioner to {output_path}")
+    print(f"Saved R_between hessian to {output_path}")
 
     return output_path
 
@@ -788,7 +787,7 @@ def score_asymmetric_eval_with_pca_projection(
     base_path: Path | str,
     style_subspace: dict[str, tuple],
     top_k: int = 10,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     damping_factor: float = 0.1,
     eval_prompt_column: str = "fact",
     eval_completion_column: str = "reworded",
@@ -797,14 +796,14 @@ def score_asymmetric_eval_with_pca_projection(
 
     Instead of using matrix-inverse preconditioning, this projects eval gradients
     onto the orthogonal complement of the style subspace before computing scores.
-    Can optionally combine with a preconditioner applied after projection.
+    Can optionally combine with a hessian applied after projection.
 
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components used (for cache naming).
-        preconditioner_name: Optional preconditioner to apply after projection.
+        hessian_name: Optional hessian to apply after projection.
         damping_factor: Damping factor for matrix inversion
             (default: 0.1).
         eval_prompt_column: Column to use as prompt for eval
@@ -825,28 +824,28 @@ def score_asymmetric_eval_with_pca_projection(
     from bergson.gradients import GradientProcessor
     from bergson.utils.math import damped_psd_power
 
-    from .preconditioners import project_orthogonal_to_style_subspace
+    from .hessians import project_orthogonal_to_style_subspace
 
     base_path = Path(base_path)
     index_path = base_path / "index"
     data_path = base_path / "data"
 
-    # Build cache path including preconditioner, damping factor, and eval columns
+    # Build cache path including hessian, damping factor, and eval columns
     damping_suffix = f"_d{damping_factor:.0e}" if damping_factor != 0.1 else ""
     eval_col_suffix = ""
     if eval_prompt_column != "fact" or eval_completion_column != "reworded":
         eval_col_suffix = f"_{eval_prompt_column}_{eval_completion_column}"
-    if preconditioner_name:
+    if hessian_name:
         scores_path = (
-            base_path / f"scores_pca_k{top_k}_{preconditioner_name}"
+            base_path / f"scores_pca_k{top_k}_{hessian_name}"
             f"{damping_suffix}{eval_col_suffix}"
         )
-        precond_path = base_path / preconditioner_name
+        hess_path = base_path / hessian_name
     else:
         scores_path = (
             base_path / f"scores_pca_k{top_k}{damping_suffix}{eval_col_suffix}"
         )
-        precond_path = None
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -875,14 +874,14 @@ def score_asymmetric_eval_with_pca_projection(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path} (damping={damping_factor})")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path} (damping={damping_factor})")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1, damping_factor=damping_factor)
 
     # Concatenate train gradients
@@ -967,7 +966,7 @@ def compute_asymmetric_metrics_with_pca(
     base_path: Path | str,
     style_subspace: dict[str, tuple],
     top_k: int = 10,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     damping_factor: float = 0.1,
     eval_prompt_column: str = "fact",
     eval_completion_column: str = "reworded",
@@ -979,7 +978,7 @@ def compute_asymmetric_metrics_with_pca(
         base_path: Base path for experiment outputs.
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components.
-        preconditioner_name: Optional preconditioner to combine
+        hessian_name: Optional hessian to combine
             with PCA.
         damping_factor: Damping factor for matrix inversion
             (default: 0.1).
@@ -1005,7 +1004,7 @@ def compute_asymmetric_metrics_with_pca(
         base_path,
         style_subspace,
         top_k,
-        preconditioner_name,
+        hessian_name,
         damping_factor=damping_factor,
         eval_prompt_column=eval_prompt_column,
         eval_completion_column=eval_completion_column,
@@ -1130,14 +1129,14 @@ def create_majority_style_eval(
 def score_majority_style_eval(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> np.ndarray:
     """Score majority style eval queries (control for style mismatch).
 
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner subdirectory (None for no precond).
+        hessian_name: Name of hessian subdirectory (None for no hess).
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -1164,12 +1163,12 @@ def score_majority_style_eval(
         )
 
     # Determine output path
-    if preconditioner_name:
-        scores_path = base_path / f"scores_majority_{preconditioner_name}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_majority_{hessian_name}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / "scores_majority_no_precond"
-        precond_path = None
+        scores_path = base_path / "scores_majority_no_hess"
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -1197,14 +1196,14 @@ def score_majority_style_eval(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1)
 
     # Concatenate train gradients
@@ -1263,14 +1262,14 @@ def score_majority_style_eval(
 def compute_majority_style_metrics(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> AsymmetricMetrics:
     """Compute metrics for majority style eval (control).
 
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner to use.
+        hessian_name: Name of hessian to use.
 
     Returns:
         AsymmetricMetrics dataclass.
@@ -1286,7 +1285,7 @@ def compute_majority_style_metrics(
     eval_ds = _load_hf_dataset(data_path / "eval_majority_style.hf")
 
     # Load scores
-    scores = score_majority_style_eval(config, base_path, preconditioner_name)
+    scores = score_majority_style_eval(config, base_path, hessian_name)
 
     return _compute_metrics_from_scores(
         scores, train_ds, eval_ds, config.minority_style
@@ -1296,7 +1295,7 @@ def compute_majority_style_metrics(
 def score_summed_eval(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> np.ndarray:
     """Score using summed eval gradients (minority + majority style for each fact).
 
@@ -1307,7 +1306,7 @@ def score_summed_eval(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner subdirectory (None for no precond).
+        hessian_name: Name of hessian subdirectory (None for no hess).
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -1326,12 +1325,12 @@ def score_summed_eval(
     data_path = base_path / "data"
 
     # Determine output path
-    if preconditioner_name:
-        scores_path = base_path / f"scores_summed_eval_{preconditioner_name}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_summed_eval_{hessian_name}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / "scores_summed_eval_no_precond"
-        precond_path = None
+        scores_path = base_path / "scores_summed_eval_no_hess"
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -1383,14 +1382,14 @@ def score_summed_eval(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1)
 
     # Concatenate train gradients
@@ -1482,14 +1481,14 @@ def score_summed_eval(
 def compute_summed_eval_metrics(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> AsymmetricMetrics:
     """Compute metrics for summed eval gradient approach.
 
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner to use.
+        hessian_name: Name of hessian to use.
 
     Returns:
         AsymmetricMetrics dataclass.
@@ -1502,7 +1501,7 @@ def compute_summed_eval_metrics(
     eval_ds = _load_hf_dataset(data_path / "eval.hf")
 
     # Load scores (computed with summed gradients)
-    scores = score_summed_eval(config, base_path, preconditioner_name)
+    scores = score_summed_eval(config, base_path, hessian_name)
 
     return _compute_metrics_from_scores(
         scores, train_ds, eval_ds, config.minority_style
@@ -1513,21 +1512,21 @@ def sweep_pca_k(
     config: AsymmetricConfig | None = None,
     base_path: Path | str = "runs/asymmetric_style",
     k_values: list[int] | None = None,
-    preconditioners: list[str | None] | None = None,
+    hessians: list[str | None] | None = None,
 ) -> dict[str, AsymmetricMetrics]:
-    """Sweep over k values and preconditioners for PCA projection approach.
+    """Sweep over k values and hessians for PCA projection approach.
 
     Args:
         config: Experiment configuration (uses defaults if None).
         base_path: Base path for experiment outputs.
         k_values: List of k values to test (default: [1, 5, 10, 20, 50, 100]).
-        preconditioners: List of preconditioner names to combine with PCA.
-                        None means no preconditioner. Default: [None, "index"].
+        hessians: List of hessian names to combine with PCA.
+                        None means no hessian. Default: [None, "index"].
 
     Returns:
         Dictionary mapping strategy names to their metrics.
     """
-    from .preconditioners import compute_pca_style_subspace
+    from .hessians import compute_pca_style_subspace
 
     if config is None:
         config = AsymmetricConfig()
@@ -1537,11 +1536,11 @@ def sweep_pca_k(
     if k_values is None:
         k_values = [1, 5, 10, 20, 50, 100]
 
-    if preconditioners is None:
-        preconditioners = [
+    if hessians is None:
+        hessians = [
             None,
             "index",
-        ]  # None = no precond, "index" = train second moment
+        ]  # None = no hess, "index" = train second moment
 
     # Check that style indices exist
     minority_idx = Path(config.style_index_path) / config.minority_style
@@ -1556,7 +1555,7 @@ def sweep_pca_k(
 
     # Compute style subspaces for each k value
     print("=" * 70)
-    print("PCA K-VALUE AND PRECONDITIONER SWEEP")
+    print("PCA K-VALUE AND HESSIAN SWEEP")
     print("=" * 70)
 
     for k in k_values:
@@ -1565,9 +1564,9 @@ def sweep_pca_k(
             minority_idx, dominant_idx, base_path / "pca_subspace", top_k=k
         )
 
-        for precond_name in preconditioners:
-            precond_display = precond_name if precond_name else "no_precond"
-            strategy_name = f"pca_k{k}_{precond_display}"
+        for hess_name in hessians:
+            hess_display = hess_name if hess_name else "no_hess"
+            strategy_name = f"pca_k{k}_{hess_display}"
 
             print(f"\n--- Strategy: {strategy_name} ---")
             metrics = compute_asymmetric_metrics_with_pca(
@@ -1575,7 +1574,7 @@ def sweep_pca_k(
                 base_path,
                 style_subspace,
                 top_k=k,
-                preconditioner_name=precond_name,
+                hessian_name=hess_name,
             )
             print(f"  Top-1 Semantic: {metrics.top1_semantic_accuracy:.2%}")
             print(f"  Top-1 Style Leak: {metrics.top1_style_leakage:.2%}")
@@ -1624,7 +1623,7 @@ def run_asymmetric_experiment(
             Defaults to HF_ANALYSIS_MODEL.
         include_pca: Whether to include PCA projection strategy.
         include_summed_loss: Whether to include summed loss
-            preconditioner strategy.
+            hessian strategy.
         include_second_moments: Whether to include train/eval/mixed
             second moment strategies.
         include_majority_control: Whether to include majority style
@@ -1639,13 +1638,13 @@ def run_asymmetric_experiment(
             (default: 0.1).
 
     Returns:
-        Dictionary mapping preconditioner names to their metrics.
+        Dictionary mapping hessian names to their metrics.
     """
-    from .preconditioners import (
-        compute_eval_preconditioner,
+    from .hessians import (
+        compute_eval_hessian,
         compute_pca_style_subspace,
-        compute_summed_loss_preconditioner,
-        compute_train_eval_mixed_preconditioner,
+        compute_summed_loss_hessian,
+        compute_train_eval_mixed_hessian,
     )
 
     if config is None:
@@ -1673,30 +1672,25 @@ def run_asymmetric_experiment(
     eval_facts_to_exclude: set[str] = set(eval_ds["fact"])  # type: ignore[arg-type]
     print(f"Loaded {len(eval_facts_to_exclude)} eval facts to exclude from PCA")
 
-    # Step 2: Compute R_between preconditioner
+    # Step 2: Compute R_between hessian
     print("\n" + "-" * 60)
-    print("STEP 2: Computing style suppression preconditioner (R_between)")
+    print("STEP 2: Computing style suppression hessian (R_between)")
     print("-" * 60)
-    compute_style_preconditioner(base_path, config)
+    compute_style_hessian(base_path, config)
 
-    # Step 2b: Compute summed loss preconditioner if requested
+    # Step 2b: Compute summed loss hessian if requested
     if include_summed_loss:
         print("\n" + "-" * 60)
-        print("STEP 2b: Computing summed loss preconditioner")
+        print("STEP 2b: Computing summed loss hessian")
         print("-" * 60)
         # We need the style-specific indices for this
         minority_idx = Path(config.style_index_path) / config.minority_style
         dominant_idx = Path(config.style_index_path) / config.dominant_style
         if minority_idx.exists() and dominant_idx.exists():
             summed_loss_path = base_path / "summed_loss"
-            compute_summed_loss_preconditioner(
-                minority_idx, dominant_idx, summed_loss_path
-            )
+            compute_summed_loss_hessian(minority_idx, dominant_idx, summed_loss_path)
         else:
-            print(
-                "  Style-specific indices not found, "
-                "skipping summed loss preconditioner"
-            )
+            print("  Style-specific indices not found, " "skipping summed loss hessian")
             print(f"  (Expected: {minority_idx} and {dominant_idx})")
             include_summed_loss = False
 
@@ -1722,10 +1716,10 @@ def run_asymmetric_experiment(
             print(f"  (Expected: {minority_idx} and {dominant_idx})")
             include_pca = False
 
-    # Step 2d: Compute second moment preconditioners if requested
+    # Step 2d: Compute second moment hessians if requested
     if include_second_moments:
         print("\n" + "-" * 60)
-        print("STEP 2d: Computing second moment preconditioners (train/eval/mixed)")
+        print("STEP 2d: Computing second moment hessians (train/eval/mixed)")
         print("-" * 60)
 
         index_path = base_path / "index"
@@ -1736,14 +1730,14 @@ def run_asymmetric_experiment(
 
         # Compute eval second moment
         if eval_grads_path.exists():
-            compute_eval_preconditioner(
+            compute_eval_hessian(
                 eval_grads_path,
                 base_path / "eval_second_moment",
                 reference_proc_path=index_path,  # Use train index for metadata
             )
 
             # Compute 50:50 train-eval mixed
-            compute_train_eval_mixed_preconditioner(
+            compute_train_eval_mixed_hessian(
                 index_path,
                 eval_grads_path,
                 base_path / "train_eval_mixed",
@@ -1755,12 +1749,12 @@ def run_asymmetric_experiment(
 
     # Step 3: Score and evaluate with each strategy
     print("\n" + "-" * 60)
-    print("STEP 3: Evaluating preconditioner strategies")
+    print("STEP 3: Evaluating hessian strategies")
     print("-" * 60)
 
     # Basic strategies using matrix-inverse preconditioning
     strategies = [
-        (None, "no_precond"),
+        (None, "no_hess"),
         ("r_between", "r_between"),
     ]
 
@@ -1770,7 +1764,7 @@ def run_asymmetric_experiment(
 
     # Add second moment strategies if available
     if include_second_moments:
-        # Train second moment (use the index's preconditioner directly)
+        # Train second moment (use the index's hessian directly)
         strategies.append(("index", "train_second_moment"))
         # Eval second moment
         strategies.append(("eval_second_moment", "eval_second_moment"))
@@ -1779,10 +1773,10 @@ def run_asymmetric_experiment(
 
     all_metrics: dict[str, AsymmetricMetrics] = {}
 
-    for precond_name, display_name in strategies:
+    for hess_name, display_name in strategies:
         print(f"\n--- Strategy: {display_name} ---")
         metrics = compute_asymmetric_metrics(
-            config, base_path, precond_name, damping_factor=damping_factor
+            config, base_path, hess_name, damping_factor=damping_factor
         )
         print_metrics(metrics, display_name)
         all_metrics[display_name] = metrics
@@ -1805,17 +1799,17 @@ def run_asymmetric_experiment(
         print("\n" + "-" * 60)
         print("MAJORITY STYLE CONTROL (no style mismatch)")
         print("-" * 60)
-        print("\n--- Control: majority_style_no_precond ---")
+        print("\n--- Control: majority_style_no_hess ---")
         metrics = compute_majority_style_metrics(config, base_path, None)
-        print_metrics(metrics, "majority_no_precond")
-        all_metrics["majority_no_precond"] = metrics
+        print_metrics(metrics, "majority_no_hess")
+        all_metrics["majority_no_hess"] = metrics
 
     # Evaluate summed eval gradient approach (minority + majority style)
     if include_summed_eval:
         print("\n" + "-" * 60)
         print("SUMMED EVAL GRADIENTS (minority + majority style)")
         print("-" * 60)
-        print("\n--- Strategy: summed_eval_no_precond ---")
+        print("\n--- Strategy: summed_eval_no_hess ---")
         metrics = compute_summed_eval_metrics(config, base_path, None)
         print_metrics(metrics, "summed_eval")
         all_metrics["summed_eval"] = metrics
@@ -1828,7 +1822,7 @@ def run_asymmetric_experiment(
         print("-" * 60)
 
         semantic_strategies: list[tuple[str | None, str]] = [
-            (None, "semantic_no_precond"),
+            (None, "semantic_no_hess"),
             ("index", "semantic_index"),
             ("r_between", "semantic_r_between"),
         ]
@@ -1842,12 +1836,12 @@ def run_asymmetric_experiment(
                 ("train_eval_mixed", "semantic_train_eval_mixed")
             )
 
-        for precond_name, display_name in semantic_strategies:
+        for hess_name, display_name in semantic_strategies:
             print(f"\n--- Strategy: {display_name} ---")
             metrics = compute_asymmetric_metrics(
                 config,
                 base_path,
-                precond_name,
+                hess_name,
                 damping_factor=damping_factor,
                 eval_prompt_column="question",
                 eval_completion_column="answer",
@@ -1873,14 +1867,14 @@ def run_asymmetric_experiment(
                         (None, f"semantic_pca_projection_k{k}"),
                         ("index", f"semantic_pca_k{k}_index"),
                     ]
-                    for precond_name, display_name in pca_strategies:
+                    for hess_name, display_name in pca_strategies:
                         print(f"\n--- Strategy: {display_name} ---")
                         metrics = compute_asymmetric_metrics_with_pca(
                             config,
                             base_path,
                             style_subspace_k,
                             top_k=k,
-                            preconditioner_name=precond_name,
+                            hessian_name=hess_name,
                             damping_factor=damping_factor,
                             eval_prompt_column="question",
                             eval_completion_column="answer",
@@ -1905,13 +1899,13 @@ def run_asymmetric_experiment(
     print("INTERPRETATION")
     print("=" * 70)
     print("\nSuccess criteria:")
-    print("  - Higher semantic accuracy = preconditioner helps find correct facts")
-    print("  - Lower style leakage = preconditioner reduces style matching")
+    print("  - Higher semantic accuracy = hessian helps find correct facts")
+    print("  - Lower style leakage = hessian reduces style matching")
     print("\nStrategies:")
-    print("  - no_precond: Baseline without any style suppression")
-    print("  - r_between: Rank-1 preconditioner from style mean difference")
+    print("  - no_hess: Baseline without any style suppression")
+    print("  - r_between: Rank-1 hessian from style mean difference")
     if include_summed_loss:
-        print("  - summed_loss: Preconditioner from summed gradients across pairs")
+        print("  - summed_loss: Hessian from summed gradients across pairs")
     if include_second_moments:
         print("  - train_second_moment: Second moment matrix from train gradients")
         print("  - eval_second_moment: Second moment matrix from eval gradients")
@@ -1920,7 +1914,7 @@ def run_asymmetric_experiment(
         print(f"  - pca_projection_k{pca_top_k}: Project out top-{pca_top_k} style PCs")
     if include_majority_control:
         print(
-            "  - majority_no_precond: Control using majority "
+            "  - majority_no_hess: Control using majority "
             "style for eval (no mismatch)"
         )
     if include_summed_eval:
@@ -1950,7 +1944,7 @@ def score_with_inner_product(
     config: AsymmetricConfig,
     base_path: Path | str,
     eval_style: str = "minority",
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> np.ndarray:
     """Score using raw inner product (no unit normalization).
 
@@ -1960,7 +1954,7 @@ def score_with_inner_product(
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
         eval_style: Which eval set to use ("minority", "majority", "summed").
-        preconditioner_name: Name of preconditioner subdirectory.
+        hessian_name: Name of hessian subdirectory.
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -1980,12 +1974,12 @@ def score_with_inner_product(
 
     # Determine output path
     suffix = f"_innerproduct_{eval_style}"
-    if preconditioner_name:
-        scores_path = base_path / f"scores{suffix}_{preconditioner_name}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores{suffix}_{hessian_name}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / f"scores{suffix}_no_precond"
-        precond_path = None
+        scores_path = base_path / f"scores{suffix}_no_hess"
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -2002,14 +1996,14 @@ def score_with_inner_product(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1)
 
     # Concatenate train gradients - NO NORMALIZATION
@@ -2174,15 +2168,15 @@ def run_inner_product_comparison(
     all_metrics = {}
 
     strategies = [
-        ("minority_no_precond", "minority", None),
-        ("majority_no_precond", "majority", None),
-        ("summed_no_precond", "summed", None),
+        ("minority_no_hess", "minority", None),
+        ("majority_no_hess", "majority", None),
+        ("summed_no_hess", "summed", None),
         ("minority_index", "minority", "index"),
     ]
 
-    for name, eval_style, precond in strategies:
+    for name, eval_style, hess in strategies:
         print(f"\n--- Strategy: {name} (inner product) ---")
-        scores = score_with_inner_product(config, base_path, eval_style, precond)
+        scores = score_with_inner_product(config, base_path, eval_style, hess)
         metrics = compute_metrics_from_scores(scores)
         print(f"  Top-1 Semantic: {metrics.top1_semantic_accuracy:.2%}")
         print(f"  Top-1 Style Leak: {metrics.top1_style_leakage:.2%}")
@@ -2198,9 +2192,9 @@ def run_inner_product_comparison(
 
     # Load cosine results for comparison
     cosine_results = {
-        "minority_no_precond": 0.87,
-        "majority_no_precond": 100.0,
-        "summed_no_precond": 92.71,
+        "minority_no_hess": 0.87,
+        "majority_no_hess": 100.0,
+        "summed_no_hess": 92.71,
         "minority_index": 1.04,
     }
 
@@ -2342,7 +2336,7 @@ def create_pirate_style_eval(
 def score_summed_rewrites(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> np.ndarray:
     """Score using summed rewrite gradients (shakespeare + pirate).
 
@@ -2352,7 +2346,7 @@ def score_summed_rewrites(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner subdirectory (None for no precond).
+        hessian_name: Name of hessian subdirectory (None for no hess).
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -2371,12 +2365,12 @@ def score_summed_rewrites(
     data_path = base_path / "data"
 
     # Determine output path
-    if preconditioner_name:
-        scores_path = base_path / f"scores_summed_rewrites_{preconditioner_name}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_summed_rewrites_{hessian_name}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / "scores_summed_rewrites_no_precond"
-        precond_path = None
+        scores_path = base_path / "scores_summed_rewrites_no_hess"
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -2421,14 +2415,14 @@ def score_summed_rewrites(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1)
 
     # Concatenate train gradients
@@ -2519,14 +2513,14 @@ def score_summed_rewrites(
 def score_original_style_eval(
     config: AsymmetricConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> np.ndarray:
     """Score using original un-stylized eval gradients.
 
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner subdirectory (None for no precond).
+        hessian_name: Name of hessian subdirectory (None for no hess).
 
     Returns:
         Score matrix of shape (n_eval, n_train).
@@ -2545,12 +2539,12 @@ def score_original_style_eval(
     data_path = base_path / "data"
 
     # Determine output path
-    if preconditioner_name:
-        scores_path = base_path / f"scores_original_style_{preconditioner_name}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_original_style_{hessian_name}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / "scores_original_style_no_precond"
-        precond_path = None
+        scores_path = base_path / "scores_original_style_no_hess"
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -2581,14 +2575,14 @@ def score_original_style_eval(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1)
 
     # Concatenate train gradients
@@ -2655,7 +2649,7 @@ def compute_rewrite_ablation_metrics(
     config: AsymmetricConfig,
     base_path: Path | str,
     strategy: str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> "AsymmetricMetrics":
     """Compute metrics for rewrite ablation strategies.
 
@@ -2664,7 +2658,7 @@ def compute_rewrite_ablation_metrics(
         base_path: Base path for experiment outputs.
         strategy: One of "original", "summed_rewrites",
             "shakespeare_only", "pirate_only".
-        preconditioner_name: Name of preconditioner subdirectory (None for no precond).
+        hessian_name: Name of hessian subdirectory (None for no hess).
 
     Returns:
         AsymmetricMetrics with accuracy measurements.
@@ -2680,17 +2674,15 @@ def compute_rewrite_ablation_metrics(
 
     # Get scores based on strategy
     if strategy == "original":
-        scores = score_original_style_eval(config, base_path, preconditioner_name)
+        scores = score_original_style_eval(config, base_path, hessian_name)
     elif strategy == "summed_rewrites":
-        scores = score_summed_rewrites(config, base_path, preconditioner_name)
+        scores = score_summed_rewrites(config, base_path, hessian_name)
     elif strategy == "shakespeare_only":
         # Shakespeare is the minority style, use standard scoring
-        scores = score_asymmetric_eval(config, base_path, preconditioner_name)
+        scores = score_asymmetric_eval(config, base_path, hessian_name)
     elif strategy == "pirate_only":
         # Score using pirate eval gradients only
-        scores = _score_single_style_eval(
-            config, base_path, "pirate", preconditioner_name
-        )
+        scores = _score_single_style_eval(config, base_path, "pirate", hessian_name)
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -2703,7 +2695,7 @@ def _score_single_style_eval(
     config: AsymmetricConfig,
     base_path: Path | str,
     style: str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> np.ndarray:
     """Score using a single style's eval gradients.
 
@@ -2730,12 +2722,12 @@ def _score_single_style_eval(
     else:
         raise ValueError(f"Unsupported style: {style}")
 
-    if preconditioner_name:
-        scores_path = base_path / f"scores_{style}_only_{preconditioner_name}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_{style}_only_{hessian_name}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / f"scores_{style}_only_no_precond"
-        precond_path = None
+        scores_path = base_path / f"scores_{style}_only_no_hess"
+        hess_path = None
 
     # Return cached if exists
     if (scores_path / "scores.npy").exists():
@@ -2762,13 +2754,13 @@ def _score_single_style_eval(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1)
 
     # Prepare train gradients

@@ -46,13 +46,13 @@ def normalize_flat_grad(
     return grad.to(final_dtype)
 
 
-def mix_preconditioners(
+def mix_hessians(
     query_path: str | Path,
     index_path: str | Path,
     output_path: str | Path,
     target_downweight_components: int = 1000,
 ) -> Path:
-    """Mix query and index preconditioners and save the result to disk.
+    """Mix query and index hessians and save the result to disk.
 
     Computes ``H_mixed = coeff * H_query + (1 - coeff) * H_index`` for
     every module's raw H matrix, then persists a new
@@ -86,22 +86,22 @@ def mix_preconditioners(
 
     # Auto-compute mixing coefficient (§A.1.3 of Chang et al., 2024)
     mixing_coefficient = compute_lambda(
-        query_eigen=q_proc.preconditioners_eigen,
-        index_eigen=i_proc.preconditioners_eigen,
+        query_eigen=q_proc.hessians_eigen,
+        index_eigen=i_proc.hessians_eigen,
         target_components=target_downweight_components,
     )
 
-    mixed_preconditioners = {
-        k: q_proc.preconditioners[k] * mixing_coefficient
-        + i_proc.preconditioners[k] * (1 - mixing_coefficient)
-        for k in q_proc.preconditioners
+    mixed_hessians = {
+        k: q_proc.hessians[k] * mixing_coefficient
+        + i_proc.hessians[k] * (1 - mixing_coefficient)
+        for k in q_proc.hessians
     }
 
-    # Build a new processor with the mixed preconditioners
+    # Build a new processor with the mixed hessians
     mixed_proc = GradientProcessor(
         normalizers=q_proc.normalizers,
-        preconditioners=mixed_preconditioners,
-        preconditioners_eigen={},
+        hessians=mixed_hessians,
+        hessians_eigen={},
         projection_dim=q_proc.projection_dim,
         reshape_to_square=q_proc.reshape_to_square,
         projection_type=q_proc.projection_type,
@@ -122,20 +122,20 @@ def mix_preconditioners(
     return output_path
 
 
-def get_trackstar_preconditioner(
-    preconditioner_path: str | None,
+def get_trackstar_hessian(
+    hessian_path: str | None,
     device: torch.device,
     power: float = -0.5,
     return_dtype: torch.dtype | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Compute preconditioner matrices from a saved processor file.
+    """Compute hessian matrices from a saved processor file.
 
     Parameters
     ----------
-    preconditioner_path : str | None
+    hessian_path : str | None
         Directory containing the saved GradientProcessor.
     device : torch.device
-        Device to load the preconditioner onto.
+        Device to load the hessian onto.
     power : float
         Matrix power to apply to each H matrix.
 
@@ -144,20 +144,20 @@ def get_trackstar_preconditioner(
         * ``-1``   — H^(-1), used for one-sided preconditioning where only
           the query gradients are preconditioned.
     """
-    if preconditioner_path is None:
+    if hessian_path is None:
         return {}
 
-    # Load preconditioners on device one-by-one for memory efficiency
-    preconditioners = GradientProcessor.load(
-        Path(preconditioner_path),
+    # Load hessians on device one-by-one for memory efficiency
+    hessians = GradientProcessor.load(
+        Path(hessian_path),
         map_location="cpu",
-    ).preconditioners
+    ).hessians
 
-    final_dtype = return_dtype or next(iter(preconditioners.values())).dtype
+    final_dtype = return_dtype or next(iter(hessians.values())).dtype
 
     return {
         name: damped_psd_power(H.to(device=device), power=power).to(final_dtype)
-        for name, H in preconditioners.items()
+        for name, H in hessians.items()
     }
 
 

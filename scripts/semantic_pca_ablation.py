@@ -27,10 +27,10 @@ from examples.semantic.asymmetric import (
     compute_asymmetric_metrics_with_pca,
 )
 from examples.semantic.data import HF_ANALYSIS_MODEL
-from examples.semantic.preconditioners import compute_pca_style_subspace
+from examples.semantic.hessians import compute_pca_style_subspace
 
 BASE_PATH = Path("runs/asymmetric_style")
-SEMANTIC_IDX_PATH = Path("runs/precond_comparison_semantic")
+SEMANTIC_IDX_PATH = Path("runs/hess_comparison_semantic")
 DAMPING = 0.1
 
 
@@ -154,7 +154,7 @@ def main():
     config = AsymmetricConfig(hf_dataset="EleutherAI/bergson-asymmetric-style")
 
     k_values = [10, 100]
-    preconditioners = [None, "index"]  # None = no precond, "index" = H_train
+    hessians = [None, "index"]  # None = no hess, "index" = H_train
 
     all_metrics: dict[str, AsymmetricMetrics] = {}
 
@@ -168,9 +168,9 @@ def main():
             exclude_facts=eval_facts_to_exclude,
         )
 
-        for precond_name in preconditioners:
-            precond_display = precond_name if precond_name else "no_precond"
-            strategy_name = f"semantic_pca_k{k}_{precond_display}_semantic_basis"
+        for hess_name in hessians:
+            hess_display = hess_name if hess_name else "no_hess"
+            strategy_name = f"semantic_pca_k{k}_{hess_display}_semantic_basis"
 
             print(f"\n--- Strategy: {strategy_name} ---")
             metrics = compute_asymmetric_metrics_with_pca(
@@ -178,7 +178,7 @@ def main():
                 BASE_PATH,
                 semantic_subspace,
                 top_k=k,
-                preconditioner_name=precond_name,
+                hessian_name=hess_name,
                 damping_factor=DAMPING,
                 eval_prompt_column="question",
                 eval_completion_column="answer",
@@ -199,9 +199,9 @@ def main():
 
     comparisons = [
         (
-            "k=10, no precond",
+            "k=10, no hess",
             "semantic_pca_projection_k10",
-            "semantic_pca_k10_no_precond_semantic_basis",
+            "semantic_pca_k10_no_hess_semantic_basis",
         ),
         (
             "k=10, H_train",
@@ -209,9 +209,9 @@ def main():
             "semantic_pca_k10_index_semantic_basis",
         ),
         (
-            "k=100, no precond",
+            "k=100, no hess",
             "semantic_pca_projection_k100",
-            "semantic_pca_k100_no_precond_semantic_basis",
+            "semantic_pca_k100_no_hess_semantic_basis",
         ),
         (
             "k=100, H_train",

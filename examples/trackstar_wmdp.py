@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Example: score pile-10k against mean WMDP bio gradients using trackstar.
 
-Computes adafactor normalizers and preconditioners on both query and value
-datasets (up to 10k samples each). Preconditioners are not recomputed during
+Computes adafactor normalizers and hessians on both query and value
+datasets (up to 10k samples each). Hessians are not recomputed during
 build or score.
 """
 

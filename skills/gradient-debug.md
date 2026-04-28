@@ -61,7 +61,7 @@ for i in range(min(5, len(grads))):
 ### Check score matrix:
 
 ```python
-scores_path = 'runs/attribute_preservation/scores_no_precond/scores.npy'
+scores_path = 'runs/attribute_preservation/scores_no_hess/scores.npy'
 scores = np.load(scores_path)
 
 print(f'Shape: {scores.shape}')
@@ -79,7 +79,7 @@ if np.isnan(scores).any():
 
 1. **All zeros**: Gradient computation failed silently. Re-run bergson build.
 2. **All identical**: Normalization issue or corrupted storage.
-3. **NaN scores**: Division by zero in preconditioner inverse. Check preconditioner matrix.
+3. **NaN scores**: Division by zero in hessian inverse. Check hessian matrix.
 4. **Same top-k for all queries**: Eval gradients are identical (corrupted).
 
 ## Fix corrupted data
