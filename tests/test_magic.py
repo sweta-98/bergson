@@ -413,9 +413,9 @@ def test_magic_unpacked_cli_aggregation(model_name):
 
     assert per_doc.shape == (num_docs,), f"per_doc shape {per_doc.shape}"
     assert doc_ids is not None
-    assert doc_ids.shape == per_tok.shape, (
-        f"doc_ids shape {doc_ids.shape} != per_tok shape {per_tok.shape}"
-    )
+    assert (
+        doc_ids.shape == per_tok.shape
+    ), f"doc_ids shape {doc_ids.shape} != per_tok shape {per_tok.shape}"
 
     agg = torch.zeros(num_docs, dtype=torch.float64)
     agg.scatter_add_(0, doc_ids.reshape(-1), per_tok.reshape(-1).to(torch.float64))
