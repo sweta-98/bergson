@@ -24,6 +24,7 @@ from .query.query_index import query
 from .score.score import score_dataset
 from .trackstar import trackstar
 from .utils.worker_utils import validate_run_path
+from .yaml_pipeline import run_pipeline
 
 
 @dataclass
@@ -199,18 +200,38 @@ class Main:
 
 
 def main():
-    """Parse CLI arguments and dispatch to the selected subcommand."""
-    # Check to see if the user is passing in a yaml or json config file directly
+    """Parse CLI arguments and dispatch to the selected subcommand.
+
+    Three input shapes are supported:
+      1. `bergson pipeline <file.yaml>`        — multi-step pipeline mode
+      2. `bergson <command> <file.yaml|json>`  — single-command config-file mode
+      3. `bergson <command> --flag value ...`  — single-command CLI-flag mode
+    """
     args = sys.argv[1:]
+
+    # Build the {command_name: command_class} lookup once; both the pipeline
+    # branch and the single-command branch use it to resolve the user's verb.
+    command_classes = get_args(Main.__dataclass_fields__["command"].type)
+    command_registry = {cls.__name__.lower(): cls for cls in command_classes}
+
+    # Branch 1 — Pipeline mode: a YAML listing several commands to run in
+    # sequence. Delegates parsing + execution to `run_pipeline`.
+    if len(args) == 2 and args[0].lower() == "pipeline" and os.path.isfile(args[-1]):
+        run_pipeline(args[1], command_registry)
+        return
+
+    # Branch 2 — Single-command config-file mode: the user passes a command
+    # name and a path to a YAML or JSON file. `Serializable.load` sniffs the
+    # file extension and hydrates the matching dataclass.
     if len(args) == 2 and os.path.isfile(args[-1]):
         cmd_str, config_path = args
-
-        args = get_args(Main.__dataclass_fields__["command"].type)
-        names = {cls.__name__.lower(): cls for cls in args}
         try:
-            cmd_cls = names[cmd_str.lower()]
+            cmd_cls = command_registry[cmd_str.lower()]
         except KeyError:
-            print(f"Invalid command '{cmd_str}'. Valid commands are: {list(names)}")
+            print(
+                f"Invalid command '{cmd_str}'. "
+                f"Valid commands are: {list(command_registry)}"
+            )
             sys.exit(1)
 
         try:
@@ -218,6 +239,7 @@ def main():
         except RuntimeError as e:
             print(f"Failed to load config file {config_path}: {e}")
             sys.exit(1)
+    # Branch 3 — CLI-flag mode: standard argparse-style flag parsing.
     else:
         parser = ArgumentParser(conflict_resolution=ConflictResolution.EXPLICIT)
         parser.add_arguments(Main, dest="prog")
