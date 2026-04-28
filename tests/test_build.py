@@ -69,9 +69,11 @@ def test_build_consistency(tmp_path: Path, model, dataset):
     index = load_gradients(cfg.partial_run_path)
 
     cache_path = Path("runs/test_build_cache.npy")
-    if not cache_path.exists():
-        # Regenerate cache, TODO: We shouldn't do this, maybe use dvc
-        np.save(cache_path, index[index.dtype.names[0]][0])
+
+    assert cache_path.exists()
+    # if not cache_path.exists():
+    #   Regenerate cache
+    #   np.save(cache_path, index[index.dtype.names[0]][0])
 
     cached_item_grad = np.load(cache_path)
     first_module_grad = index[index.dtype.names[0]][0]

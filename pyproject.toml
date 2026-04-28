@@ -69,6 +69,9 @@ reportPrivateImportUsage = false
 [tool.setuptools.packages.find]
 include = ["bergson*"]
 
+[tool.black]
+target-version = ["py310", "py311", "py312"]
+
 [tool.ruff]
 lint.ignore = ["E741","F722"]   # Ambiguous variable name, jaxtyping typing error
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
