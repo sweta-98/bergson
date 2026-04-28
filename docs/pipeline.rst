@@ -182,7 +182,7 @@ A directory at ``run_path`` containing:
 
 - ``--query_path``: path to the pre-computed query gradient index (required).
 - ``--unit_normalize``: unit-normalize training gradients before scoring.
-- ``--hessian_path``: path to a precomputed hessian to apply.
+- ``--hessian_path``: path to a precomputed gradient processor. Set to apply a Hessian approximation.
 - ``--modules``: restrict scoring to a subset of model modules.
 
 **Example**

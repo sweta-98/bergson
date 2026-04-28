@@ -459,7 +459,7 @@ class PreprocessConfig(Serializable):
     """Whether to unit normalize the gradients."""
 
     hessian_path: str | None = None
-    """Path to a precomputed hessian."""
+    """Path to a precomputed gradient processor. Set to apply Hessian approx."""
 
     aggregation: Literal["mean", "sum", "none"] = "none"
     """Method for aggregating the gradients. In score, only query
