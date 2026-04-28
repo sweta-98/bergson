@@ -4,7 +4,7 @@ Pipeline Concepts
 Bergson's post-hoc attribution exposes three generic building blocks — ``build``, ``reduce``,
 and ``score`` — that together implement gradient-based data attribution. This page
 explains what each command does, what it produces, and when you should use each one.
-It also covers the supporting commands ``hessian`` and ``preconditioners``.
+It also covers the supporting command ``hessian``.
 
 Overview
 --------
@@ -21,10 +21,10 @@ The difference between them is **what they do with the collected gradients**:
 - ``reduce`` **aggregates** all gradients from a dataset into a single vector and writes it to an on-disk file.
 - ``score`` **computes similarity scores** by comparing gradients from one dataset against a pre-built query.
 
-The supporting commands handle preconditioner computation and end-to-end pipelines:
-
-- ``hessian`` computes Hessian approximations (KFAC, TKFAC, Shampoo) stored as sharded covariance matrices.
-- ``preconditioners`` fits normalizers and preconditioners without collecting gradients.
+The supporting command ``hessian`` computes Hessian approximations
+(``autocorrelation`` — the gradient second-moment / Adam-style estimator and the
+default — or ``kfac``, ``tkfac``, ``shampoo``) without collecting per-example
+gradients. Non-autocorrelation methods are stored as sharded covariance matrices.
 
 .. _build-command:
 
@@ -56,8 +56,8 @@ A directory at ``run_path`` containing:
 - ``index_config.json`` — configuration snapshot.
 - ``processor_config.json`` — gradient processor configuration.
 - ``normalizers.pth`` — fitted normalizer state dicts.
-- ``preconditioners.pth`` — fitted preconditioner matrices.
-- ``preconditioners_eigen.pth`` — eigendecompositions of preconditioners.
+- ``hessians.pth`` — fitted hessian matrices.
+- ``hessians_eigen.pth`` — eigendecompositions of hessians.
 
 **Example**
 
@@ -109,8 +109,8 @@ A directory at ``run_path`` containing:
 - ``index_config.json`` — configuration snapshot.
 - ``processor_config.json`` — gradient processor configuration.
 - ``normalizers.pth`` — fitted normalizer state dicts.
-- ``preconditioners.pth`` — fitted preconditioner matrices.
-- ``preconditioners_eigen.pth`` — eigendecompositions of preconditioners.
+- ``hessians.pth`` — fitted hessian matrices.
+- ``hessians_eigen.pth`` — eigendecompositions of hessians.
 
 **Key options**
 
@@ -128,14 +128,14 @@ A directory at ``run_path`` containing:
        --aggregation mean \
        --unit_normalize \
        --projection_dim 0 \
-       --skip_preconditioners
+       --skip_hessians
 
 .. note::
 
    ``--unit_normalize`` in ``reduce`` applies normalization *per example before*
    aggregating, so each example contributes equally to the mean direction regardless of
    gradient magnitude. This is different from normalizing the final aggregated vector
-   (which would have no effect on downstream ranking). When using preconditioners,
+   (which would have no effect on downstream ranking). When using hessians,
    normalization must happen after preconditioning, which is done in ``score`` not
    ``reduce``.
 
@@ -168,8 +168,8 @@ A directory at ``run_path`` containing:
 - ``info.json`` — metadata (num_items, num_scores, dtype structure).
 - ``data.hf/`` — a HuggingFace dataset with per-example metadata.
 - ``index_config.json`` — configuration snapshot.
-- ``processor_config.json``, ``normalizers.pth``, ``preconditioners.pth``,
-  ``preconditioners_eigen.pth`` — gradient processor artifacts.
+- ``processor_config.json``, ``normalizers.pth``, ``hessians.pth``,
+  ``hessians_eigen.pth`` — gradient processor artifacts.
 
 **Scoring modes** (``--score``)
 
@@ -182,7 +182,7 @@ A directory at ``run_path`` containing:
 
 - ``--query_path``: path to the pre-computed query gradient index (required).
 - ``--unit_normalize``: unit-normalize training gradients before scoring.
-- ``--preconditioner_path``: path to a precomputed preconditioner to apply.
+- ``--hessian_path``: path to a precomputed hessian to apply.
 - ``--modules``: restrict scoring to a subset of model modules.
 
 **Example**
@@ -197,21 +197,32 @@ A directory at ``run_path`` containing:
        --score individual \
        --unit_normalize \
        --projection_dim 0 \
-       --skip_preconditioners
+       --skip_hessians
 
 .. _hessian-command:
 
 ``hessian`` — Compute Hessian Approximations
 ---------------------------------------------
 
-``hessian`` computes Hessian approximations (KFAC, EK-FAC, TKFAC, or Shampoo) by collecting
-activation and gradient covariance matrices across the dataset. These are used as
-preconditioners in downstream ``score`` runs.
+``hessian`` computes Hessian approximations on a dataset without collecting or
+storing per-example gradients. The estimator is selected with ``--method``:
 
+- ``autocorrelation`` (default) — gradient second-moment / Adam-style estimator,
+  saved as a ``GradientProcessor`` (normalizers + per-module hessian matrices).
+- ``kfac``, ``tkfac``, ``shampoo`` — factorised approximations, saved as sharded
+  activation/gradient covariance matrices.
 
 **What it produces**
 
-A directory at ``run_path`` containing:
+A directory at ``run_path``. With ``--method autocorrelation``:
+
+- ``index_config.json`` — configuration snapshot.
+- ``processor_config.json`` — gradient processor configuration.
+- ``normalizers.pth`` — fitted normalizer state dicts.
+- ``hessians.pth`` — fitted per-module hessian matrices.
+- ``hessians_eigen.pth`` — eigendecompositions of hessians.
+
+With ``--method kfac`` / ``tkfac`` / ``shampoo``:
 
 - ``index_config.json`` — configuration snapshot.
 - ``hessian_config.json`` — Hessian-specific configuration (method, dtype, ev_correction).
@@ -223,8 +234,8 @@ A directory at ``run_path`` containing:
 
 **Key options**
 
-- ``--method kfac`` (default), ``tkfac``, or ``shampoo``: Hessian approximation method.
-- ``--ev_correction``: additionally compute eigenvalue correction.
+- ``--method autocorrelation`` (default), ``kfac``, ``tkfac``, or ``shampoo``: Hessian approximation method.
+- ``--ev_correction``: additionally compute eigenvalue correction (KFAC family).
 - ``--hessian_dtype``: precision for the Hessian computation.
 
 **Example**
@@ -236,41 +247,6 @@ A directory at ``run_path`` containing:
        --dataset NeelNanda/pile-10k \
        --truncation \
        --method kfac
-
-.. _preconditioners-command:
-
-``preconditioners`` — Fit Normalizers and Preconditioners
-----------------------------------------------------------
-
-``preconditioners`` fits normalizers and preconditioners on a dataset without collecting
-or storing per-example gradients. This is equivalent to running ``build`` with
-``--skip_index``.
-
-**Typical use cases**
-
-- You only need the fitted processor (normalizers/preconditioners) for a subsequent
-  ``build`` or ``score`` run via ``--processor_path``.
-- You want to compute preconditioners separately from gradient collection.
-
-**What it produces**
-
-A directory at ``run_path`` containing:
-
-- ``index_config.json`` — configuration snapshot.
-- ``processor_config.json`` — gradient processor configuration.
-- ``normalizers.pth`` — fitted normalizer state dicts.
-- ``preconditioners.pth`` — fitted preconditioner matrices.
-- ``preconditioners_eigen.pth`` — eigendecompositions of preconditioners.
-
-**Example**
-
-.. code-block:: bash
-
-   bergson preconditioners runs/my-processor \
-       --model EleutherAI/pythia-14m \
-       --dataset NeelNanda/pile-10k \
-       --truncation \
-       --normalizer adam
 
 Choosing the Right Command
 --------------------------
@@ -285,34 +261,32 @@ The decision tree below covers the most common scenarios:
              ├── Yes → use reduce (for query) + score
              └── No → use build + score
 
-**Using preconditioners**
+**Using hessians**
 
-When using preconditioners (KFAC, EK-FAC, Adam second moments), preconditioning is
-applied in ``reduce`` and/or ``score`` depending on whether unit normalization is
-enabled. The recommended pipeline is:
+When using a Hessian approximation (autocorrelation / Adam second moments,
+KFAC, EK-FAC, etc.), preconditioning is applied in ``reduce`` and/or ``score``
+depending on whether unit normalization is enabled. The recommended pipeline is:
 
 .. code-block:: text
 
-   bergson preconditioners → fit normalizers/preconditioners
-   bergson reduce          → aggregate query gradients (with preconditioning)
-   bergson score           → score training data (sometimes with preconditioning)
+   bergson hessian → fit normalizers/hessians
+   bergson reduce  → aggregate query gradients (with preconditioning)
+   bergson score   → score training data (sometimes with preconditioning)
 
-For Hessian-based preconditioners (KFAC, EK-FAC), use ``bergson hessian`` instead.
-
-Note: if you apply unit normalization, you need to apply any preconditioners in both
+Note: if you apply unit normalization, you need to apply hessians in both
 reduce and score.
 
-Worked Example: Query Influence with Preconditioners
+Worked Example: Query Influence with Hessians
 -----------------------------------------------------
 
 This example computes the influence of a training set on a small evaluation set
 using preconditioned cosine similarity.
 
-**Step 1 — Build a preconditioner on training data**
+**Step 1 — Fit a hessian on training data**
 
 .. code-block:: bash
 
-   bergson preconditioners runs/preconditioner \
+   bergson hessian runs/hessian \
        --model EleutherAI/pythia-14m \
        --dataset NeelNanda/pile-10k \
        --truncation \
@@ -326,7 +300,7 @@ using preconditioned cosine similarity.
        --model EleutherAI/pythia-14m \
        --dataset NeelNanda/pile-10k \
        --truncation \
-       --preconditioner_path runs/preconditioner \
+       --hessian_path runs/hessian \
        --unit_normalize \
        --aggregation mean \
        --projection_dim 16
@@ -340,7 +314,7 @@ using preconditioned cosine similarity.
        --dataset NeelNanda/pile-10k \
        --truncation \
        --query_path runs/eval-query \
-       --preconditioner_path runs/preconditioner \
+       --hessian_path runs/hessian \
        --unit_normalize \
        --projection_dim 16
 
