@@ -10,14 +10,14 @@
       run_path: runs/autocorrelation_and_index
       model: gpt2
       token_batch_size: 1024
-    data:
-      chunk_length: 1024
+      data:
+        chunk_length: 1024
 
 - build:
     index_cfg:
       run_path: runs/autocorrelation_and_index
       model: gpt2
       token_batch_size: 1024
-    data:
-      chunk_length: 1024
+      data:
+        chunk_length: 1024
     preprocess_cfg: {}
