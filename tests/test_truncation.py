@@ -115,7 +115,9 @@ def test_long_documents_truncated(tmp_path, model, token_batch_size):
 def test_long_documents_fail_without_truncation(tmp_path, model, token_batch_size):
     """Without truncation, we fail when a document exceeds token_batch_size."""
     doc_tokens = token_batch_size + 1
-    with pytest.warns(UserWarning, match="longer than the model can handle"):
+    with pytest.warns(
+        UserWarning, match="longer than (the model can handle|token_batch_size)"
+    ):
         with pytest.raises(RuntimeError, match="too long"):
             run_pipeline(
                 tmp_path, model, token_batch_size, doc_tokens, truncation=False
