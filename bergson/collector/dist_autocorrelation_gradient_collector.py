@@ -10,17 +10,17 @@ from torch import Tensor
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig
-from bergson.process_hessians import process_hessians
+from bergson.process_autocorrelation import process_autocorrelation_matrices
 from bergson.utils.utils import get_gradient_dtype
 
 
 @dataclass(kw_only=True)
-class GradientCollectorWithDistributedHessians(HookCollectorBase):
+class GradientCollectorWithDistributedAutocorrelationMatrices(HookCollectorBase):
     """
     Collects per-sample gradients from model layers and writes them to disk.
-    Hessians are distributed across nodes, and data from each node is
-    distributed to each hessian at every step. This enables the computation
-    of hessians that are too large to fit on a single device.
+    Autocorrelation matrices are distributed across nodes, and data from each
+    node is distributed to each matrix at every step. This enables the
+    computation of matrices that are too large to fit on a single device.
 
     - For each forward/backward hook, we compute the the gradient or a low-rank
     approximation via random projections, if cfg.projection_dim is set.
@@ -129,7 +129,7 @@ class GradientCollectorWithDistributedHessians(HookCollectorBase):
 
         grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
         if self.processor.hessians:
-            process_hessians(
+            process_autocorrelation_matrices(
                 self.processor,
                 self.processor.hessians,
                 len(self.data),

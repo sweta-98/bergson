@@ -11,7 +11,7 @@ from tqdm import tqdm
 from bergson import IndexConfig
 from bergson.data import load_gradients
 from bergson.gradients import GradientProcessor
-from bergson.process_grads import mix_hessians
+from bergson.process_grads import mix_autocorrelation_matrices
 from bergson.utils.math import damped_psd_power
 
 
@@ -244,7 +244,7 @@ def compute_scores_with_bergson(
     if query_hessian_path and index_hessian_path:
         mixed_path = output_path / "mixed_hessian"
         output_path.mkdir(parents=True, exist_ok=True)
-        mix_hessians(
+        mix_autocorrelation_matrices(
             query_hessian_path,
             index_hessian_path,
             mixed_path,

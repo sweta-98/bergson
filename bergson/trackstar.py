@@ -7,7 +7,7 @@ from .config import (
     PreprocessConfig,
     TrackstarConfig,
 )
-from .process_grads import mix_hessians
+from .process_grads import mix_autocorrelation_matrices
 from .score.score import score_dataset
 from .utils.worker_utils import validate_run_path
 
@@ -83,7 +83,7 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
     # Step 3: Mix query and value hessians
     print("Step 3/5: Mixing hessians...")
     if not _step_complete(mixed_hess_path, resume):
-        mix_hessians(
+        mix_autocorrelation_matrices(
             query_path=query_hess_path,
             index_path=value_hess_path,
             output_path=mixed_hess_path,

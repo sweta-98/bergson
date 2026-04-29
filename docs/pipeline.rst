@@ -22,9 +22,9 @@ The difference between them is **what they do with the collected gradients**:
 - ``score`` **computes similarity scores** by comparing gradients from one dataset against a pre-built query.
 
 The supporting command ``hessian`` computes Hessian approximations
-(``autocorrelation`` — the gradient second-moment / Adam-style estimator and the
-default — or ``kfac``, ``tkfac``, ``shampoo``) without collecting per-example
-gradients. Non-autocorrelation methods are stored as sharded covariance matrices.
+(``autocorrelation`` — the gradient second-moment and the default — or ``kfac``,
+``tkfac``, ``shampoo``) without collecting per-example gradients. Non-autocorrelation
+methods are stored as sharded covariance matrices.
 
 .. _build-command:
 
@@ -207,8 +207,8 @@ A directory at ``run_path`` containing:
 ``hessian`` computes Hessian approximations on a dataset without collecting or
 storing per-example gradients. The estimator is selected with ``--method``:
 
-- ``autocorrelation`` (default) — gradient second-moment / Adam-style estimator,
-  saved as a ``GradientProcessor`` (normalizers + per-module hessian matrices).
+- ``autocorrelation`` (default) — gradient second-moment, saved as a
+  ``GradientProcessor`` (normalizers + per-module hessian matrices).
 - ``kfac``, ``tkfac``, ``shampoo`` — factorised approximations, saved as sharded
   activation/gradient covariance matrices.
 

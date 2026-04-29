@@ -46,13 +46,13 @@ def normalize_flat_grad(
     return grad.to(final_dtype)
 
 
-def mix_hessians(
+def mix_autocorrelation_matrices(
     query_path: str | Path,
     index_path: str | Path,
     output_path: str | Path,
     target_downweight_components: int = 1000,
 ) -> Path:
-    """Mix query and index hessians and save the result to disk.
+    """Mix query and index autocorrelation matrices and save the result to disk.
 
     Computes ``H_mixed = coeff * H_query + (1 - coeff) * H_index`` for
     every module's raw H matrix, then persists a new

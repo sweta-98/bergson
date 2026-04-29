@@ -12,7 +12,7 @@ from torch import Tensor
 from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
-from bergson.process_hessians import process_hessians
+from bergson.process_autocorrelation import process_autocorrelation_matrices
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import get_gradient_dtype
 
@@ -91,7 +91,7 @@ class GradientCollector(HookCollectorBase):
 
     @HookCollectorBase.split_attention_heads
     def backward_hook(self, module: nn.Module, g: Float[Tensor, "N S O"]):
-        """Compute per-sample gradient, accumulate hessian, and store."""
+        """Compute per-sample gradient, accumulate autocorrelation matrix, and store."""
         name: str = module._name  # type: ignore[assignment]
         P = self._compute_gradient(module, g)
 
@@ -135,7 +135,7 @@ class GradientCollector(HookCollectorBase):
 
         grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
         if self.processor.hessians:
-            process_hessians(
+            process_autocorrelation_matrices(
                 self.processor,
                 self.processor.hessians,
                 len(self.data),

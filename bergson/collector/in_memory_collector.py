@@ -13,8 +13,8 @@ from torch import Tensor, nn
 from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
-from bergson.process_hessians import (
-    process_hessians,
+from bergson.process_autocorrelation import (
+    process_autocorrelation_matrices,
 )
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import get_gradient_dtype, numpy_to_tensor
@@ -107,7 +107,7 @@ class InMemoryCollector(HookCollectorBase):
 
         grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
         if self.processor.hessians:
-            process_hessians(
+            process_autocorrelation_matrices(
                 self.processor,
                 self.processor.hessians,
                 len(self.data),

@@ -34,7 +34,7 @@ def _model_device(model: torch.nn.Module) -> torch.device:
     return next(model.parameters()).device
 
 
-BERGSON_FACTOR_TYPES = {"normalizer", "hessian", "kfac", "ekfac"}
+BERGSON_FACTOR_TYPES = {"normalizer", "autocorrelation", "kfac", "ekfac"}
 KRONFLUENCE_FACTOR_TYPES = {"diagonal", "kfac", "ekfac"}
 DATTRI_FACTOR_TYPES = {"ekfac", "datainf", "arnoldi"}
 ALL_FACTOR_TYPES = BERGSON_FACTOR_TYPES | KRONFLUENCE_FACTOR_TYPES | DATTRI_FACTOR_TYPES
@@ -57,7 +57,7 @@ class RunConfig:
     """Method to benchmark: bergson, kronfluence, or dattri."""
 
     factor_type: str = field(positional=True)
-    """Factor type. bergson: normalizer/hessian/kfac/ekfac.
+    """Factor type. bergson: normalizer/autocorrelation/kfac/ekfac.
     kronfluence: diagonal/kfac/ekfac.
     dattri: ekfac/datainf/arnoldi."""
 
@@ -144,14 +144,14 @@ def _get_factor_run_path(
 # ---------------------------------------------------------------------------
 
 
-def _run_bergson_hessian(
+def _run_bergson_autocorrelation(
     run_cfg: RunConfig,
     spec,
     train_tokens: int,
     run_path: Path,
     ds,
 ) -> tuple[float, float]:
-    """Run bergson hessian (P^T@P + eigendecomp).
+    """Run bergson autocorrelation (P^T@P + eigendecomp).
 
     Returns (seconds, peak_mb).
     """
@@ -199,11 +199,11 @@ def _run_bergson_hessian(
     )
 
     device = _model_device(model)
-    print(f"Running hessian over {len(batches)} batches...")
+    print(f"Running autocorrelation over {len(batches)} batches...")
     torch.cuda.reset_peak_memory_stats(device)
     torch.cuda.synchronize(device)
     start = time.perf_counter()
-    computer.run_with_collector_hooks(desc="hessian")
+    computer.run_with_collector_hooks(desc="autocorrelation")
     torch.cuda.synchronize(device)
     elapsed = time.perf_counter() - start
     peak_mb = torch.cuda.max_memory_allocated(device) / (1024**2)
@@ -593,8 +593,8 @@ class Run:
         try:
             result: tuple[float, float] | None = None
             if run_cfg.method == "bergson":
-                if run_cfg.factor_type == "hessian":
-                    result = _run_bergson_hessian(
+                if run_cfg.factor_type == "autocorrelation":
+                    result = _run_bergson_autocorrelation(
                         run_cfg, spec, train_tokens, run_path, ds
                     )
                 elif run_cfg.factor_type == "kfac":

@@ -4,7 +4,7 @@ import torch.distributed as dist
 from bergson.gradients import GradientProcessor
 
 
-def process_hessians(
+def process_autocorrelation_matrices(
     processor: GradientProcessor,
     hessians: dict[str, torch.Tensor],
     len_data: int,
@@ -12,8 +12,8 @@ def process_hessians(
     rank: int,
 ):
     """
-    Aggregate hessians across ranks and compute their eigen decomposition
-    distributed across all ranks.
+    Aggregate autocorrelation matrices across ranks and compute their eigen
+    decomposition distributed across all ranks.
     """
     hessians_eigen = {}
 
