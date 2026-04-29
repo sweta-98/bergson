@@ -85,6 +85,181 @@ def test_magic_two_steps(model_name, dataset):
     assert scores.abs().sum() > 0, "Attribution scores are all zero"
 
 
+def _train_and_query_loss(
+    model_name,
+    dataset,
+    batch_size,
+    *,
+    per_token: bool,
+    zero_subset: torch.Tensor | None = None,
+    shuffle_seed: int | None = None,
+    seed: int = 42,
+    device: str = "cpu",
+) -> tuple[float, torch.Tensor | None]:
+    """Mirror the validation loop's train + query pass with a fixed dropout subset.
+
+    Mirrors ``run_magic`` (shuffle → pad → train) and worker()'s save logic:
+    trains from a fresh init with ``stream.weights = 1``, applies
+    ``stream.weights.view(-1)[zero_subset] = 0`` (the same line cli.py runs
+    inside the validation loop), then averages model loss over the dataset.
+
+    Returns ``(query_loss, trimmed_doc_ids)`` where ``trimmed_doc_ids`` is the
+    post-shuffle, post-pad-trim tensor that worker() saves to ``doc_ids.pt``
+    (None for per-doc runs). Tests use it to map a chosen doc set to flat
+    indices into ``stream.weights.view(-1)`` — same lookup downstream
+    consumers do against the saved file.
+    """
+    from bergson.magic.cli import attach_doc_ids_if_missing, pad_dataset_to_batch_size
+
+    ds = attach_doc_ids_if_missing(dataset)
+    if shuffle_seed is not None:
+        ds = ds.shuffle(seed=shuffle_seed)
+
+    num_docs = max(max(row) for row in ds["doc_ids"]) + 1
+
+    padded_ds, num_docs_pad, pad_count, weight_pad_count = pad_dataset_to_batch_size(
+        ds, batch_size, num_docs, "Test", 0
+    )
+
+    if per_token:
+        T = max(len(row) for row in padded_ds["input_ids"])
+        weight_shape = (len(padded_ds), T)
+    else:
+        weight_shape = (num_docs_pad,)
+
+    torch.manual_seed(seed)
+    config = AutoConfig.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_config(
+        config, torch_dtype=torch.float32, attn_implementation="eager"
+    )
+    model.loss_function = weighted_causal_lm_ce
+    model.requires_grad_(True)
+
+    optimizer = torchopt.adamw(1e-4, betas=(0.95, 0.975), eps_root=1e-2)
+    trainer, fwd_state = Trainer.initialize(model, optimizer)
+    stream = DataStream(
+        padded_ds, batch_size=batch_size, device=device, weight_shape=weight_shape
+    )
+
+    if pad_count:
+        if stream.weights.ndim == 1:
+            stream.weights.data[-weight_pad_count:] = 0.0
+        else:
+            stream.weights.data[-pad_count:] = 0.0
+
+    if zero_subset is not None:
+        stream.weights.data.view(-1)[zero_subset] = 0.0
+
+    with tempfile.TemporaryDirectory() as ckpt_dir:
+        fwd_state = trainer.train(fwd_state, stream, inplace=True, save_dir=ckpt_dir)
+        with fwd_state.activate(model), torch.no_grad():
+            total = 0.0
+            for batch in stream:
+                del batch["example_weight"]
+                total += model(**batch).loss.item()
+        loss = total / len(stream)
+
+    if per_token:
+        trimmed = torch.tensor(padded_ds["doc_ids"])
+        if pad_count:
+            trimmed = trimmed[:-pad_count]
+        return loss, trimmed
+    return loss, None
+
+
+@pytest.mark.parametrize("model_name", MODEL_CONFIGS)
+def test_magic_validation_loop_doc_token_dropout_equiv(model_name):
+    """The per-token validation loop's flat-index dropout is operationally
+    equivalent to per-doc dropout: for a chosen set of docs ``D``, zeroing
+    ``stream.weights.view(-1)[flat]`` in per-token mode — where ``flat`` comes
+    from ``torch.isin(saved_doc_ids.flatten(), D)``, exactly the lookup a
+    consumer of ``doc_ids.pt`` would do — yields the same post-training query
+    loss as zeroing ``stream.weights[D]`` in per-doc mode.
+
+    Exercises the parts of cli.py worker() that ``doc_ids.pt`` exists for:
+    (a) shuffle reorders rows so the saved tensor differs from the input ds;
+    (b) ``len(ds) % batch_size != 0`` forces ``pad_dataset_to_batch_size`` to
+    append a synthetic-doc pad row that worker() then strips with
+    ``doc_ids[:-pad_count]`` before saving; (c) one document spans rows so
+    the lookup is non-trivial. If shuffle/pad-trim alignment or row-major
+    flatten order ever drifts, this test breaks before any real run does.
+    """
+    from datasets import Dataset
+
+    # 5 docs across 3 chunks (forces pad with batch_size=2); doc 2 spans rows.
+    ds = Dataset.from_dict(
+        {
+            "input_ids": [
+                [1, 2, 3, 4, 5, 6],
+                [7, 8, 9, 10, 11, 12],
+                [13, 14, 15, 16, 17, 18],
+            ],
+            "labels": [
+                [1, 2, 3, 4, 5, 6],
+                [7, 8, 9, 10, 11, 12],
+                [13, 14, 15, 16, 17, 18],
+            ],
+            "attention_mask": [[1] * 6] * 3,
+            "doc_ids": [
+                [0, 0, 1, 1, 1, 2],
+                [2, 2, 2, 3, 3, 3],
+                [4, 4, 4, 4, 4, 4],
+            ],
+        }
+    )
+    batch_size = 2
+    shuffle_seed = 7
+
+    # First run: extract the post-shuffle, post-pad-trim doc_ids (= what
+    # worker() would write to doc_ids.pt) and a baseline loss.
+    loss_full, saved_doc_ids = _train_and_query_loss(
+        model_name,
+        ds,
+        batch_size=batch_size,
+        per_token=True,
+        shuffle_seed=shuffle_seed,
+        zero_subset=None,
+    )
+    assert saved_doc_ids is not None
+
+    # Confirm shuffle actually changed the row order — otherwise the test
+    # silently degenerates to "saved doc_ids == input doc_ids".
+    input_doc_ids = torch.tensor(ds["doc_ids"])
+    assert not torch.equal(
+        saved_doc_ids, input_doc_ids
+    ), "shuffle had no effect on doc_ids; test is degenerate"
+    # Pad-trim actually fired (3 % 2 = 1 row of pad was stripped).
+    assert saved_doc_ids.shape == input_doc_ids.shape
+
+    docs_to_drop = torch.tensor([1, 2])
+    flat_drop = (
+        torch.isin(saved_doc_ids.reshape(-1), docs_to_drop).nonzero().squeeze(-1)
+    )
+    assert flat_drop.numel() > 0, "no tokens matched docs_to_drop"
+
+    loss_doc, _ = _train_and_query_loss(
+        model_name,
+        ds,
+        batch_size=batch_size,
+        per_token=False,
+        shuffle_seed=shuffle_seed,
+        zero_subset=docs_to_drop,
+    )
+    loss_tok, _ = _train_and_query_loss(
+        model_name,
+        ds,
+        batch_size=batch_size,
+        per_token=True,
+        shuffle_seed=shuffle_seed,
+        zero_subset=flat_drop,
+    )
+
+    assert abs(loss_doc - loss_full) > 1e-6, "dropout had no effect; test is degenerate"
+    torch.testing.assert_close(
+        torch.tensor(loss_tok), torch.tensor(loss_doc), atol=1e-5, rtol=1e-4
+    )
+
+
 def _run_magic_cli(
     model_name,
     dataset,
