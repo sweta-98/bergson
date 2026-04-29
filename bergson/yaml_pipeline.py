@@ -1,11 +1,13 @@
 """Run a sequence of bergson commands defined in a YAML file."""
 
+from typing import Any
+
 import yaml
 
 
 def parse_pipeline(
     config_path: str, command_registry: dict[str, type]
-) -> list[tuple[str, object]]:
+) -> list[tuple[str, Any]]:
     """Read a pipeline YAML and hydrate each step into a command instance.
 
     The YAML must be a list of single-key mappings. Each entry names a
@@ -34,7 +36,7 @@ def parse_pipeline(
             f"got a top-level {type(steps).__name__}."
         )
 
-    parsed: list[tuple[str, object]] = []
+    parsed: list[tuple[str, Any]] = []
     for i, step in enumerate(steps):
         if not isinstance(step, dict) or len(step) != 1:
             raise ValueError(
