@@ -203,9 +203,10 @@ def main():
     """Parse CLI arguments and dispatch to the selected subcommand.
 
     Three input shapes are supported:
-      1. `bergson pipeline <file.yaml>`        — multi-step pipeline mode
-      2. `bergson <command> <file.yaml|json>`  — single-command config-file mode
-      3. `bergson <command> --flag value ...`  — single-command CLI-flag mode
+      `bergson <command> --flag value ...`  — single-command CLI-flag mode
+      `bergson pipeline <file.yaml>`        — multi-step pipeline mode
+      `bergson <command> <file.yaml|json>`  — single-command config-file mode
+
     """
     args = sys.argv[1:]
 
@@ -214,32 +215,31 @@ def main():
     command_classes = get_args(Main.__dataclass_fields__["command"].type)
     command_registry = {cls.__name__.lower(): cls for cls in command_classes}
 
-    # Branch 1 — Pipeline mode: a YAML listing several commands to run in
+    # Pipeline mode: a YAML listing several commands to run in
     # sequence. Delegates parsing + execution to `run_pipeline`.
     if len(args) == 2 and args[0].lower() == "pipeline" and os.path.isfile(args[-1]):
         run_pipeline(args[1], command_registry)
         return
 
-    # Branch 2 — Single-command config-file mode: the user passes a command
-    # name and a path to a YAML or JSON file. `Serializable.load` sniffs the
-    # file extension and hydrates the matching dataclass.
+    # Single-command config-file mode: the user passes a command
+    # name and a path to a YAML or JSON file.
     if len(args) == 2 and os.path.isfile(args[-1]):
         cmd_str, config_path = args
         try:
             cmd_cls = command_registry[cmd_str.lower()]
-        except KeyError:
-            print(
+        except KeyError as e:
+            raise ValueError(
                 f"Invalid command '{cmd_str}'. "
                 f"Valid commands are: {list(command_registry)}"
-            )
-            sys.exit(1)
+            ) from e
 
         try:
             prog = cmd_cls.load(config_path)
         except RuntimeError as e:
             print(f"Failed to load config file {config_path}: {e}")
             sys.exit(1)
-    # Branch 3 — CLI-flag mode: standard argparse-style flag parsing.
+
+    # CLI-flag mode: standard argparse-style flag parsing.
     else:
         parser = ArgumentParser(conflict_resolution=ConflictResolution.EXPLICIT)
         parser.add_arguments(Main, dest="prog")

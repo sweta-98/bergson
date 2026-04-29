@@ -1,8 +1,3 @@
-# Each list entry is a single registered command (see `bergson --help`).
-# Each step is fully self-contained: it carries every sub-config the
-# matching command would need on its own. There is intentionally no
-# top-level shared state — repeat values like `run_path` in every step.
-
 - hessian:
     hessian_cfg:
       method: kfac
