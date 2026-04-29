@@ -18,6 +18,7 @@ from datasets import (
     IterableDatasetDict,
     concatenate_datasets,
     load_dataset,
+    load_from_disk,
 )
 from numpy.lib.recfunctions import structured_to_unstructured
 from numpy.typing import DTypeLike
@@ -429,13 +430,14 @@ def load_data_string(
 ) -> Dataset:
     """Load a dataset from a string identifier or path."""
     if data_str.endswith(".csv"):
-        ds = Dataset.from_csv(data_str)
+        ds = load_dataset("csv", data_files=data_str, split=split)
     elif data_str.endswith(".json") or data_str.endswith(".jsonl"):
-        ds = Dataset.from_json(data_str)
-    elif Path(data_str).is_dir() and (Path(data_str) / "dataset_info.json").exists():
-        ds = Dataset.load_from_disk(data_str, keep_in_memory=False)
-        if isinstance(ds, DatasetDict):
-            ds = ds[split]
+        ds = load_dataset("json", data_files=data_str, split=split)
+    elif Path(data_str).is_dir() and (
+        (Path(data_str) / "dataset_info.json").exists()
+        or (Path(data_str) / "dataset_dict.json").exists()
+    ):
+        ds = load_from_disk(data_str, keep_in_memory=False)
     else:
         try:
             kwargs = simple_parse_kwargs_string(data_kwargs)
@@ -448,9 +450,17 @@ def load_data_string(
         except ValueError as e:
             # Automatically use load_from_disk if appropriate
             if "load_from_disk" in str(e):
-                ds = Dataset.load_from_disk(data_str, keep_in_memory=False)
+                ds = load_from_disk(data_str, keep_in_memory=False)
             else:
                 raise e
+
+    if isinstance(ds, DatasetDict):
+        if "[" in split or "+" in split:
+            raise NotImplementedError(
+                f"Split slicing/concatenation expressions are not supported "
+                f"for load_from_disk paths: {split!r}"
+            )
+        ds = ds[split]
 
     ds = assert_type(Dataset, ds)
     return ds

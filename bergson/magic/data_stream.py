@@ -61,6 +61,10 @@ class DataStream:
             indices = (indices, slice(None, x.shape[1]))
         elif "doc_ids" in batch:
             indices = torch.tensor(batch["doc_ids"], device=self.device)
+            # doc_ids may be longer than the per-batch padded seq_len (unpacked
+            # path stores doc_ids at dataset-wide max_len); truncate to match.
+            if indices.ndim == 2:
+                indices = indices[:, : x.shape[1]]
 
         return {
             "input_ids": x,
