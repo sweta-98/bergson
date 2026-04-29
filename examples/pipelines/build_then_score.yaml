@@ -1,0 +1,38 @@
+# Build a one-gradient query index, then score a dataset against it.
+#
+# This pipeline demonstrates the no-compression scoring path: gradients
+# are kept at full model dimensionality (`projection_dim: 0`) and
+# influence is computed as a raw dot product between the query gradient
+# and each training gradient.
+#
+# Run with:
+#     bergson pipeline examples/pipelines/build_then_score.yaml
+
+- build:
+    index_cfg:
+      run_path: runs/example_query
+      model: gpt2
+      projection_dim: 0
+      token_batch_size: 1024
+      data:
+        dataset: NeelNanda/pile-10k
+        split: "train[:20]"
+        chunk_length: 1024
+    preprocess_cfg:
+      aggregation: mean
+
+- score:
+    score_cfg:
+      query_path: runs/example_query
+      score: individual
+    index_cfg:
+      run_path: runs/example_scores
+      model: gpt2
+      projection_dim: 0
+      token_batch_size: 1024
+      data:
+        dataset: NeelNanda/pile-10k
+        split: "train[:100]"
+        chunk_length: 1024
+    preprocess_cfg:
+      aggregation: mean
