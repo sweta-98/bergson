@@ -13,6 +13,11 @@
       run_path: runs/example_query
       model: gpt2
       projection_dim: 0
+      # With projection_dim=0 the full per-token gradient is kept, so the
+      # default Adafactor-style P.mT @ P preconditioner would be a
+      # (full_grad_dim x full_grad_dim) matrix — multi-TB even for GPT-2.
+      # No-compression scoring uses raw dot products, not preconditioned ones.
+      skip_preconditioners: true
       token_batch_size: 1024
       data:
         dataset: NeelNanda/pile-10k
