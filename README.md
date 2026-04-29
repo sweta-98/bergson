@@ -103,6 +103,16 @@ You can also aggregate your query dataset into a single mean or sum gradient as 
 bergson build <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize --preconditioner_path <path_to_preconditioner>
 ```
 
+## Run a Multi-Step Pipeline
+
+Many workflows chain several Bergson commands together. Rather than running each command separately, you can express the whole sequence as a YAML file and run it with a single command:
+
+```bash
+bergson pipeline <path_to_yaml>
+```
+
+The YAML is a list of single-key entries, one per step, each holding that command's full config. See [`examples/pipelines/hessian_then_build.yaml`](examples/pipelines/hessian_then_build.yaml) for a runnable Hessian → build example.
+
 ## Query an On-Disk Gradient Index
 
 We provide a query Attributor which supports unit normalized gradients and KNN search out of the box. Access it via CLI with
