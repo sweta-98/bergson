@@ -781,7 +781,11 @@ def tokenize_and_chunk(
         token_chunks = [
             token_stream[i * chunk_size : (i + 1) * chunk_size] for i in range(n_chunks)
         ]
-        return {"input_ids": token_chunks, "doc_ids": doc_chunks}
+        return {
+            "input_ids": token_chunks,
+            "doc_ids": doc_chunks,
+            "length": [chunk_size] * n_chunks,
+        }
 
     # Cap parallelism so each worker gets enough documents to fill many chunks,
     # since tail tokens that don't fill a chunk are dropped per-worker.
