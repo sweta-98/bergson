@@ -1,11 +1,6 @@
 # NOTE: model is pinned to Pythia (nn.Linear) instead of GPT-2 because KFAC's
 # _init_covariance_dict assumes nn.Linear weight ordering and crashes on
 # HuggingFace Conv1D modules. See issue #254 — swap back to gpt2 once fixed.
-#
-# The two steps write to separate run_paths and each sets overwrite: true so
-# re-running the pipeline doesn't require manual `rm -r` of prior outputs.
-# (validate_run_path refuses to write into a non-empty directory unless
-# overwrite is set.)
 
 - hessian:
     hessian_cfg:
