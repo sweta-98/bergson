@@ -4,13 +4,16 @@ These tests exercise parsing only — they never call `.execute()`, so they
 need no GPU and no model downloads.
 """
 
+from pathlib import Path
 from typing import get_args
 
 import pytest
 
-from bergson.__main__ import Build, Hessian, Main
-from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
+from bergson.__main__ import Build, Hessian, Main, Score
+from bergson.config import HessianConfig, IndexConfig, PreprocessConfig, ScoreConfig
 from bergson.yaml_pipeline import parse_pipeline
+
+EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples" / "pipelines"
 
 
 @pytest.fixture
@@ -114,6 +117,34 @@ def test_unknown_command_raises(tmp_path, registry):
     )
     with pytest.raises(ValueError, match="unknown command 'not_a_real_command'"):
         parse_pipeline(yaml_path, registry)
+
+
+def test_build_then_score_example_parses(registry):
+    """The shipped build->score example YAML hydrates into the right commands."""
+    steps = parse_pipeline(str(EXAMPLES_DIR / "build_then_score.yaml"), registry)
+
+    assert [name for name, _ in steps] == ["build", "score"]
+
+    _, build_cmd = steps[0]
+    assert isinstance(build_cmd, Build)
+    assert isinstance(build_cmd.index_cfg, IndexConfig)
+    assert build_cmd.index_cfg.run_path == "runs/example_query"
+    assert build_cmd.index_cfg.model == "gpt2"
+    assert build_cmd.index_cfg.projection_dim == 0
+    assert build_cmd.index_cfg.data.split == "train[:20]"
+    assert isinstance(build_cmd.preprocess_cfg, PreprocessConfig)
+    assert build_cmd.preprocess_cfg.aggregation == "mean"
+
+    _, score_cmd = steps[1]
+    assert isinstance(score_cmd, Score)
+    assert isinstance(score_cmd.score_cfg, ScoreConfig)
+    assert score_cmd.score_cfg.query_path == "runs/example_query"
+    assert score_cmd.score_cfg.score == "individual"
+    assert isinstance(score_cmd.index_cfg, IndexConfig)
+    assert score_cmd.index_cfg.run_path == "runs/example_scores"
+    assert score_cmd.index_cfg.projection_dim == 0
+    assert isinstance(score_cmd.preprocess_cfg, PreprocessConfig)
+    assert score_cmd.preprocess_cfg.aggregation == "mean"
 
 
 def test_empty_step_body_uses_dataclass_defaults(tmp_path, registry):

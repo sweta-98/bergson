@@ -111,7 +111,7 @@ Many workflows chain several Bergson commands together. Rather than running each
 bergson pipeline <path_to_yaml>
 ```
 
-The YAML is a list of single-key entries, one per step, each holding that command's full config. See [`examples/pipelines/hessian_then_build.yaml`](examples/pipelines/hessian_then_build.yaml) for a runnable Hessian → build example.
+The YAML is a list of single-key entries, one per step, each holding that command's full config. See [`examples/pipelines/hessian_then_build.yaml`](examples/pipelines/hessian_then_build.yaml) for a runnable Hessian → build example, or [`examples/pipelines/build_then_score.yaml`](examples/pipelines/build_then_score.yaml) for a build → score example using the no-compression scoring path (`projection_dim: 0`).
 
 ## Query an On-Disk Gradient Index
 
