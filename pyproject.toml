@@ -20,6 +20,7 @@ dependencies = [
     "scipy",
     "peft>=0.17.0",
     "pyarrow",
+    "pyyaml",
     "simple-parsing",
     "torch>=2.4",
     "torchopt",
