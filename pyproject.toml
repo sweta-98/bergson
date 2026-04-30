@@ -21,7 +21,7 @@ dependencies = [
     "peft>=0.17.0",
     "pyarrow",
     "simple-parsing",
-    "torch",
+    "torch>=2.4",
     "torchopt",
     "transformers",
     "bitsandbytes"
