@@ -12,7 +12,7 @@ Arguments:
 - `experiment` - Which experiment: `attribute` (default), `asymmetric`, or path to custom run
 
 Options:
-- `--preconditioner NAME` - Specific preconditioner to evaluate (default: all available)
+- `--hessian NAME` - Specific hessian to evaluate (default: all available)
 - `--base-path PATH` - Base path for experiment outputs
 
 ## Instructions
@@ -29,10 +29,10 @@ from examples.semantic.attribute_preservation import (
 config = AttributePreservationConfig()
 base_path = 'runs/attribute_preservation'
 
-# Compute for each available preconditioner
-for name in ['no_precond', 'r_between', 'h_eval']:
-    precond = name if name != 'no_precond' else None
-    metrics = compute_attribute_metrics(config, base_path, precond)
+# Compute for each available hessian
+for name in ['no_hess', 'r_between', 'h_eval']:
+    hess = name if name != 'no_hess' else None
+    metrics = compute_attribute_metrics(config, base_path, hess)
     print_attribute_metrics(metrics, name)
 
 # Also compute majority control if available
@@ -40,7 +40,7 @@ from pathlib import Path
 if (Path(base_path) / 'data' / 'eval_majority.hf').exists():
     from examples.semantic.attribute_preservation import compute_majority_style_metrics
     majority = compute_majority_style_metrics(config, base_path, None)
-    print_attribute_metrics(majority, 'majority_no_precond')
+    print_attribute_metrics(majority, 'majority_no_hess')
 ```
 
 ### For asymmetric experiment:
@@ -55,9 +55,9 @@ from examples.semantic.asymmetric import (
 config = AsymmetricConfig()
 base_path = 'runs/asymmetric'
 
-for name in ['no_precond', 'r_between']:
-    precond = name if name != 'no_precond' else None
-    metrics = compute_asymmetric_metrics(config, base_path, precond)
+for name in ['no_hess', 'r_between']:
+    hess = name if name != 'no_hess' else None
+    metrics = compute_asymmetric_metrics(config, base_path, hess)
     print_metrics(metrics, name)
 ```
 

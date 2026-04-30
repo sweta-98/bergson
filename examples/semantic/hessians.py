@@ -1,4 +1,4 @@
-"""Preconditioner computation and comparison utilities for semantic experiments."""
+"""Hessian computation and comparison utilities for semantic experiments."""
 
 import subprocess
 from pathlib import Path
@@ -34,12 +34,12 @@ def _load_gradients_as_float(grads: np.memmap, name: str) -> np.ndarray:
 
 def build_style_indices(analysis_model: str = "tmp/checkpoint-282") -> None:
     """Build separate indices for pirate and shakespeare to
-    get separate preconditioners.
+    get separate hessians.
 
     Args:
         analysis_model: Model to use for gradient collection.
     """
-    base_path = Path("runs/precond_comparison")
+    base_path = Path("runs/hess_comparison")
     base_path.mkdir(parents=True, exist_ok=True)
 
     styles = [
@@ -73,7 +73,7 @@ def build_style_indices(analysis_model: str = "tmp/checkpoint-282") -> None:
             "16",
             "--token_batch_size",
             "6000",
-            # NOTE: Do NOT skip preconditioners - we need them!
+            # NOTE: Do NOT skip hessians - we need them!
         ]
         print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -121,7 +121,7 @@ def build_style_indices(analysis_model: str = "tmp/checkpoint-282") -> None:
         print(f"Combined index already exists at {combined_path}, skipping...")
 
 
-def compute_between_preconditioner_covariance(
+def compute_between_hessian_covariance(
     pirate_path: Path | str,
     shakespeare_path: Path | str,
     combined_path: Path | str,
@@ -138,10 +138,10 @@ def compute_between_preconditioner_covariance(
     Preconditioning with this should downweight the style direction.
 
     Args:
-        pirate_path: Path to pirate style preconditioner.
-        shakespeare_path: Path to shakespeare style preconditioner.
-        combined_path: Path to combined preconditioner.
-        output_path: Path to save the between-class preconditioner.
+        pirate_path: Path to pirate style hessian.
+        shakespeare_path: Path to shakespeare style hessian.
+        combined_path: Path to combined hessian.
+        output_path: Path to save the between-class hessian.
 
     Returns:
         The computed GradientProcessor.
@@ -149,20 +149,20 @@ def compute_between_preconditioner_covariance(
     output_path = Path(output_path)
 
     # Check cache first
-    if (output_path / "preconditioners.pth").exists():
+    if (output_path / "hessians.pth").exists():
         print(f"Loading cached R_between (covariance) from {output_path}")
         return GradientProcessor.load(output_path)
 
-    print("Computing R_between preconditioner (covariance method)...")
+    print("Computing R_between hessian (covariance method)...")
     pirate_proc = GradientProcessor.load(Path(pirate_path))
     shakespeare_proc = GradientProcessor.load(Path(shakespeare_path))
     combined_proc = GradientProcessor.load(Path(combined_path))
 
     between_precs = {}
-    for name in pirate_proc.preconditioners:
-        R_pirate = pirate_proc.preconditioners[name]
-        R_shakespeare = shakespeare_proc.preconditioners[name]
-        R_combined = combined_proc.preconditioners[name]
+    for name in pirate_proc.hessians:
+        R_pirate = pirate_proc.hessians[name]
+        R_shakespeare = shakespeare_proc.hessians[name]
+        R_combined = combined_proc.hessians[name]
 
         # R_within = average of within-class covariances
         R_within = 0.5 * R_pirate + 0.5 * R_shakespeare
@@ -173,18 +173,18 @@ def compute_between_preconditioner_covariance(
     # Create processor with required fields from one of the source processors
     between_proc = GradientProcessor(
         normalizers=pirate_proc.normalizers,
-        preconditioners=between_precs,
-        preconditioners_eigen={},
+        hessians=between_precs,
+        hessians_eigen={},
         projection_dim=pirate_proc.projection_dim,
         projection_type=pirate_proc.projection_type,
         include_bias=pirate_proc.include_bias,
     )
     between_proc.save(output_path)
-    print(f"Saved R_between preconditioner to {output_path}")
+    print(f"Saved R_between hessian to {output_path}")
     return between_proc
 
 
-def compute_between_preconditioner_means(
+def compute_between_hessian_means(
     pirate_index_path: Path | str,
     shakespeare_index_path: Path | str,
     output_path: Path | str,
@@ -192,7 +192,7 @@ def compute_between_preconditioner_means(
     """Compute R_between =
         (mu_pirate - mu_shakespeare)(mu_pirate - mu_shakespeare)^T per module.
 
-    This creates a rank-1 preconditioner from the difference in class means.
+    This creates a rank-1 hessian from the difference in class means.
     More targeted than the covariance method - captures exactly the "style direction".
 
     Works per-module to avoid OOM from creating the full outer product.
@@ -200,7 +200,7 @@ def compute_between_preconditioner_means(
     Args:
         pirate_index_path: Path to pirate gradient index.
         shakespeare_index_path: Path to shakespeare gradient index.
-        output_path: Path to save the between-class preconditioner.
+        output_path: Path to save the between-class hessian.
 
     Returns:
         The computed GradientProcessor.
@@ -208,11 +208,11 @@ def compute_between_preconditioner_means(
     output_path = Path(output_path)
 
     # Check cache first
-    if (output_path / "preconditioners.pth").exists():
+    if (output_path / "hessians.pth").exists():
         print(f"Loading cached R_between (means) from {output_path}")
         return GradientProcessor.load(output_path)
 
-    print("Computing R_between preconditioner (class means method)...")
+    print("Computing R_between hessian (class means method)...")
 
     pirate_path = Path(pirate_index_path)
     shakespeare_path = Path(shakespeare_index_path)
@@ -227,9 +227,9 @@ def compute_between_preconditioner_means(
     # Load a processor to get module names and metadata
     pirate_proc = GradientProcessor.load(pirate_path)
 
-    # Compute per-module rank-1 preconditioners
+    # Compute per-module rank-1 hessians
     between_precs = {}
-    module_names = list(pirate_proc.preconditioners.keys())
+    module_names = list(pirate_proc.hessians.keys())
 
     print(f"  Computing per-module R_between for {len(module_names)} modules...")
     for name in tqdm(module_names):
@@ -244,27 +244,27 @@ def compute_between_preconditioner_means(
         # Style direction for this module
         delta = mu_pirate - mu_shakespeare
 
-        # Rank-1 preconditioner: outer product
+        # Rank-1 hessian: outer product
         between_precs[name] = torch.outer(delta, delta)
 
     between_proc = GradientProcessor(
         normalizers=pirate_proc.normalizers,
-        preconditioners=between_precs,
-        preconditioners_eigen={},
+        hessians=between_precs,
+        hessians_eigen={},
         projection_dim=pirate_proc.projection_dim,
         projection_type=pirate_proc.projection_type,
         include_bias=pirate_proc.include_bias,
     )
     between_proc.save(output_path)
-    print(f"Saved R_between preconditioner (means) to {output_path}")
+    print(f"Saved R_between hessian (means) to {output_path}")
     return between_proc
 
 
 # Default to the means-based approach as it's more targeted
-compute_between_preconditioner = compute_between_preconditioner_means
+compute_between_hessian = compute_between_hessian_means
 
 
-def compute_mixed_preconditioner(
+def compute_mixed_hessian(
     pirate_path: Path | str,
     shakespeare_path: Path | str,
     output_path: Path | str,
@@ -272,9 +272,9 @@ def compute_mixed_preconditioner(
     """Compute R_mixed = 0.5 * R_pirate + 0.5 * R_shakespeare.
 
     Args:
-        pirate_path: Path to pirate style preconditioner.
-        shakespeare_path: Path to shakespeare style preconditioner.
-        output_path: Path to save the mixed preconditioner.
+        pirate_path: Path to pirate style hessian.
+        shakespeare_path: Path to shakespeare style hessian.
+        output_path: Path to save the mixed hessian.
 
     Returns:
         The computed GradientProcessor.
@@ -282,40 +282,39 @@ def compute_mixed_preconditioner(
     output_path = Path(output_path)
 
     # Check cache first
-    if (output_path / "preconditioners.pth").exists():
-        print(f"Loading cached mixed preconditioner from {output_path}")
+    if (output_path / "hessians.pth").exists():
+        print(f"Loading cached mixed hessian from {output_path}")
         return GradientProcessor.load(output_path)
 
-    print("Computing mixed 50-50 preconditioner...")
+    print("Computing mixed 50-50 hessian...")
     pirate_proc = GradientProcessor.load(Path(pirate_path))
     shakespeare_proc = GradientProcessor.load(Path(shakespeare_path))
 
     mixed_precs = {}
-    for name in pirate_proc.preconditioners:
+    for name in pirate_proc.hessians:
         mixed_precs[name] = (
-            0.5 * pirate_proc.preconditioners[name]
-            + 0.5 * shakespeare_proc.preconditioners[name]
+            0.5 * pirate_proc.hessians[name] + 0.5 * shakespeare_proc.hessians[name]
         )
 
     mixed_proc = GradientProcessor(
         normalizers=pirate_proc.normalizers,
-        preconditioners=mixed_precs,
-        preconditioners_eigen={},
+        hessians=mixed_precs,
+        hessians_eigen={},
         projection_dim=pirate_proc.projection_dim,
         projection_type=pirate_proc.projection_type,
         include_bias=pirate_proc.include_bias,
     )
     mixed_proc.save(output_path)
-    print(f"Saved mixed preconditioner to {output_path}")
+    print(f"Saved mixed hessian to {output_path}")
     return mixed_proc
 
 
-def compute_summed_loss_preconditioner(
+def compute_summed_loss_hessian(
     pirate_index_path: Path | str,
     shakespeare_index_path: Path | str,
     output_path: Path | str,
 ) -> GradientProcessor:
-    """Compute preconditioner from summed loss across style contrastive pairs.
+    """Compute hessian from summed loss across style contrastive pairs.
 
     Instead of computing gradients separately and then averaging, this approach
     conceptually sums the loss across contrastive pairs before computing gradients.
@@ -328,7 +327,7 @@ def compute_summed_loss_preconditioner(
     Args:
         pirate_index_path: Path to pirate gradient index.
         shakespeare_index_path: Path to shakespeare gradient index.
-        output_path: Path to save the preconditioner.
+        output_path: Path to save the hessian.
 
     Returns:
         The computed GradientProcessor.
@@ -338,11 +337,11 @@ def compute_summed_loss_preconditioner(
     output_path = Path(output_path)
 
     # Check cache first
-    if (output_path / "preconditioners.pth").exists():
-        print(f"Loading cached summed loss preconditioner from {output_path}")
+    if (output_path / "hessians.pth").exists():
+        print(f"Loading cached summed loss hessian from {output_path}")
         return GradientProcessor.load(output_path)
 
-    print("Computing summed loss preconditioner from style contrastive pairs...")
+    print("Computing summed loss hessian from style contrastive pairs...")
 
     pirate_path = Path(pirate_index_path)
     shakespeare_path = Path(shakespeare_index_path)
@@ -387,11 +386,11 @@ def compute_summed_loss_preconditioner(
 
     # Load a processor to get metadata
     pirate_proc = GradientProcessor.load(pirate_path)
-    module_names = list(pirate_proc.preconditioners.keys())
+    module_names = list(pirate_proc.hessians.keys())
 
-    # Compute per-module preconditioners from summed gradients (batched)
+    # Compute per-module hessians from summed gradients (batched)
     summed_precs = {}
-    print(f"  Computing per-module preconditioners for {len(module_names)} modules...")
+    print(f"  Computing per-module hessians for {len(module_names)} modules...")
 
     for name in tqdm(module_names):
         pirate_mod = numpy_to_tensor(pirate_grads[name]).float()
@@ -410,15 +409,15 @@ def compute_summed_loss_preconditioner(
 
     summed_proc = GradientProcessor(
         normalizers=pirate_proc.normalizers,
-        preconditioners=summed_precs,
-        preconditioners_eigen={},
+        hessians=summed_precs,
+        hessians_eigen={},
         projection_dim=pirate_proc.projection_dim,
         projection_type=pirate_proc.projection_type,
         include_bias=pirate_proc.include_bias,
     )
     output_path.mkdir(parents=True, exist_ok=True)
     summed_proc.save(output_path)
-    print(f"Saved summed loss preconditioner to {output_path}")
+    print(f"Saved summed loss hessian to {output_path}")
     return summed_proc
 
 
@@ -503,7 +502,7 @@ def compute_pca_style_subspace(
 
     # Get module names from processor
     pirate_proc = GradientProcessor.load(pirate_path)
-    module_names = list(pirate_proc.preconditioners.keys())
+    module_names = list(pirate_proc.hessians.keys())
 
     style_subspace = {}
     variance_pcts: list[float] = []
@@ -633,7 +632,7 @@ def report_pca_variance(
     print(f"  Found {len(common_facts_list)} contrastive pairs")
 
     pirate_proc = GradientProcessor.load(pirate_path)
-    module_names = list(pirate_proc.preconditioners.keys())
+    module_names = list(pirate_proc.hessians.keys())
 
     # For each k, track per-module variance explained percentages
     results: dict[int, dict[str, float]] = {}
@@ -756,7 +755,7 @@ def apply_pca_projection_to_eval_grads(
     return projected
 
 
-def compute_eval_preconditioner(
+def compute_eval_hessian(
     eval_grads_path: Path | str,
     output_path: Path | str,
     reference_proc_path: Path | str | None = None,
@@ -767,7 +766,7 @@ def compute_eval_preconditioner(
 
     Args:
         eval_grads_path: Path to eval gradients index.
-        output_path: Path to save the preconditioner.
+        output_path: Path to save the hessian.
         reference_proc_path: Path to a reference processor
         for module names (if eval has none).
 
@@ -779,11 +778,11 @@ def compute_eval_preconditioner(
     output_path = Path(output_path)
 
     # Check cache first
-    if (output_path / "preconditioners.pth").exists():
-        print(f"Loading cached eval preconditioner from {output_path}")
+    if (output_path / "hessians.pth").exists():
+        print(f"Loading cached eval hessian from {output_path}")
         return GradientProcessor.load(output_path)
 
-    print("Computing eval second moment preconditioner...")
+    print("Computing eval second moment hessian...")
 
     eval_path = Path(eval_grads_path)
 
@@ -805,7 +804,7 @@ def compute_eval_preconditioner(
 
     # Compute per-module second moment matrices
     eval_precs = {}
-    print(f"  Computing per-module preconditioners for {len(module_names)} modules...")
+    print(f"  Computing per-module hessians for {len(module_names)} modules...")
 
     for name in tqdm(module_names):
         g = torch.from_numpy(_load_gradients_as_float(eval_grads, name))
@@ -816,19 +815,19 @@ def compute_eval_preconditioner(
 
     eval_proc = GradientProcessor(
         normalizers=base_proc.normalizers,
-        preconditioners=eval_precs,
-        preconditioners_eigen={},
+        hessians=eval_precs,
+        hessians_eigen={},
         projection_dim=base_proc.projection_dim,
         projection_type=base_proc.projection_type,
         include_bias=base_proc.include_bias,
     )
     output_path.mkdir(parents=True, exist_ok=True)
     eval_proc.save(output_path)
-    print(f"Saved eval preconditioner to {output_path}")
+    print(f"Saved eval hessian to {output_path}")
     return eval_proc
 
 
-def compute_train_eval_mixed_preconditioner(
+def compute_train_eval_mixed_hessian(
     train_index_path: Path | str,
     eval_grads_path: Path | str,
     output_path: Path | str,
@@ -841,8 +840,8 @@ def compute_train_eval_mixed_preconditioner(
     Args:
         train_index_path: Path to train gradients index.
         eval_grads_path: Path to eval gradients index.
-        output_path: Path to save the preconditioner.
-        train_weight: Weight for train preconditioner (default 0.5).
+        output_path: Path to save the hessian.
+        train_weight: Weight for train hessian (default 0.5).
 
     Returns:
         The computed GradientProcessor.
@@ -852,12 +851,12 @@ def compute_train_eval_mixed_preconditioner(
     output_path = Path(output_path)
 
     # Check cache first
-    if (output_path / "preconditioners.pth").exists():
-        print(f"Loading cached train-eval mixed preconditioner from {output_path}")
+    if (output_path / "hessians.pth").exists():
+        print(f"Loading cached train-eval mixed hessian from {output_path}")
         return GradientProcessor.load(output_path)
 
     print(
-        f"Computing train-eval mixed preconditioner ({train_weight:.0%} "
+        f"Computing train-eval mixed hessian ({train_weight:.0%} "
         f"train, {1-train_weight:.0%} eval)..."
     )
 
@@ -880,7 +879,7 @@ def compute_train_eval_mixed_preconditioner(
 
     # Compute per-module mixed second moment matrices
     mixed_precs = {}
-    print(f"  Computing per-module preconditioners for {len(module_names)} modules...")
+    print(f"  Computing per-module hessians for {len(module_names)} modules...")
 
     for name in tqdm(module_names):
         g_train = torch.from_numpy(_load_gradients_as_float(train_grads, name))
@@ -899,13 +898,13 @@ def compute_train_eval_mixed_preconditioner(
 
     mixed_proc = GradientProcessor(
         normalizers=base_proc.normalizers,
-        preconditioners=mixed_precs,
-        preconditioners_eigen={},
+        hessians=mixed_precs,
+        hessians_eigen={},
         projection_dim=base_proc.projection_dim,
         projection_type=base_proc.projection_type,
         include_bias=base_proc.include_bias,
     )
     output_path.mkdir(parents=True, exist_ok=True)
     mixed_proc.save(output_path)
-    print(f"Saved train-eval mixed preconditioner to {output_path}")
+    print(f"Saved train-eval mixed hessian to {output_path}")
     return mixed_proc

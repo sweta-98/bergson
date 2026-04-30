@@ -18,7 +18,7 @@ from bergson.data import (
 )
 from bergson.distributed import launch_distributed_run
 from bergson.process_grads import (
-    get_trackstar_preconditioner,
+    get_trackstar_hessian,
     normalize_and_aggregate_grads,
 )
 from bergson.score.score_writer import (
@@ -91,14 +91,14 @@ def get_query_grads(
     return grads, preprocess_cfg
 
 
-def _make_split_preconditioner(
-    preconditioners: dict[str, torch.Tensor],
+def _make_split_hessian(
+    hessians: dict[str, torch.Tensor],
     modules: list[str],
     device: torch.device,
     dtype: torch.dtype,
 ):
     """Build a per-batch index transform for split (two-sided) preconditioning."""
-    stacked = torch.stack([preconditioners[m] for m in modules])
+    stacked = torch.stack([hessians[m] for m in modules])
 
     def transform(
         grads: dict[str, torch.Tensor],
@@ -132,7 +132,7 @@ def create_scorer(
     Loads query gradients from disk, preprocesses them if not already
     preprocessed, and constructs the Scorer.
 
-    * Loads preconditioner from ``preprocess_cfg.preconditioner_path``.
+    * Loads hessian from ``preprocess_cfg.hessian_path``.
     * Applies to query grads once here (unless already preconditioned).
     * Normalizes and aggregates (unless already done).
     * Builds an ``index_transform`` closure for per-batch index
@@ -140,9 +140,9 @@ def create_scorer(
     """
     query_grads, query_preprocess_cfg = get_query_grads(score_cfg)
 
-    # Load preconditioner: H^(-1/2) for split, H^(-1) for one-sided
-    preconditioners = get_trackstar_preconditioner(
-        preprocess_cfg.preconditioner_path,
+    # Load hessian: H^(-1/2) for split, H^(-1) for one-sided
+    hessians = get_trackstar_hessian(
+        preprocess_cfg.hessian_path,
         device=device,
         power=-0.5 if preprocess_cfg.unit_normalize else -1,
         return_dtype=dtype,
@@ -150,21 +150,21 @@ def create_scorer(
 
     # Maybe precondition query grads if it hasn't already been applied, e.g.
     # during reduce.
-    if preconditioners and not bool(query_preprocess_cfg.preconditioner_path):
+    if hessians and not bool(query_preprocess_cfg.hessian_path):
         query_grads = {
-            m: query_grads[m].to(device=device, dtype=dtype) @ preconditioners[m]
+            m: query_grads[m].to(device=device, dtype=dtype) @ hessians[m]
             for m in score_cfg.modules
         }
 
     # Build index_transform for split (two-sided) preconditioning
     index_transform = (
-        _make_split_preconditioner(
-            preconditioners,
+        _make_split_hessian(
+            hessians,
             score_cfg.modules,
             device,
             dtype,
         )
-        if preconditioners and preprocess_cfg.unit_normalize
+        if hessians and preprocess_cfg.unit_normalize
         else lambda x: x
     )
 

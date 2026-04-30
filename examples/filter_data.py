@@ -16,7 +16,7 @@ from trl import SFTConfig, SFTTrainer
 
 from bergson.config import DataConfig
 from bergson.data import load_gradient_dataset, load_scores, tokenize
-from bergson.process_grads import get_trackstar_preconditioner, precondition_flat_grads
+from bergson.process_grads import get_trackstar_hessian, precondition_flat_grads
 from bergson.utils.utils import assert_type
 
 
@@ -50,7 +50,7 @@ class FilterConfig:
     """Use the top-scored dataset items for the attribution query."""
 
     precondition: bool = False
-    """Whether to use preconditioner for attribution filtering."""
+    """Whether to use hessian for attribution filtering."""
 
     name: str | None = None
     """Name of the run, used to save the model and tokenizer."""
@@ -391,11 +391,9 @@ def _get_attribution_indices(
 
     if args.precondition:
         index_ds_path = Path(args.index_dataset)
-        preconditioner_path = (
-            args.query_dataset if args.query_dataset else args.index_dataset
-        )
-        h_inv = get_trackstar_preconditioner(
-            preconditioner_path, device=torch.device("cuda"), power=-1
+        hessian_path = args.query_dataset if args.query_dataset else args.index_dataset
+        h_inv = get_trackstar_hessian(
+            hessian_path, device=torch.device("cuda"), power=-1
         )
 
         # Get ordered module names from info.json

@@ -360,8 +360,8 @@ class IndexConfig(AttributionConfig, Serializable):
     or directly to an optimizer state file. Loads exp_avg_sq second
     moments to normalize gradients."""
 
-    skip_preconditioners: bool = False
-    """Whether to skip estimating preconditioner statistics"""
+    skip_hessians: bool = False
+    """Whether to skip estimating hessian statistics"""
 
     skip_index: bool = False
     """Whether to skip building the gradient index."""
@@ -458,8 +458,8 @@ class PreprocessConfig(Serializable):
     unit_normalize: bool = False
     """Whether to unit normalize the gradients."""
 
-    preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner."""
+    hessian_path: str | None = None
+    """Path to a precomputed gradient processor. Set to apply Hessian approx."""
 
     aggregation: Literal["mean", "sum", "none"] = "none"
     """Method for aggregating the gradients. In score, only query
@@ -499,7 +499,7 @@ class ScoreConfig(Serializable):
 class HessianConfig(Serializable):
     """Config for reducing the gradients."""
 
-    method: Literal["kfac", "tkfac", "shampoo"] = "kfac"
+    method: Literal["kfac", "tkfac", "shampoo", "autocorrelation"] = "autocorrelation"
     """Method for approximating the Hessian."""
 
     ev_correction: bool = False
@@ -578,12 +578,12 @@ class TrackstarConfig:
     """Number of gradient components to downweight via automatic lambda
     selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is
     computed so that the sorted singular-value curves of the query and
-    index preconditioners intersect at this component. Typical value is
+    index hessians intersect at this component. Typical value is
     ~1000 out of ~65K total components."""
 
-    num_stats_sample_preconditioner: bool = True
+    num_stats_sample_hessian: bool = True
     """Whether to use num_stats_sample items or the full dataset to
-    compute preconditioners."""
+    compute hessians."""
 
     resume: bool = False
     """Skip pipeline steps whose output directory already exists."""

@@ -11,7 +11,7 @@ from tqdm import tqdm
 from bergson import IndexConfig
 from bergson.data import load_gradients
 from bergson.gradients import GradientProcessor
-from bergson.process_grads import mix_preconditioners
+from bergson.process_grads import mix_autocorrelation_matrices
 from bergson.utils.math import damped_psd_power
 
 
@@ -60,7 +60,7 @@ def load_scores_matrix(scores_path: Path | str) -> np.ndarray:
 def compute_scores_fast(
     index_path: Path | str,
     output_path: Path | str,
-    preconditioner_path: Path | str | None = None,
+    hessian_path: Path | str | None = None,
     unit_normalize: bool = True,
     batch_size: int = 256,
 ) -> None:
@@ -72,7 +72,7 @@ def compute_scores_fast(
     Args:
         index_path: Path to the gradient index.
         output_path: Path to save scores.
-        preconditioner_path: Optional path to preconditioner for query gradients.
+        hessian_path: Optional path to hessian for query gradients.
         unit_normalize: Whether to unit normalize gradients before scoring.
         batch_size: Batch size for score computation.
     """
@@ -97,17 +97,17 @@ def compute_scores_fast(
 
     print(f"  {n_samples} samples, {len(module_names)} modules")
 
-    # Load and apply preconditioner if specified
-    if preconditioner_path:
-        preconditioner_path = Path(preconditioner_path)
-        print(f"Loading preconditioner from {preconditioner_path}...")
-        proc = GradientProcessor.load(preconditioner_path)
+    # Load and apply hessian if specified
+    if hessian_path:
+        hessian_path = Path(hessian_path)
+        print(f"Loading hessian from {hessian_path}...")
+        proc = GradientProcessor.load(hessian_path)
 
         # Compute H^(-1) for each module using the shared utility
         h_inv = {}
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1)
 
         # Bergson's approach (from score.py):
@@ -124,8 +124,8 @@ def compute_scores_fast(
         print("Applying H^(-1) to query gradients...")
         all_grads_query = []
         for name, g in zip(module_names, all_grads_raw):
-            g_precond = (g.to(device) @ h_inv[name]).cpu()
-            all_grads_query.append(g_precond)
+            g_hess = (g.to(device) @ h_inv[name]).cpu()
+            all_grads_query.append(g_hess)
         all_grads_query = torch.cat(all_grads_query, dim=1)
         all_grads_raw = torch.cat(all_grads_raw, dim=1)
         print(f"Gradient matrix shape: {all_grads_raw.shape}")
@@ -213,8 +213,8 @@ def compute_scores_fast(
 def compute_scores_with_bergson(
     index_path: Path | str,
     output_path: Path | str,
-    query_preconditioner_path: str | Path | None = None,
-    index_preconditioner_path: str | Path | None = None,
+    query_hessian_path: str | Path | None = None,
+    index_hessian_path: str | Path | None = None,
     unit_normalize: bool = True,
 ) -> None:
     """Run bergson score to compute pairwise similarities.
@@ -222,14 +222,14 @@ def compute_scores_with_bergson(
     NOTE: This recomputes gradients, which is slow. For index-vs-index
     scoring, use compute_scores_fast() instead.
 
-    If both query_preconditioner_path and index_preconditioner_path are given,
+    If both query_hessian_path and index_hessian_path are given,
     they are mixed internally before scoring.
 
     Args:
         index_path: Path to the gradient index.
         output_path: Path to save scores.
-        query_preconditioner_path: Optional path to query preconditioner.
-        index_preconditioner_path: Optional path to index preconditioner.
+        query_hessian_path: Optional path to query hessian.
+        index_hessian_path: Optional path to index hessian.
         unit_normalize: Whether to unit normalize gradients.
     """
     output_path = Path(output_path)
@@ -239,21 +239,21 @@ def compute_scores_with_bergson(
         print(f"Scores already exist at {output_path}, skipping...")
         return
 
-    # Mix preconditioners if both paths are given, otherwise use whichever is provided
-    preconditioner_path = None
-    if query_preconditioner_path and index_preconditioner_path:
-        mixed_path = output_path / "mixed_preconditioner"
+    # Mix hessians if both paths are given, otherwise use whichever is provided
+    hessian_path = None
+    if query_hessian_path and index_hessian_path:
+        mixed_path = output_path / "mixed_hessian"
         output_path.mkdir(parents=True, exist_ok=True)
-        mix_preconditioners(
-            query_preconditioner_path,
-            index_preconditioner_path,
+        mix_autocorrelation_matrices(
+            query_hessian_path,
+            index_hessian_path,
             mixed_path,
         )
-        preconditioner_path = str(mixed_path)
-    elif query_preconditioner_path:
-        preconditioner_path = str(query_preconditioner_path)
-    elif index_preconditioner_path:
-        preconditioner_path = str(index_preconditioner_path)
+        hessian_path = str(mixed_path)
+    elif query_hessian_path:
+        hessian_path = str(query_hessian_path)
+    elif index_hessian_path:
+        hessian_path = str(index_hessian_path)
 
     # Load index config to get model and dataset info
     index_cfg = IndexConfig.load_yaml(index_path / "index_config.yaml")
@@ -289,8 +289,8 @@ def compute_scores_with_bergson(
     if unit_normalize:
         cmd.append("--unit_normalize")
 
-    if preconditioner_path:
-        cmd.extend(["--preconditioner_path", preconditioner_path])
+    if hessian_path:
+        cmd.extend(["--hessian_path", hessian_path])
 
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)

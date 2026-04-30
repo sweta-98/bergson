@@ -206,7 +206,7 @@ class FaissIndex:
         faiss_cfg: FaissConfig,
         device: str,
         unit_norm: bool,
-        preconditioners: dict[str, torch.Tensor],
+        hessians: dict[str, torch.Tensor],
     ):
         faiss = _require_faiss()
 
@@ -261,7 +261,7 @@ class FaissIndex:
 
             grads_chunk = np.concatenate(buffer_parts, axis=0)
             grads_chunk = precondition_flat_grads(
-                torch.from_numpy(grads_chunk), preconditioners, ordered_modules
+                torch.from_numpy(grads_chunk), hessians, ordered_modules
             ).numpy()
             buffer_parts.clear()
 

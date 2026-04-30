@@ -8,7 +8,7 @@ from datasets import Dataset
 from .config import PreprocessConfig
 from .data import compute_num_token_grads, create_index, create_token_index
 from .process_grads import (
-    get_trackstar_preconditioner,
+    get_trackstar_hessian,
     normalize_flat_grad,
     precondition_grad,
 )
@@ -75,10 +75,10 @@ class Builder:
         self.preprocess_cfg = preprocess_cfg
         total_grad_dim = sum(grad_sizes.values())
 
-        # ── Device & precomputed preconditioner ──────────────────────────────────────
+        # ── Device & precomputed hessian ──────────────────────────────────────
         device = torch.device("cuda", torch.cuda.current_device())
-        self.h_inv = get_trackstar_preconditioner(
-            preprocess_cfg.preconditioner_path,
+        self.h_inv = get_trackstar_hessian(
+            preprocess_cfg.hessian_path,
             power=-0.5 if preprocess_cfg.unit_normalize else -1,
             device=device,
         )

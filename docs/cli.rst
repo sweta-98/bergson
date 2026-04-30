@@ -2,7 +2,7 @@ Command Line Interface
 ======================
 
 Bergson's post-hoc attribution exposes three building block commands — ``build``, ``reduce``, and
-``score`` — plus supporting commands for querying, preconditioner computation, and
+``score`` — plus supporting commands for querying, hessian computation, and
 end-to-end pipelines.
 
 ``build`` and ``query`` are designed for working with compressed gradients stored on disk and queried
@@ -13,13 +13,13 @@ a single predetermined query set. Use ``reduce`` to accumulate a dataset into a 
 and ``score`` to map over an arbitrarily large dataset, computing the gradient of each item and scoring it against
 precomputed query gradients.
 
-``hessian`` and ``preconditioners`` compute preconditioner statistics independently of gradient
-collection. ``trackstar`` runs preconditioners, build, and score as a single pipeline
-(see :doc:`trackstar`).
+``hessian`` computes Hessian statistics (KFAC, TKFAC, Shampoo, or gradient
+autocorrelation) independently of per-example gradient collection. ``trackstar``
+runs hessian fitting, build, and score as a single pipeline (see :doc:`trackstar`).
 
 .. code-block:: bash
 
-   bergson {build,query,preconditioners,reduce,score,hessian,trackstar} [OPTIONS]
+   bergson {build,query,reduce,score,hessian,trackstar} [OPTIONS]
 
 .. autoclass:: bergson.__main__.Build
    :members:
@@ -63,7 +63,7 @@ collection. ``trackstar`` runs preconditioners, build, and score as a single pip
        --aggregation mean \
        --unit_normalize \
        --projection_dim 0 \
-       --skip_preconditioners
+       --skip_hessians
 
 .. autoclass:: bergson.__main__.Score
    :members:
@@ -95,21 +95,6 @@ collection. ``trackstar`` runs preconditioners, build, and score as a single pip
        --dataset NeelNanda/pile-10k \
        --truncation \
        --method kfac
-
-.. autoclass:: bergson.__main__.Preconditioners
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-**Example:**
-
-.. code-block:: bash
-
-   bergson preconditioners runs/my-processor \
-       --model EleutherAI/pythia-14m \
-       --dataset NeelNanda/pile-10k \
-       --truncation \
-       --normalizer adam
 
 .. autoclass:: bergson.__main__.Trackstar
    :members:

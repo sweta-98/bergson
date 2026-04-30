@@ -74,7 +74,7 @@ def create_processor(
         processor = GradientProcessor.load(
             processor_path,
             map_location=f"cuda:{local_rank}",
-            skip_preconditioners=cfg.skip_preconditioners,
+            skip_hessians=cfg.skip_hessians,
         )
     else:
         normalizers: dict[str, Normalizer] = {}

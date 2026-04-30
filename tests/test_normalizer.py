@@ -15,7 +15,7 @@ def test_normalizer_save_load_with_bias(tmp_path):
     )
     processor.save(tmp_path)
 
-    loaded = GradientProcessor.load(tmp_path, skip_preconditioners=True)
+    loaded = GradientProcessor.load(tmp_path, skip_hessians=True)
     loaded_norm = loaded.normalizers["layer"]
     assert isinstance(loaded_norm, AdamNormalizer)
     torch.testing.assert_close(loaded_norm.weight_avg_sq, weight_sq)
@@ -32,7 +32,7 @@ def test_normalizer_save_load_with_bias(tmp_path):
     ada_path = tmp_path / "adafactor"
     processor2.save(ada_path)
 
-    loaded2 = GradientProcessor.load(ada_path, skip_preconditioners=True)
+    loaded2 = GradientProcessor.load(ada_path, skip_hessians=True)
     loaded_ada = loaded2.normalizers["layer"]
     assert isinstance(loaded_ada, AdafactorNormalizer)
     torch.testing.assert_close(loaded_ada.row, ada.row)

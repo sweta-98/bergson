@@ -32,7 +32,7 @@ At a higher level, `bergson trackstar` pipelines all necessary steps for TrackSt
 - Support MAGIC
 - Support per-token attribution
 - Support EK-FAC
-- [Experimental] Support distributing preconditioners across nodes and devices for VRAM-efficient computation through the GradientCollectorWithDistributedPreconditioners. If you would like this functionality exposed via the CLI please get in touch! https://github.com/EleutherAI/bergson/pull/100
+- [Experimental] Support distributing hessians across nodes and devices for VRAM-efficient computation through the GradientCollectorWithDistributedHessians. If you would like this functionality exposed via the CLI please get in touch! https://github.com/EleutherAI/bergson/pull/100
 
 ## Notebooks
 
@@ -100,7 +100,7 @@ bergson score <output_path> --model <model_name> --dataset <dataset_name> --quer
 You can also aggregate your query dataset into a single mean or sum gradient as it's built:
 
 ```bash
-bergson build <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize --preconditioner_path <path_to_preconditioner>
+bergson build <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize --hessian_path <path_to_hessian>
 ```
 
 ## Query an On-Disk Gradient Index

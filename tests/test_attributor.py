@@ -26,7 +26,7 @@ requires_faiss_gpu = pytest.mark.skipif(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_attributor(tmp_path: Path, model, dataset):
     cfg = IndexConfig(run_path=str(tmp_path), token_batch_size=1024)
-    cfg.skip_preconditioners = True
+    cfg.skip_hessians = True
 
     collect_gradients(
         model=model,
@@ -138,7 +138,7 @@ def test_attributor_precondition_one_sided(tmp_path: Path, model, dataset):
 def test_attributor_reverse(tmp_path: Path, model, dataset):
     """Test that reverse mode returns lowest influence examples."""
     cfg = IndexConfig(run_path=str(tmp_path), token_batch_size=1024)
-    cfg.skip_preconditioners = True
+    cfg.skip_hessians = True
 
     collect_gradients(
         model=model,

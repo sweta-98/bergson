@@ -50,7 +50,7 @@ The experiment creates train/eval splits with disjoint fact-style combinations:
 - **Training set**: Each fact appears in exactly one style (95% shakespeare, 5% pirate)
 - **Eval set**: Queries use the *opposite* style from training—facts that were trained in shakespeare are queried in pirate
 
-This design means style leakage and semantic accuracy are mutually exclusive: if attribution finds a training example with matching style, it necessarily has the wrong fact (since that fact-style combo doesn't exist in training). The exception is the `majority_no_precond` control, which queries in the majority (shakespeare) style—here style and semantic matches align.
+This design means style leakage and semantic accuracy are mutually exclusive: if attribution finds a training example with matching style, it necessarily has the wrong fact (since that fact-style combo doesn't exist in training). The exception is the `majority_no_hess` control, which queries in the majority (shakespeare) style—here style and semantic matches align.
 
 ### Pipeline
 
@@ -59,7 +59,7 @@ The experiment (`run_asymmetric_experiment`) runs these steps:
 1. **Create dataset** - Downloads from HuggingFace or generates locally with style rewording
 2. **Build gradient index** - Collects gradients for all training samples using `bergson build`
 3. **Collect eval gradients** - Computes gradients for eval queries
-4. **Compute preconditioners** - Builds various preconditioner matrices (R_between, H_train, H_eval, PCA projection)
+4. **Compute hessians** - Builds various hessian matrices (R_between, H_train, H_eval, PCA projection)
 5. **Score and evaluate** - Computes similarity scores and metrics for each strategy
 
 ### Output Structure
@@ -72,7 +72,7 @@ runs/asymmetric_style/
 │   └── eval_majority.hf       # Eval in majority style (control)
 ├── index/                     # Training gradients (bergson index format)
 ├── eval_grads/                # Eval gradients
-├── preconditioners/           # Preconditioner matrices (.pt files)
+├── hessians/           # Hessian matrices (.pt files)
 ├── scores_*/                  # Score matrices for each strategy
 └── experiment_results.json    # Metrics summary
 ```
@@ -89,15 +89,15 @@ The experiment compares multiple strategies for suppressing style and recovering
 
 #### Baseline
 
-- **no_precond**: Bare gradient cosine similarity. Expected to fail because style dominates.
+- **no_hess**: Bare gradient cosine similarity. Expected to fail because style dominates.
 
 #### Controls (alternative evaluation sets)
 
-- **majority_no_precond**: Query in shakespeare style (the majority/dominant style). No style mismatch, so this is the upper bound—style and semantic matches align.
-- **original_style_no_precond**: Eval set uses original (unstyled) facts instead of pirate style.
+- **majority_no_hess**: Query in shakespeare style (the majority/dominant style). No style mismatch, so this is the upper bound—style and semantic matches align.
+- **original_style_no_hess**: Eval set uses original (unstyled) facts instead of pirate style.
 - **summed_majority_minority**: Eval gradients are the sum of pirate and shakespeare style gradients for each fact. Hypothesis: style-specific components cancel out.
 
-#### Preconditioners
+#### Hessians
 
 Without preconditioning, similarity is computed as cosine similarity of gradients:
 
@@ -108,12 +108,12 @@ score(q, t) = cos(g_q, g_t)
 
 where `g_q` is the eval gradient and `g_t` is a training gradient (row vectors).
 
-With a preconditioner matrix `H`, we transform the eval gradient before computing similarity:
+With a hessian matrix `H`, we transform the eval gradient before computing similarity:
 
 ```python
 H_inv = (H + λI)^(-1)           # damped inverse
-g_eval_precond = g_eval @ H_inv
-g_eval_norm = g_eval_precond / ||g_eval_precond||
+g_eval_hess = g_eval @ H_inv
+g_eval_norm = g_eval_hess / ||g_eval_hess||
 g_train_norm = g_train / ||g_train||
 score(q, t) = g_eval_norm · g_train_norm
 ```
@@ -134,7 +134,7 @@ The unnormalized inner product `g_eval @ H^(-1) @ g_train.T` is the classic infl
 
 #### Semantic-only Eval
 
-- **semantic_index**, **semantic_no_precond**, etc.: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. Combined with preconditioning (`semantic_index`), this method achieves the best results by a significant margin.
+- **semantic_index**, **semantic_no_hess**, etc.: Transform eval data into Q&A format like `"Where does Paul Tilmouth work? Siemens"` and mask all gradients up to the `?`. This isolates the semantic content (answer tokens) from any style in the query. Combined with preconditioning (`semantic_index`), this method achieves the best results by a significant margin.
 
 ### Running the Experiment
 
