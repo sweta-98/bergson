@@ -18,7 +18,8 @@ from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
 
-from ..config import TrainingConfig
+from ..config import TrainingConfig, ValidationConfig
+from ..data import load_scores
 from ..distributed import grad_tree, launch_distributed_run
 from ..utils.logging import wandb_log_fn
 from ..utils.worker_utils import (
@@ -257,10 +258,11 @@ def worker(
     rank: int,
     world_size: int,
     train_dataset: Dataset,
-    query_dataset: Dataset,
+    query_dataset: Dataset | None,
     num_train_docs: int,
     num_query_docs: int,
-    run_cfg: MagicConfig,
+    run_cfg: TrainingConfig,
+    score_path: str = "",
 ):
     torch.cuda.set_device(rank)
 
@@ -289,7 +291,7 @@ def worker(
         )
     )
 
-    if run_cfg.per_token:
+    if getattr(run_cfg, "per_token", False):
         seq_len = run_cfg.data.chunk_length
         if seq_len <= 0:
             seq_len = max(train_dataset["length"])
@@ -338,7 +340,7 @@ def worker(
         debug=run_cfg.debug,
         inplace=True,
         save_dir=ckpts_path,
-        save_mode=run_cfg.save_mode,
+        save_mode=getattr(run_cfg, "save_mode", "sqrt"),
         log_fn=log_fn,
         resume=resume,
         fsdp=run_cfg.fsdp,
@@ -346,6 +348,14 @@ def worker(
 
     if save_fut is not None:
         save_fut.result()  # ensure state0 is saved before validation loads it
+
+    # If no query dataset is provided, skip backward and validation entirely
+    if query_dataset is None:
+        return
+    elif not isinstance(run_cfg, ValidationConfig):
+        raise RuntimeError(
+            "run_cfg must be a ValidationConfig if query_dataset is provided"
+        )
 
     # Pad query dataset to be divisible by batch_size (weight=0 for padding)
     query_dataset, num_query_docs, query_pad_count, query_weight_pad_count = (
@@ -376,44 +386,58 @@ def worker(
         fwd_state, model, query_stream, run_cfg.query_method, run_cfg.fsdp
     )
 
-    stream.requires_grad = True
-    opt_grads = [
-        torch.zeros_like(buf)
-        for buf in tree_iter(fwd_state.opt_state)
-        if isinstance(buf, torch.Tensor) and buf.is_floating_point()
-    ]
-    bwd_state = BackwardState(query_grads, opt_grads, torch.zeros_like(stream.weights))
+    if not score_path:
+        # Sanity check
+        if not isinstance(run_cfg, MagicConfig):
+            raise RuntimeError("run_cfg must be a MagicConfig to compute scores")
 
-    bwd_state = trainer.backward(
-        ckpts_path,
-        stream,
-        bwd_state,
-        fwd_state,
-        debug=run_cfg.debug,
-        inplace=True,
-        fsdp=run_cfg.fsdp,
-        resume=run_cfg.resume,
-        save_every=run_cfg.backward_save_every,
-        save_mode=run_cfg.save_mode,
-    )
-    if world_size > 1:
-        dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.SUM)
+        stream.requires_grad = True
+        opt_grads = [
+            torch.zeros_like(buf)
+            for buf in tree_iter(fwd_state.opt_state)
+            if isinstance(buf, torch.Tensor) and buf.is_floating_point()
+        ]
+        bwd_state = BackwardState(
+            query_grads,
+            opt_grads,
+            torch.zeros_like(stream.weights),
+        )
 
-    scores = bwd_state.weight_grads.cpu()
-    if pad_count:
-        if scores.ndim == 1:
-            scores = scores[:-weight_pad_count]
-        else:
-            scores = scores[:-pad_count]
-    if global_rank == 0:
-        print(f"Baseline loss: {baseline}")
+        bwd_state = trainer.backward(
+            ckpts_path,
+            stream,
+            bwd_state,
+            fwd_state,
+            debug=run_cfg.debug,
+            inplace=True,
+            fsdp=run_cfg.fsdp,
+            resume=run_cfg.resume,
+            save_every=run_cfg.backward_save_every,
+            save_mode=run_cfg.save_mode,
+        )
+        if world_size > 1:
+            dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.SUM)
 
-        summ = describe(scores.flatten())
-        print(f"Score summary: {summ}")
+        scores = bwd_state.weight_grads.cpu()
+        if pad_count:
+            if scores.ndim == 1:
+                scores = scores[:-weight_pad_count]
+            else:
+                scores = scores[:-pad_count]
 
-        score_path = os.path.join(run_cfg.run_path, "scores.pt")
-        torch.save(scores, score_path)
-        print(f"Saved attribution scores to {score_path}")
+        if global_rank == 0:
+            print(f"Baseline loss: {baseline}")
+
+            summ = describe(scores.flatten())
+            print(f"Score summary: {summ}")
+
+            score_path = os.path.join(run_cfg.run_path, "scores.pt")
+            torch.save(scores, score_path)
+            print(f"Saved attribution scores to {score_path}")
+    elif os.path.isdir(score_path):
+        scores = torch.from_numpy(load_scores(Path(score_path))[:])
+    else:
+        scores = torch.load(score_path, map_location="cpu")
 
         # Per-token scores are indexed by (shuffled_chunk_idx, token_idx).
         # Save doc_ids alongside so downstream can aggregate per-doc with
@@ -520,7 +544,7 @@ def worker(
         )
 
 
-def run_magic(run_cfg: MagicConfig):
+def run_magic(run_cfg: TrainingConfig, *, score_path: str = ""):
     run_path = Path(run_cfg.run_path)
     is_main_node = int(os.environ.get("SLURM_PROCID", 0)) == 0
     multi_node = run_cfg.distributed.nnode > 1
@@ -552,7 +576,10 @@ def run_magic(run_cfg: MagicConfig):
     # Shuffle the train_ds with the seed.
     train_ds = train_ds.shuffle(seed=run_cfg.seed)
 
-    query_ds, query_n = setup_data_pipeline(run_cfg, run_cfg.query)
+    if isinstance(run_cfg, ValidationConfig):
+        query_ds, query_n = setup_data_pipeline(run_cfg, run_cfg.query)
+    else:
+        query_ds, query_n = None, 0
 
     if barrier is not None and is_main_node:
         barrier.touch()
@@ -560,7 +587,7 @@ def run_magic(run_cfg: MagicConfig):
     launch_distributed_run(
         "run_magic",
         worker,
-        [train_ds, query_ds, train_n, query_n, run_cfg],
+        [train_ds, query_ds, train_n, query_n, run_cfg, score_path],
         run_cfg.distributed,
     )
 

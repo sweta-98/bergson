@@ -16,6 +16,8 @@ from .config import (
     QueryConfig,
     ScoreConfig,
     TrackstarConfig,
+    TrainingConfig,
+    ValidationConfig,
 )
 from .diagnose import DiagnoseConfig, diagnose
 from .hessians.hessian_approximations import approximate_hessians
@@ -162,6 +164,15 @@ class Trackstar(Serializable):
 
 
 @dataclass
+class Train(TrainingConfig):
+    """Train a model with the MAGIC trainer, but don't actually run MAGIC."""
+
+    def execute(self):
+        """Train the model."""
+        run_magic(self)
+
+
+@dataclass
 class Test_Model_Configuration:
     """Test gradient consistency across padding and batch composition.
 
@@ -174,6 +185,19 @@ class Test_Model_Configuration:
     def execute(self):
         """Run the diagnostic."""
         diagnose(self.diagnose_cfg)
+
+
+@dataclass
+class Validate(ValidationConfig):
+    """Run leave-k-out validation of attribution scores."""
+
+    scores: str = ""
+    """Path to saved attribution scores for validation."""
+
+    def execute(self):
+        """Run the validation."""
+        assert self.scores, "Path to attribution scores must be provided."
+        run_magic(self, score_path=self.scores)
 
 
 @dataclass
@@ -190,7 +214,9 @@ class Main:
         Reduce,
         Score,
         Trackstar,
+        Train,
         Test_Model_Configuration,
+        Validate,
     ]
 
     def execute(self):

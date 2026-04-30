@@ -121,6 +121,9 @@ class ModelConfig(ABC):
     run_path: str = field(positional=True)
     """Directory to save results."""
 
+    overwrite: bool = False
+    """Whether to overwrite any existing index in the run path."""
+
     model: str = "EleutherAI/pythia-160m"
     """Name of the model to load."""
 
@@ -250,7 +253,36 @@ class LRScheduleConfig(Serializable):
 
 
 @dataclass
-class TrainingConfig(ModelConfig, Serializable):
+class AttributionConfig(ModelConfig, ABC):
+    """Base config for attribution methods."""
+
+    data: DataConfig = field(default_factory=DataConfig)
+    """Specification of the data on which to build the index."""
+
+    tokenizer: str = ""
+    """Name of the tokenizer to use. If not set the model tokenizer is used."""
+
+    drop_columns: bool = True
+    """Only save the new dataset columns. If false, the original dataset
+    columns will be saved as well."""
+
+    max_tokens: int | None = None
+    """Max tokens to process. If None, all tokens processed. Dataset only.
+    This experimental feature may be removed in the future."""
+
+    use_tf32_matmuls: bool = False
+    """Set matmul precision to 'high'."""
+
+    debug: bool = False
+    """Whether to enable debug mode with additional logging."""
+
+    def __post_init__(self):
+        if self.use_tf32_matmuls:
+            torch.set_float32_matmul_precision("high")
+
+
+@dataclass
+class TrainingConfig(AttributionConfig, Serializable):
     """Configuration for the MAGIC trainer."""
 
     lr_schedule: LRScheduleConfig = field(default_factory=LRScheduleConfig)
@@ -262,6 +294,9 @@ class TrainingConfig(ModelConfig, Serializable):
 
     num_epochs: int = 1
     """Number of full passes over the training data."""
+
+    seed: int = 42
+    """Random seed for dataset shuffling."""
 
     adam_beta1: float = 0.95
     """Beta1 for AdamW optimizer."""
@@ -282,37 +317,31 @@ class TrainingConfig(ModelConfig, Serializable):
     grad_checkpointing: bool = False
     """Whether to use gradient checkpointing during the forward pass."""
 
+    resume: bool = False
+    """Resume a previously interrupted run from the last checkpoint."""
+
+    wandb_project: str = ""
+    """Weights & Biases project name. If set, logs training loss to W&B."""
+
 
 @dataclass
-class AttributionConfig(ModelConfig, ABC):
-    """Base config for attribution methods."""
+class ValidationConfig(TrainingConfig, ABC):
+    """Config for leave-k-out validation of attribution scores."""
 
-    data: DataConfig = field(default_factory=DataConfig)
-    """Specification of the data on which to build the index."""
+    query: DataConfig = field(
+        default_factory=lambda: DataConfig(split="train"),
+    )
+    """Query/eval dataset for computing attribution target gradients.
+    If not specified, defaults to the training dataset."""
 
-    tokenizer: str = ""
-    """Name of the tokenizer to use. If not set the model tokenizer is used."""
+    query_method: Literal["mean", "sum"] = "mean"
+    """Method for reducing query gradients across batches."""
 
-    drop_columns: bool = True
-    """Only save the new dataset columns. If false, the original dataset
-    columns will be saved as well."""
+    num_subsets: int = 100
+    """Number of leave-k-out subsets for Spearman correlation."""
 
-    max_tokens: int | None = None
-    """Max tokens to process. If None, all tokens processed. Dataset only.
-    This experimental feature may be removed in the future."""
-
-    overwrite: bool = False
-    """Whether to overwrite any existing index in the run path."""
-
-    use_tf32_matmuls: bool = False
-    """Set matmul precision to 'high'."""
-
-    debug: bool = False
-    """Whether to enable debug mode with additional logging."""
-
-    def __post_init__(self):
-        if self.use_tf32_matmuls:
-            torch.set_float32_matmul_precision("high")
+    subset_strategy: Literal["random", "sorted"] = "sorted"
+    """Strategy for selecting leave-k-out subsets for validation."""
 
 
 @dataclass
