@@ -1,8 +1,9 @@
 """Launch this script with torchrun.
-torchrun --nproc_per_node 8 -m examples.less --pdbs 4
+torchrun --nproc_per_node 8 -m examples.less.less --pdbs 4
 """
 
 import gc
+import json
 import logging
 import math
 import os
@@ -30,6 +31,8 @@ from trl import SFTConfig, SFTTrainer
 from bergson.config import DataConfig
 from bergson.data import load_gradient_dataset, tokenize
 from bergson.utils.utils import assert_type
+
+from examples.less.download_less import download_less
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -97,25 +100,6 @@ def set_seeds(seed: int):
     """Set all random seeds for reproducibility."""
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-
-
-def download_less(rank: int = 0):
-    final_path = Path("runs/less/extracted_data")
-
-    # Skip if already extracted (avoids race condition under torchrun)
-    if (final_path / "data").exists() or rank != 0:
-        return final_path
-
-    # Download the zip file
-    path = hf_hub_download(
-        repo_id="princeton-nlp/less_data", filename="less-data.zip", repo_type="dataset"
-    )
-
-    # Unzip it
-    with zipfile.ZipFile(path, "r") as zip_ref:
-        zip_ref.extractall(final_path)
-
-    return final_path
 
 
 class OrderedFilterSampler(Sampler[int]):
@@ -431,13 +415,29 @@ def evaluate_mmlu(model, tokenizer, num_fewshot=5, batch_size=8, subjects=None):
     }
 
 
-def _get_checkpoint_lr(checkpoint_path: Path) -> float:
-    """Extract the current learning rate from a checkpoint's optimizer state."""
-    opt_path = checkpoint_path / "optimizer.pt"
-    if not opt_path.exists():
-        raise FileNotFoundError(f"No optimizer.pt in {checkpoint_path}")
-    opt_state = torch.load(opt_path, map_location="cpu", weights_only=True)
-    return opt_state["param_groups"][0]["lr"]
+def _get_checkpoint_mean_lr(checkpoint_path: Path) -> float:
+    """Mean learning rate over the epoch that ends at this checkpoint.
+
+    Reads trainer_state.json's log_history (one entry per step because
+    logging_steps=1) and averages learning_rate over the half-open epoch
+    range (end_epoch - 1, end_epoch].
+    """
+    state_path = checkpoint_path / "trainer_state.json"
+    if not state_path.exists():
+        raise FileNotFoundError(f"No trainer_state.json in {checkpoint_path}")
+    with state_path.open() as f:
+        state = json.load(f)
+
+    end_epoch = state["epoch"]
+    start_epoch = end_epoch - 1.0
+
+    lrs = [
+        entry["learning_rate"]
+        for entry in state["log_history"]
+        if "learning_rate" in entry and start_epoch < entry["epoch"] <= end_epoch
+    ]
+    assert lrs, f"No LR log entries in epoch range for {checkpoint_path.name}"
+    return sum(lrs) / len(lrs)
 
 
 def _compute_epoch_scores(
@@ -667,26 +667,31 @@ def main(
 
     # Load the dataset for training.
     if cfg.test:
-        # Reduce defaults for quick test runs
-        cfg.num_examples = 20
+        # Reduce defaults for quick test runs. 1000 raw examples gives 
+        # plenty of packed sequences to fill at least one effective batch.
+        cfg.num_examples = 200
         cfg.warmup_epochs = 1
+        cfg.warmup_fraction = 0.5
 
-        ds = load_dataset("argilla/magpie-ultra-v1.0", split="train[:100]")
-        ds = ds.select_columns(["conversation"])
-        ds = ds.rename_column("conversation", "messages")
-        ds = ds.add_column("_orig_idx", list(range(len(ds))))
+        # Use a slice of the production LESS data so the chat template +
+        # bergson tokenize path matches what the real pipeline uses, and
+        # the assistant content is recoverable by `tokenize()`'s substring
+        # search. Magpie's content gets altered by Jinja rendering and
+        # fails that check.
+        full_ds, _, full_eval_path, _ = load_ds(cfg)
+        ds = full_ds.select(range(min(1000, len(full_ds))))
+        ds = ds.remove_columns(
+            [c for c in ds.column_names if c not in ("messages", "_orig_idx")]
+        )
 
         # Save a small train subset for gradient index building
-        train_data_path = warmup_path.parent / "test_train_data" / "magpie"
+        train_data_path = warmup_path.parent / "test_train_data" / "less_slice"
         train_data_path.mkdir(parents=True, exist_ok=True)
         if not (train_data_path / "dataset_info.json").exists():
             ds.save_to_disk(str(train_data_path))
-        # Point at the parent so build_subset_indices finds the "magpie" subdir
         train_data_path = train_data_path.parent
 
-        # Use a couple of MMLU subjects for eval (load full LESS data, then
-        # symlink just 2 subjects into a test-specific eval directory)
-        _, _, full_eval_path, _ = load_ds(cfg)
+        # Use a couple of MMLU subjects for eval
         eval_data_path = warmup_path.parent / "test_eval_data"
         eval_data_path.mkdir(parents=True, exist_ok=True)
         test_subjects = sorted(p.name for p in full_eval_path.iterdir() if p.is_dir())[
@@ -755,15 +760,8 @@ def main(
         epoch_eval_index = eval_index_path / ckpt_dir.name
         epoch_train_index = train_index_path / ckpt_dir.name
 
-        lr: float = _get_checkpoint_lr(ckpt_dir)
-        # Use checkpoint-106's lr as a stand-in when lr is zero (end of cosine)
-        if lr == 0:
-            lr = 1.0
-            print(
-                f"Epoch checkpoint: {ckpt_dir.name}, lr=0 -> using lr=1.0 (equal weight)"
-            )
-        else:
-            print(f"Epoch checkpoint: {ckpt_dir.name}, lr={lr:.6e}")
+        lr: float = _get_checkpoint_mean_lr(ckpt_dir)
+        print(f"Epoch checkpoint: {ckpt_dir.name}, mean_lr={lr:.6e}")
 
         if local_rank == 0:
             # Use 1 GPU for eval (subjects have ~100 examples each)
@@ -812,7 +810,7 @@ def main(
 
             print(
                 f"Epoch {ckpt_dir.name} scores: "
-                f"mean={epoch_scores.mean():.4f}, lr={lr:.6e}, "
+                f"mean={epoch_scores.mean():.4f}, mean_lr={lr:.6e}, "
                 f"weighted_mean={weighted_scores.mean():.6e}"
             )
             del train_grad_ds, train_grad_parts

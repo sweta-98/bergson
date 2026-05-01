@@ -55,6 +55,7 @@ example = [
     "pydantic>=2.12.5",
     "trl",
     "wandb",
+    "lm_eval",
 ]
 faiss = [
     "faiss-gpu-cu12",
