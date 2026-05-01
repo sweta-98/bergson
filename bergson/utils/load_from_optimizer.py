@@ -95,11 +95,11 @@ def get_normalizers(
         elif optimizer_format == OptimizerStateFormat.FACTORED:
             row = state["exp_avg_sq_row"]
             col = state.get("exp_avg_sq_col")
-            if row.ndim != 1:
+            if row.ndim != 1 or col is None:
                 continue
             normalizers[module_name] = AdafactorNormalizer(
                 row=row.to(device),
-                col=col.to(device) if col is not None else None,
+                col=col.to(device),
                 bias_avg_sq=bias_on_device,
             )
 
