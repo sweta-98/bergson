@@ -9,6 +9,7 @@ from bergson.hessians.pipeline import hessian_pipeline
 
 from .build import build
 from .config import (
+    ApproxUnrollingConfig,
     HessianConfig,
     HessianPipelineConfig,
     IndexConfig,
@@ -25,6 +26,32 @@ from .score.score import score_dataset
 from .trackstar import trackstar
 from .utils.worker_utils import validate_run_path
 from .yaml_pipeline import run_pipeline
+
+
+@dataclass
+class ApproxUnrolling(Serializable):
+    """Build a gradient index."""
+
+    approx_unrolling_cfg: ApproxUnrollingConfig
+
+    index_cfg: IndexConfig
+
+    hessian_cfg: HessianConfig
+
+    score_cfg: ScoreConfig
+
+    preprocess_cfg: PreprocessConfig
+
+    hessian_pipeline_cfg: HessianPipelineConfig
+
+    def execute(self):
+        """Build the gradient index."""
+        if self.index_cfg.skip_index and self.index_cfg.skip_hessians:
+            raise ValueError("Either skip_index or skip_hessians must be False")
+
+        validate_run_path(self.index_cfg)
+
+        # approx_unrolling(approx_unrolling_cfg, self.index_cfg, self.preprocess_cfg)
 
 
 @dataclass
