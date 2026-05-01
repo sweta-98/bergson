@@ -228,10 +228,10 @@ def run_sft(
 
     # Free GPU memory so subprocesses (bergson build) can use it.
     # empty_cache is needed here to release memory to a *separate process*.
-    trainer.model.cpu()
+    trainer.model.cpu() # type: ignore
     if hasattr(trainer, "optimizer") and trainer.optimizer is not None:
         # Move optimizer state off GPU
-        for state in trainer.optimizer.state.values():
+        for state in trainer.optimizer.state.values(): # type: ignore
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.cpu()
@@ -834,10 +834,9 @@ def main(
 
     _file_barrier(scores_path.parent, "scoring", local_rank, world_size)
 
-    if local_rank != 0:
-        selected_indices = torch.load(
-            scores_path.parent / "selected_indices.pt", map_location="cpu"
-        )
+    selected_indices = torch.load(
+        scores_path.parent / "selected_indices.pt", map_location="cpu"
+    )
     filtered_ds = ds.select(selected_indices)
 
     # Build the ordered sampler before removing _orig_idx.
