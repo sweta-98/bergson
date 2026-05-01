@@ -356,7 +356,7 @@ def build_subset_indices(
             "--overwrite",
         ]
         if adam_path:
-            cmd += ["--adam_state_path", adam_path]
+            cmd += ["--optimizer_state_path", adam_path]
         if format_template:
             cmd += ["--format_template", format_template]
         if conversation_column:
@@ -609,6 +609,55 @@ def load_ds(cfg: LESSConfig, rank: int = 0):
     return train_ds, train_ds_path, eval_path, train_data_config
 
 
+def load_test_ds(cfg: LESSConfig, local_rank: int, warmup_path: Path):
+    """Build the small dataset slice + 2-subject MMLU eval used by --test runs.
+
+    Mutates ``cfg`` to reduce defaults (num_examples, warmup_epochs,
+    warmup_fraction) so the rest of the pipeline finishes quickly. Mirrors
+    the return signature of ``load_ds``.
+    """
+    cfg.num_examples = 200
+    cfg.warmup_epochs = 1
+    cfg.warmup_fraction = 0.5
+
+    # Use a slice of the production LESS data so the chat template +
+    # bergson tokenize path matches what the real pipeline uses, and
+    # the assistant content is recoverable by `tokenize()`'s substring
+    # search. Magpie's content gets altered by Jinja rendering and
+    # fails that check.
+    full_ds, _, full_eval_path, _ = load_ds(cfg)
+    ds = full_ds.select(range(min(1000, len(full_ds))))
+    ds = ds.remove_columns(
+        [c for c in ds.column_names if c not in ("messages", "_orig_idx")]
+    )
+
+    train_data_path = warmup_path.parent / "test_train_data" / "less_slice"
+    eval_data_path = warmup_path.parent / "test_eval_data"
+    test_subjects = sorted(p.name for p in full_eval_path.iterdir() if p.is_dir())[:2]
+
+    # Rank-0 only: save_to_disk and symlink_to race across ranks.
+    if local_rank == 0:
+        train_data_path.mkdir(parents=True, exist_ok=True)
+        if not (train_data_path / "dataset_info.json").exists():
+            ds.save_to_disk(str(train_data_path))
+        eval_data_path.mkdir(parents=True, exist_ok=True)
+        for subj in test_subjects:
+            link = eval_data_path / subj
+            if not link.exists():
+                link.symlink_to((full_eval_path / subj).resolve())
+    if dist.is_initialized():
+        dist.barrier()
+    train_data_path = train_data_path.parent
+
+    train_data_config = DataConfig(
+        prompt_column="",
+        completion_column="",
+        conversation_column="messages",
+        truncation=True,
+    )
+    return ds, train_data_path, eval_data_path, train_data_config
+
+
 def build_paths(cfg: LESSConfig):
     # Set up data paths
     model_name = cfg.model.split("/")[-1]
@@ -667,46 +716,8 @@ def main(
 
     # Load the dataset for training.
     if cfg.test:
-        # Reduce defaults for quick test runs. 1000 raw examples gives 
-        # plenty of packed sequences to fill at least one effective batch.
-        cfg.num_examples = 200
-        cfg.warmup_epochs = 1
-        cfg.warmup_fraction = 0.5
-
-        # Use a slice of the production LESS data so the chat template +
-        # bergson tokenize path matches what the real pipeline uses, and
-        # the assistant content is recoverable by `tokenize()`'s substring
-        # search. Magpie's content gets altered by Jinja rendering and
-        # fails that check.
-        full_ds, _, full_eval_path, _ = load_ds(cfg)
-        ds = full_ds.select(range(min(1000, len(full_ds))))
-        ds = ds.remove_columns(
-            [c for c in ds.column_names if c not in ("messages", "_orig_idx")]
-        )
-
-        # Save a small train subset for gradient index building
-        train_data_path = warmup_path.parent / "test_train_data" / "less_slice"
-        train_data_path.mkdir(parents=True, exist_ok=True)
-        if not (train_data_path / "dataset_info.json").exists():
-            ds.save_to_disk(str(train_data_path))
-        train_data_path = train_data_path.parent
-
-        # Use a couple of MMLU subjects for eval
-        eval_data_path = warmup_path.parent / "test_eval_data"
-        eval_data_path.mkdir(parents=True, exist_ok=True)
-        test_subjects = sorted(p.name for p in full_eval_path.iterdir() if p.is_dir())[
-            :2
-        ]
-        for subj in test_subjects:
-            link = eval_data_path / subj
-            if not link.exists():
-                link.symlink_to((full_eval_path / subj).resolve())
-
-        train_data_config = DataConfig(
-            prompt_column="",
-            completion_column="",
-            conversation_column="messages",
-            truncation=True,
+        ds, train_data_path, eval_data_path, train_data_config = load_test_ds(
+            cfg, local_rank, warmup_path
         )
     else:
         ds, train_data_path, eval_data_path, train_data_config = load_ds(cfg)
@@ -740,12 +751,10 @@ def main(
 
     # Build gradient indices and score at each warmup epoch checkpoint,
     # weighting by the checkpoint's learning rate, then sum for final scores.
-    all_checkpoint_dirs = sorted(warmup_path.glob("checkpoint-*"))
-    assert all_checkpoint_dirs, f"No checkpoints found in {warmup_path}"
-    # TODO: use all checkpoints once fp16 eval index bug is fixed
-    checkpoint_dirs = [all_checkpoint_dirs[0], all_checkpoint_dirs[-1]]
+    checkpoint_dirs = sorted(warmup_path.glob("checkpoint-*"))
+    assert checkpoint_dirs, f"No checkpoints found in {warmup_path}"
     print(
-        f"Using {len(checkpoint_dirs)}/{len(all_checkpoint_dirs)} checkpoints: "
+        f"Using {len(checkpoint_dirs)} checkpoints: "
         f"{[d.name for d in checkpoint_dirs]}"
     )
 
@@ -780,6 +789,7 @@ def main(
                 train_data_path,
                 conversation_column="messages",
                 adam_path=str(ckpt_dir),
+                nproc_per_node=world_size,
             )
 
         _file_barrier(
