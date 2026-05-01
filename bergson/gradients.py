@@ -114,6 +114,13 @@ class GradientProcessor:
     uniform distribution over {-1, 1}.
     """
 
+    projection_target: Literal["per_module", "global"] = "per_module"
+    """
+    Projection target. ``per_module`` does a double-sided random projection of each
+    module's gradient independently. ``global`` flattens the per-example gradient
+    across all tracked modules and projects it once.
+    """
+
     include_bias: bool = False
     """Whether to include bias gradients when present on a module."""
 

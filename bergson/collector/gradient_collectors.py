@@ -15,6 +15,7 @@ from bergson.config import IndexConfig, PreprocessConfig
 from bergson.process_autocorrelation import process_autocorrelation_matrices
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import get_gradient_dtype
+from bergson.utils.projection import make_global_projector
 
 
 @dataclass(kw_only=True)
@@ -44,6 +45,9 @@ class GradientCollector(HookCollectorBase):
 
     scorer: Scorer | None = None
     """Optional scorer for computing scores instead of building an index."""
+
+    global_projector: object | None = None
+    """Lazily-built projector used when ``processor.projection_target == 'global'``."""
 
     def setup(self) -> None:
         """
@@ -95,14 +99,20 @@ class GradientCollector(HookCollectorBase):
         name: str = module._name  # type: ignore[assignment]
         P = self._compute_gradient(module, g)
 
-        if not self.cfg.skip_hessians:
+        global_proj = self.processor.projection_target == "global"
+
+        # Collect per-module hessians when projection target is per_module
+        if not self.cfg.skip_hessians and not global_proj:
             P = P.float()
             if name in self.processor.hessians:
                 self.processor.hessians[name].addmm_(P.mT, P)
             else:
                 self.processor.hessians[name] = P.mT @ P
 
-        if self.save_index and self.preprocess_cfg.aggregation == "none":
+        if global_proj:
+            # Keep on-device until the global projection runs in process_batch.
+            self.mod_grads[name] = P
+        elif self.save_index and self.preprocess_cfg.aggregation == "none":
             # Asynchronously move the gradient to CPU and convert to the final
             # dtype
             self.mod_grads[name] = P.to(
@@ -111,10 +121,39 @@ class GradientCollector(HookCollectorBase):
         else:
             self.mod_grads[name] = P.to(dtype=self.save_dtype)
 
+    def global_project(self) -> None:
+        """Concatenate per-module per-example gradients and project.
+        Sets ``self.mod_grads`` to ``{"gradients": projected}``."""
+        # backward_hook fires in reverse forward order, so insertion order in
+        # mod_grads is deterministic for a given model.
+        flat = torch.cat(
+            [P.view(P.shape[0], -1) for P in self.mod_grads.values()], dim=1
+        )
+
+        if self.global_projector is None:
+            assert self.processor.projection_dim is not None
+            self.global_projector = make_global_projector(
+                grad_dim=flat.shape[1],
+                proj_dim=self.processor.projection_dim,
+                device=flat.device,
+                dtype=flat.dtype,
+                projection_type=self.processor.projection_type,
+            )
+
+        projected = self.global_projector.project(flat, model_id=0)
+        self.mod_grads = {
+            "gradients": projected.to(
+                device="cpu", dtype=self.save_dtype, non_blocking=True
+            )
+        }
+
     def process_batch(self, indices: list[int], **kwargs):
         """Process collected gradients for a batch and update losses."""
         losses = kwargs.get("losses")
         assert losses is not None, "losses must be provided in kwargs"
+
+        if self.processor.projection_target == "global":
+            self.global_project()
 
         if self.builder:
             self.builder(indices, self.mod_grads)

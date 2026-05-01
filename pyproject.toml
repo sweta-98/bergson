@@ -25,10 +25,17 @@ dependencies = [
     "torch>=2.4",
     "torchopt",
     "transformers",
-    "bitsandbytes"
+    "bitsandbytes",
+    "traker",
 ]
 version = "0.9.1"
 [project.optional-dependencies]
+# fast-jl is an optional CUDA acceleration for the global TRAK projection
+# (bergson.utils.projection). It must be installed with --no-build-isolation
+# because its setup.py imports torch:
+#   pip install fast-jl --no-build-isolation
+# Without it the projector falls back to BasicProjector on CPU.
+fast-jl = ["fast-jl"]
 dev = [
     "pre-commit",
     "pytest",
