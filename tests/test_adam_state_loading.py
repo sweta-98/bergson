@@ -144,17 +144,17 @@ def test_missing_optimizer_file(tmp_path):
 
 def test_get_optimizer_state_format_adam():
     state = {"exp_avg_sq": torch.zeros(2, 3), "step": torch.tensor(1)}
-    assert get_optimizer_state_format(state) == OptimizerStateFormat.ADAM
+    assert get_optimizer_state_format(state) == OptimizerStateFormat.UNFACTORED
 
 
 def test_get_optimizer_state_format_adafactor():
     state = {"exp_avg_sq_row": torch.zeros(2), "exp_avg_sq_col": torch.zeros(3)}
-    assert get_optimizer_state_format(state) == OptimizerStateFormat.ADAFACTOR
+    assert get_optimizer_state_format(state) == OptimizerStateFormat.FACTORED
 
 
 def test_get_optimizer_state_format_bnb_8bit_adam():
     state = {"__bnb_optimizer_quant_state__": {"state2": torch.zeros(8)}}
-    assert get_optimizer_state_format(state) == OptimizerStateFormat.ADAM
+    assert get_optimizer_state_format(state) == OptimizerStateFormat.UNFACTORED
 
 
 def test_get_optimizer_state_format_empty_or_unknown_returns_none():
@@ -163,6 +163,13 @@ def test_get_optimizer_state_format_empty_or_unknown_returns_none():
     assert get_optimizer_state_format({}) is None
     assert get_optimizer_state_format({"step": torch.tensor(1)}) is None
     assert get_optimizer_state_format({"square_avg": torch.zeros(2)}) is None
+
+
+def test_get_optimizer_state_format_non_dict_returns_none():
+    # The isinstance guard means None / non-dicts return None instead of
+    # raising "argument of type 'NoneType' is not iterable" on the `in` check.
+    assert get_optimizer_state_format(None) is None
+    assert get_optimizer_state_format("not a dict") is None
 
 
 def test_get_unfactored_second_moment_adam_and_bnb():

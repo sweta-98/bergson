@@ -9,12 +9,12 @@ from bergson.gradients import AdafactorNormalizer, AdamNormalizer, Normalizer
 
 
 class OptimizerStateFormat(Enum):
-    """Optimizer state format for a single module - Adafactor for factored
-    optimizer states (e.g. 2D+ modules in Adafactor optimizers), and Adam
-    for unfactored states."""
+    """Optimizer state format for a single module - Adafactor-style factored
+    optimizer states (e.g. 2D+ modules in Adafactor optimizers), or Adam-style
+    unfactored states."""
 
-    ADAM = 1
-    ADAFACTOR = 2
+    UNFACTORED = 1
+    FACTORED = 2
 
 
 def get_optimizer_state_format(param_state) -> OptimizerStateFormat | None:
@@ -22,15 +22,15 @@ def get_optimizer_state_format(param_state) -> OptimizerStateFormat | None:
         return None
 
     if "exp_avg_sq" in param_state:
-        return OptimizerStateFormat.ADAM
+        return OptimizerStateFormat.UNFACTORED
 
     if "exp_avg_sq_row" in param_state:
-        return OptimizerStateFormat.ADAFACTOR
+        return OptimizerStateFormat.FACTORED
 
     bnb_state = param_state.get("__bnb_optimizer_quant_state__")
     if isinstance(bnb_state, dict) and "state2" in bnb_state:
         # 8-bit Adam
-        return OptimizerStateFormat.ADAM
+        return OptimizerStateFormat.UNFACTORED
 
     return None
 
@@ -53,8 +53,8 @@ def get_normalizers(
     target_modules,
     adapter_suffix,
     include_bias,
+    device,
 ):
-    # Extract second moments per layer
     normalizers: dict[str, Normalizer] = {}
     for param_idx, state in optimizer_state["state"].items():
         param_idx = int(param_idx)
@@ -77,37 +77,30 @@ def get_normalizers(
             print("Unrecognized format, skipping normalizer for param_idx", param_idx)
             continue
 
-        if optimizer_format == OptimizerStateFormat.ADAM:
-            # Adam or 8-bit Adam checkpoint
-            exp_avg_sq = get_unfactored_second_moment(state)
+        bias_exp_avg_sq = _get_bias_second_moment(
+            layer_name, target_param_index_to_name, optimizer_state, include_bias
+        )
+        bias_on_device = (
+            bias_exp_avg_sq.to(device) if bias_exp_avg_sq is not None else None
+        )
 
+        if optimizer_format == OptimizerStateFormat.UNFACTORED:
+            exp_avg_sq = get_unfactored_second_moment(state)
             if exp_avg_sq.ndim != 2:
                 continue
-
-            bias_exp_avg_sq = _get_bias_second_moment(
-                layer_name, target_param_index_to_name, optimizer_state, include_bias
-            )
-
             normalizers[module_name] = AdamNormalizer(
-                weight_avg_sq=exp_avg_sq,
-                bias_avg_sq=bias_exp_avg_sq,
+                weight_avg_sq=exp_avg_sq.to(device),
+                bias_avg_sq=bias_on_device,
             )
-        elif optimizer_format == OptimizerStateFormat.ADAFACTOR:
-            # Native Adafactor checkpoint
+        elif optimizer_format == OptimizerStateFormat.FACTORED:
             row = state["exp_avg_sq_row"]
             col = state.get("exp_avg_sq_col")
-
             if row.ndim != 1:
                 continue
-
-            bias_exp_avg_sq = _get_bias_second_moment(
-                layer_name, target_param_index_to_name, optimizer_state, include_bias
-            )
-
             normalizers[module_name] = AdafactorNormalizer(
-                row=row,
-                col=col,
-                bias_avg_sq=bias_exp_avg_sq,
+                row=row.to(device),
+                col=col.to(device) if col is not None else None,
+                bias_avg_sq=bias_on_device,
             )
 
     return normalizers
@@ -166,7 +159,6 @@ def load_from_optimizer(
     for idx, (name, _param) in enumerate(params_for_index):
         target_param_index_to_name[idx] = name
 
-    # Extract per-module normalizers
     device = next(model.parameters()).device
 
     normalizers = get_normalizers(
@@ -175,27 +167,13 @@ def load_from_optimizer(
         target_modules,
         adapter_suffix,
         include_bias,
-        # device=device
+        device,
     )
     assert normalizers, (
         f"No optimizer second moments found in '{optimizer_state_path}'. "
         "Ensure the checkpoint was saved from an Adam-family or Adafactor optimizer."
     )
 
-    # Move normalizer tensors to the model's device
-    device = next(model.parameters()).device
-    for norm in normalizers.values():
-        if isinstance(norm, AdamNormalizer):
-            norm.weight_avg_sq = norm.weight_avg_sq.to(device)
-            if norm.bias_avg_sq is not None:
-                norm.bias_avg_sq = norm.bias_avg_sq.to(device)
-        elif isinstance(norm, AdafactorNormalizer):
-            norm.row = norm.row.to(device)
-            norm.col = norm.col.to(device)
-            if norm.bias_avg_sq is not None:
-                norm.bias_avg_sq = norm.bias_avg_sq.to(device)
-
-    # Report what we loaded
     types = {type(n).__name__ for n in normalizers.values()}
     print(
         f"Loaded {len(normalizers)} normalizers ({', '.join(types)}) "
@@ -219,7 +197,7 @@ def _get_bias_second_moment(
         if name == bias_name:
             bias_state = optimizer_state["state"].get(idx)
             optimizer_format = get_optimizer_state_format(bias_state)
-            if optimizer_format == OptimizerStateFormat.ADAM:
+            if optimizer_format == OptimizerStateFormat.UNFACTORED:
                 return get_unfactored_second_moment(bias_state)
             return None
 
