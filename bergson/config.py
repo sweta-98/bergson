@@ -347,7 +347,7 @@ class IndexConfig(AttributionConfig, Serializable):
 
     projection_target: Literal["per_module", "global"] = "per_module"
     """Projection target. ``per_module`` does a double-sided random projection of
-    each module gradient. ``global`` flattens the per-example gradient across 
+    each module gradient. ``global`` flattens the per-example gradient across
     all tracked modules and projects that to ``projection_dim``."""
 
     token_batch_size: int = 2048

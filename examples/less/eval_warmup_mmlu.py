@@ -5,17 +5,22 @@ Usage:
 
 If no path given, evaluates the final warmup model.
 """
-import sys
+
 import os
+import sys
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from lm_eval import evaluator
 from lm_eval.models.huggingface import HFLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
-model_path = sys.argv[1] if len(sys.argv) > 1 else "runs/less/Llama-2-7b-hfp16_s42_lr2e-05/warmup"
+model_path = (
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else "runs/less/Llama-2-7b-hfp16_s42_lr2e-05/warmup"
+)
 
 model = AutoModelForCausalLM.from_pretrained(
     model_path,

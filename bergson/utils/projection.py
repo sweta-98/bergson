@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
-
 from trak.projectors import BasicProjector, CudaProjector, ProjectionType
 
 # Fixed seed: every gradient build run produces the same projection so that

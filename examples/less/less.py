@@ -29,10 +29,10 @@ from trl import SFTConfig, SFTTrainer
 from bergson.config import DataConfig
 from bergson.data import load_gradient_dataset, tokenize
 from bergson.utils.utils import assert_type
-
 from examples.less.download_less import download_less
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 @dataclass
 class LESSConfig:
@@ -225,10 +225,10 @@ def run_sft(
 
     # Free GPU memory so subprocesses (bergson build) can use it.
     # empty_cache is needed here to release memory to a *separate process*.
-    trainer.model.cpu() # type: ignore
+    trainer.model.cpu()  # type: ignore
     if hasattr(trainer, "optimizer") and trainer.optimizer is not None:
         # Move optimizer state off GPU
-        for state in trainer.optimizer.state.values(): # type: ignore
+        for state in trainer.optimizer.state.values():  # type: ignore
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.cpu()
@@ -440,10 +440,7 @@ def _get_checkpoint_mean_lr(checkpoint_path: Path) -> float:
 
 
 def _compute_epoch_scores(
-    cfg: LESSConfig,
-    train_grad_ds: Dataset,
-    eval_index_path: Path,
-    device
+    cfg: LESSConfig, train_grad_ds: Dataset, eval_index_path: Path, device
 ) -> Tensor:
     """Compute cosine-similarity scores between train and eval gradients.
     Returns a 1-D tensor of scores (one per training example), without
@@ -813,7 +810,9 @@ def main(
             train_grad_ds = concatenate_datasets(train_grad_parts)
             train_grad_ds.set_format("torch")
 
-            epoch_scores = _compute_epoch_scores(cfg, train_grad_ds, epoch_eval_index, device)
+            epoch_scores = _compute_epoch_scores(
+                cfg, train_grad_ds, epoch_eval_index, device
+            )
             weighted_scores = epoch_scores * lr
 
             if accumulated_scores is None:

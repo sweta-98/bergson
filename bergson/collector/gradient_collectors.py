@@ -15,8 +15,8 @@ from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
 from bergson.process_autocorrelation import process_autocorrelation_matrices
 from bergson.score.scorer import Scorer
-from bergson.utils.utils import get_gradient_dtype
 from bergson.utils.projection import make_global_projector
+from bergson.utils.utils import get_gradient_dtype
 
 
 @dataclass(kw_only=True)
