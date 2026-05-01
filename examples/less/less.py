@@ -10,7 +10,6 @@ import os
 import subprocess
 import sys
 import time
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -18,7 +17,6 @@ from typing import Literal
 import torch
 import torch.distributed as dist
 from datasets import Dataset, concatenate_datasets, load_dataset
-from huggingface_hub import hf_hub_download
 from lm_eval import evaluator
 from lm_eval.models.huggingface import HFLM
 from peft import LoraConfig, get_peft_model
@@ -35,7 +33,6 @@ from bergson.utils.utils import assert_type
 from examples.less.download_less import download_less
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
 
 @dataclass
 class LESSConfig:
@@ -81,8 +78,8 @@ class LESSConfig:
     lora_rank: int = 128
     """LoRA rank."""
 
-    projection_dim: int = 16
-    """Projection dimension for gradient index."""
+    projection_dim: int = 8192
+    """Projection dimension for the gradient index."""
 
     pdbs: int = 1
     "Per-device batch size"
@@ -308,7 +305,7 @@ def build_subset_indices(
     data_path: Path,
     format_template: str = "",
     conversation_column: str = "",
-    adam_path: str = "",
+    optimizer_state_path: str = "",
     nproc_per_node: int = 0,
 ) -> None:
     """Build a gradient index per subset found under *data_path*.
@@ -349,14 +346,16 @@ def build_subset_indices(
             "--truncation",
             "--projection_dim",
             str(cfg.projection_dim),
+            "--projection_target",
+            "global",
             "--token_batch_size",
             "4096",
             "--precision",
             cfg.precision,
             "--overwrite",
         ]
-        if adam_path:
-            cmd += ["--optimizer_state_path", adam_path]
+        if optimizer_state_path:
+            cmd += ["--optimizer_state_path", optimizer_state_path]
         if format_template:
             cmd += ["--format_template", format_template]
         if conversation_column:
@@ -444,6 +443,7 @@ def _compute_epoch_scores(
     cfg: LESSConfig,
     train_grad_ds: Dataset,
     eval_index_path: Path,
+    device
 ) -> Tensor:
     """Compute cosine-similarity scores between train and eval gradients.
     Returns a 1-D tensor of scores (one per training example), without
@@ -456,10 +456,10 @@ def _compute_epoch_scores(
             eval_grad_ds.set_format("torch")
 
             # Compute the mean of the gradients in the evaluation subset
-            acc = {"sum": torch.zeros_like(eval_grad_ds[0]["gradients"], device="cuda")}
+            acc = {"sum": torch.zeros_like(eval_grad_ds[0]["gradients"], device=device)}
 
             def sum_(col):
-                acc["sum"] += col.cuda().sum(0)
+                acc["sum"] += col.to(device).sum(0)
 
             # Do not use num_proc because we are accumulating in a single variable
             # https://colab.research.google.com/drive/1jCLv31Y4cDfqD0lhO0AnqEv3Or-LLvWe?usp=sharing
@@ -486,7 +486,7 @@ def _compute_epoch_scores(
     acc = {"scores": [], "zero_norm_count": 0, "total_count": 0}
 
     def score_nearest(batch):
-        gradients_batch = batch.cuda()
+        gradients_batch = batch.to(device)
 
         norms = gradients_batch.norm(dim=1, keepdim=True)
         acc["zero_norm_count"] += (norms == 0).sum().item()
@@ -516,7 +516,7 @@ def _compute_epoch_scores(
     if zero_pct > 1:
         print("WARNING: >1% zero-norm gradients — this may indicate a bug")
 
-    return torch.cat(acc["scores"], dim=0).cuda()
+    return torch.cat(acc["scores"], dim=0).to(device)
 
 
 def _select_from_scores(
@@ -526,10 +526,10 @@ def _select_from_scores(
 ) -> Tensor:
     """Select top-k (or bottom-k) indices from pre-computed scores."""
     print(
-        f"Score stats: min={importance_scores.min():.4f}, "
-        f"max={importance_scores.max():.4f}, "
-        f"mean={importance_scores.mean():.4f}, "
-        f"std={importance_scores.std():.4f}"
+        f"Score stats: min={importance_scores.min():.6f}, "
+        f"max={importance_scores.max():.6f}, "
+        f"mean={importance_scores.mean():.6f}, "
+        f"std={importance_scores.std():.6f}"
     )
 
     print("Saving importance scores to disk.")
@@ -703,6 +703,9 @@ def main(
     run_id = os.environ.get("MASTER_PORT", "0")
     world_size = int(os.environ.get("WORLD_SIZE", 1))
 
+    device = f"cuda:{local_rank}"
+    torch.cuda.set_device(device)
+
     # Set up data paths
     (
         warmup_path,
@@ -761,11 +764,7 @@ def main(
     accumulated_scores: Tensor | None = None
 
     for ckpt_dir in checkpoint_dirs:
-        assert (
-            ckpt_dir / "optimizer.pt"
-        ).exists(), f"Skipping {ckpt_dir.name} (no optimizer.pt)"
-
-        # # e.g. "checkpoint-106"
+        # e.g. "checkpoint-106"
         epoch_eval_index = eval_index_path / ckpt_dir.name
         epoch_train_index = train_index_path / ckpt_dir.name
 
@@ -773,7 +772,11 @@ def main(
         print(f"Epoch checkpoint: {ckpt_dir.name}, mean_lr={lr:.6e}")
 
         if local_rank == 0:
-            # Use 1 GPU for eval (subjects have ~100 examples each)
+            # Per the LESS paper's InfAdam formula: the train side is the
+            # Adam-preconditioned per-example direction Γ̃(z, θ); the eval
+            # side is the raw averaged validation gradient ∇̄ℓ. Only train
+            # gets the optimizer state.
+            # Use 1 GPU for eval (subjects have ~100 examples each).
             build_subset_indices(
                 cfg,
                 epoch_eval_index,
@@ -788,7 +791,7 @@ def main(
                 str(ckpt_dir),
                 train_data_path,
                 conversation_column="messages",
-                adam_path=str(ckpt_dir),
+                optimizer_state_path=str(ckpt_dir),
                 nproc_per_node=world_size,
             )
 
@@ -810,7 +813,7 @@ def main(
             train_grad_ds = concatenate_datasets(train_grad_parts)
             train_grad_ds.set_format("torch")
 
-            epoch_scores = _compute_epoch_scores(cfg, train_grad_ds, epoch_eval_index)
+            epoch_scores = _compute_epoch_scores(cfg, train_grad_ds, epoch_eval_index, device)
             weighted_scores = epoch_scores * lr
 
             if accumulated_scores is None:
@@ -853,6 +856,10 @@ def main(
     if local_rank == 0:
         print(f"Training on {len(filtered_ds)} examples out of {len(ds)}.")
 
+    # Re-init so Accelerate's DDP wrapper has a fresh clean process group.
+    if not dist.is_initialized() and world_size > 1:
+        dist.init_process_group("nccl")
+
     run_sft(
         cfg,
         filtered_ds,
@@ -870,7 +877,7 @@ def main(
         dist.init_process_group("nccl")
 
     final_model = AutoModelForCausalLM.from_pretrained(
-        final_path, device_map={"": f"cuda:{local_rank}"}, torch_dtype=torch.bfloat16
+        final_path, device_map={"": device}, torch_dtype=torch.bfloat16
     )
     tokenizer = AutoTokenizer.from_pretrained(final_path)
 

@@ -1,6 +1,7 @@
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -46,8 +47,9 @@ class GradientCollector(HookCollectorBase):
     scorer: Scorer | None = None
     """Optional scorer for computing scores instead of building an index."""
 
-    global_projector: object | None = None
-    """Lazily-built projector used when ``processor.projection_target == 'global'``."""
+    global_projector: Any = None
+    """Lazily-built TRAK projector used when
+    ``processor.projection_target == 'global'``."""
 
     def setup(self) -> None:
         """
