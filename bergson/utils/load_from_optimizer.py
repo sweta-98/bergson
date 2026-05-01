@@ -1,5 +1,5 @@
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
 
 import torch
 from peft import PeftModel, get_peft_model_state_dict
@@ -9,9 +9,10 @@ from bergson.gradients import AdafactorNormalizer, AdamNormalizer, Normalizer
 
 
 class OptimizerStateFormat(Enum):
-    """Optimizer state format for a single module - Adafactor for factored 
-    optimizer states (e.g. 2D+ modules in Adafactor optimizers), and Adam 
+    """Optimizer state format for a single module - Adafactor for factored
+    optimizer states (e.g. 2D+ modules in Adafactor optimizers), and Adam
     for unfactored states."""
+
     ADAM = 1
     ADAFACTOR = 2
 
@@ -37,7 +38,7 @@ def get_optimizer_state_format(param_state) -> OptimizerStateFormat | None:
 def get_unfactored_second_moment(state: dict) -> torch.Tensor:
     """Return the second moment tensor for an unfactored optimizer state.
 
-    Adam and 8-bit Adam always use unfactored tensors. 
+    Adam and 8-bit Adam always use unfactored tensors.
     Adafactor has multiple factored moment tensors for 2D+ parameters,
     and unfactored tensors for 1D parameters.
     """
@@ -71,7 +72,7 @@ def get_normalizers(
             continue
 
         optimizer_format = get_optimizer_state_format(state)
-        
+
         if optimizer_format is None:
             print("Unrecognized format, skipping normalizer for param_idx", param_idx)
             continue
@@ -95,7 +96,7 @@ def get_normalizers(
             # Native Adafactor checkpoint
             row = state["exp_avg_sq_row"]
             col = state.get("exp_avg_sq_col")
-            
+
             if row.ndim != 1:
                 continue
 
