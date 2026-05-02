@@ -84,9 +84,7 @@ class LESSConfig:
     token_batch_size: int = 2048
     """Per-batch token budget for `bergson build`. Doubles as the per-example
     truncation cap (bergson sets ``max_length = min(model_max, token_batch_size)``
-    when truncation is on). 2048 matches the upstream LESS spec
-    (less/data_selection/get_info.py and base_training_args.sh both use 2048).
-    Lower it (e.g. 256) on memory-constrained GPUs."""
+    when truncation is on)."""
 
     pdbs: int = 1
     "Per-device batch size"
