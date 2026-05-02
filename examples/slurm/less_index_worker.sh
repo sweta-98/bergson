@@ -28,7 +28,7 @@ build_args=(
     --truncation
     --projection_dim "$PROJECTION_DIM"
     --projection_target global
-    --token_batch_size 256
+    --token_batch_size "$TOKEN_BATCH_SIZE"
     --precision "$PRECISION"
     --overwrite
 )

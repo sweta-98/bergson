@@ -42,6 +42,14 @@ export TRAIN_DATA="runs/less/extracted_data/data/train/processed"
 export WARMUP_REPO="EleutherAI/less-replication-7b-warmup"
 export PARALLEL_EVAL=4
 
+# Per-batch token budget. Doubles as the per-example truncation cap when
+# truncation is on (bergson/utils/worker_utils.py:371 sets
+# max_length = min(model_max_length, token_batch_size)). 2048 matches the
+# SFT retrain's tokenize max_length and fits comfortably on H200; the 256
+# baked into less.py was sized for ~48GB cards and truncates real LESS
+# conversations down to 256 tokens.
+export TOKEN_BATCH_SIZE=${TOKEN_BATCH_SIZE:-2048}
+
 # Phase 0: prep. Download LESS data + the 4 warmup checkpoints (epochs 1-4).
 echo "[$(date)] Phase 0: prep"
 python -m examples.less.download_less
