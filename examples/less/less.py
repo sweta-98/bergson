@@ -701,9 +701,7 @@ def build_paths(cfg: LESSConfig):
     )
 
 
-def download_warmup_from_hub(
-    warmup_path: Path, repo_id: str, num_epochs: int
-) -> None:
+def download_warmup_from_hub(warmup_path: Path, repo_id: str, num_epochs: int) -> None:
     """Pull warmup checkpoints from ``repo_id``'s ``epoch-{N}`` revisions.
 
     Each revision's contents are placed in ``warmup_path/checkpoint-{N}``.
@@ -782,9 +780,7 @@ def main(
     )
     if use_hub:
         if local_rank == 0:
-            download_warmup_from_hub(
-                warmup_path, cfg.warmup_repo, cfg.warmup_epochs
-            )
+            download_warmup_from_hub(warmup_path, cfg.warmup_repo, cfg.warmup_epochs)
         _file_barrier(warmup_path, "hub_warmup", local_rank, world_size)
         have_local_warmup = bool(list(warmup_path.glob("checkpoint-*")))
 
