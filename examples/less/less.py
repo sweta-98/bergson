@@ -81,6 +81,11 @@ class LESSConfig:
     projection_dim: int = 8192
     """Projection dimension for the gradient index."""
 
+    token_batch_size: int = 2048
+    """Per-batch token budget for `bergson build`. Doubles as the per-example
+    truncation cap (bergson sets ``max_length = min(model_max, token_batch_size)``
+    when truncation is on)."""
+
     pdbs: int = 1
     "Per-device batch size"
 
@@ -359,7 +364,7 @@ def build_subset_indices(
             "--projection_target",
             "global",
             "--token_batch_size",
-            "256",
+            str(cfg.token_batch_size),
             "--precision",
             cfg.precision,
             "--overwrite",
@@ -801,10 +806,11 @@ def main(
     # weighting by the checkpoint's learning rate, then sum for final scores.
     checkpoint_dirs = sorted(warmup_path.glob("checkpoint-*"))
     assert checkpoint_dirs, f"No checkpoints found in {warmup_path}"
-    print(
-        f"Using {len(checkpoint_dirs)} checkpoints: "
-        f"{[d.name for d in checkpoint_dirs]}"
-    )
+    if local_rank == 0:
+        print(
+            f"Using {len(checkpoint_dirs)} checkpoints: "
+            f"{[d.name for d in checkpoint_dirs]}"
+        )
 
     accumulated_scores: Tensor | None = None
 
@@ -814,9 +820,9 @@ def main(
         epoch_train_index = train_index_path / ckpt_dir.name
 
         lr: float = _get_checkpoint_mean_lr(ckpt_dir)
-        print(f"Epoch checkpoint: {ckpt_dir.name}, mean_lr={lr:.6e}")
 
         if local_rank == 0:
+            print(f"Epoch checkpoint: {ckpt_dir.name}, mean_lr={lr:.6e}")
             # Per the LESS paper's InfAdam formula: the train side is the
             # Adam-preconditioned per-example direction Γ̃(z, θ); the eval
             # side is the raw averaged validation gradient ∇̄ℓ. Only train
