@@ -105,6 +105,7 @@ def mix_autocorrelation_matrices(
         projection_dim=q_proc.projection_dim,
         reshape_to_square=q_proc.reshape_to_square,
         projection_type=q_proc.projection_type,
+        projection_target=q_proc.projection_target,
         include_bias=q_proc.include_bias,
     )
     mixed_proc.save(output_path)

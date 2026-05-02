@@ -4,7 +4,7 @@ import pytest
 import torch
 import torch.nn as nn
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
+from peft import LoraConfig, PeftModel, get_peft_model, get_peft_model_state_dict
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
@@ -256,7 +256,7 @@ def test_include_bias_loads_bias_normalizer(tmp_path):
     opt_path = tmp_path / "optimizer.pt"
     torch.save(opt_state, opt_path)
 
-    normalizers = load_from_optimizer(model, str(opt_path), include_bias=True)
+    normalizers = load_from_optimizer(model, str(opt_path), include_bias=True)  # type: ignore[arg-type]
     assert len(normalizers) == 1
     norm = next(iter(normalizers.values()))
     assert isinstance(norm, AdamNormalizer)
@@ -279,9 +279,10 @@ def test_include_bias_false_leaves_bias_unset(tmp_path):
     opt_path = tmp_path / "optimizer.pt"
     torch.save(opt_state, opt_path)
 
-    normalizers = load_from_optimizer(model, str(opt_path), include_bias=False)
+    normalizers = load_from_optimizer(model, str(opt_path), include_bias=False)  # type: ignore[arg-type]
     assert len(normalizers) == 1
     norm = next(iter(normalizers.values()))
+    assert isinstance(norm, AdamNormalizer)
     assert norm.bias_avg_sq is None
 
 
@@ -290,10 +291,10 @@ def test_include_bias_false_leaves_bias_unset(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _create_peft_model():
+def _create_peft_model() -> PeftModel:
     config = AutoConfig.from_pretrained("trl-internal-testing/tiny-Phi3ForCausalLM")
     base = AutoModelForCausalLM.from_config(config, torch_dtype=torch.float32)
-    return get_peft_model(
+    model = get_peft_model(
         base,
         LoraConfig(
             r=4,
@@ -303,6 +304,8 @@ def _create_peft_model():
             task_type="CAUSAL_LM",
         ),
     )
+    assert isinstance(model, PeftModel)
+    return model
 
 
 def _fake_optimizer_state_for_peft(peft_model):
@@ -403,8 +406,9 @@ def test_load_adam_checkpoint():
             continue
 
         raw = opt_state["state"][idx]["exp_avg_sq"]
-        loaded = normalizers[module_name].weight_avg_sq.cpu()
-        torch.testing.assert_close(loaded, raw)
+        norm = normalizers[module_name]
+        assert isinstance(norm, AdamNormalizer)
+        torch.testing.assert_close(norm.weight_avg_sq.cpu(), raw)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -462,5 +466,6 @@ def test_load_8bit_adam_checkpoint():
             continue
 
         raw = opt_state["state"][idx]["__bnb_optimizer_quant_state__"]["state2"]
-        loaded = normalizers[module_name].weight_avg_sq.cpu()
-        torch.testing.assert_close(loaded, raw)
+        norm = normalizers[module_name]
+        assert isinstance(norm, AdamNormalizer)
+        torch.testing.assert_close(norm.weight_avg_sq.cpu(), raw)
