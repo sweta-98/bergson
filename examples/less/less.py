@@ -92,6 +92,16 @@ class LESSConfig:
 
     test: bool = False
 
+    warmup_repo: str = "EleutherAI/less-replication-7b-warmup"
+    """HF repo containing warmup checkpoints as ``epoch-{N}`` revisions. If
+    set and warmup checkpoints aren't on disk, download them instead of
+    running warmup. Set to empty string to disable the HF fallback."""
+
+    recompute_warmup: bool = False
+    """Force a fresh warmup SFT even if checkpoints are on disk or available
+    on ``warmup_repo``. Off by default — pulls the published checkpoints when
+    available so step 2+ can run without redoing step 1."""
+
 
 def set_seeds(seed: int):
     """Set all random seeds for reproducibility."""
@@ -349,7 +359,7 @@ def build_subset_indices(
             "--projection_target",
             "global",
             "--token_batch_size",
-            "4096",
+            "512",
             "--precision",
             cfg.precision,
             "--overwrite",
@@ -691,6 +701,31 @@ def build_paths(cfg: LESSConfig):
     )
 
 
+def download_warmup_from_hub(
+    warmup_path: Path, repo_id: str, num_epochs: int
+) -> None:
+    """Pull warmup checkpoints from ``repo_id``'s ``epoch-{N}`` revisions.
+
+    Each revision's contents are placed in ``warmup_path/checkpoint-{N}``.
+    Logs (and skips) revisions that are already present locally.
+    """
+    from huggingface_hub import snapshot_download
+
+    warmup_path.mkdir(parents=True, exist_ok=True)
+    for epoch in range(1, num_epochs + 1):
+        target = warmup_path / f"checkpoint-{epoch}"
+        if (target / "adapter_config.json").exists():
+            print(f"Warmup checkpoint-{epoch} already on disk, skipping download")
+            continue
+        revision = f"epoch-{epoch}"
+        print(f"Downloading {repo_id}@{revision} -> {target}")
+        snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            local_dir=str(target),
+        )
+
+
 def main(
     cfg: LESSConfig,
 ):
@@ -738,16 +773,33 @@ def main(
 
     warmup_ds = ds.select(range(math.ceil(len(ds) * cfg.warmup_fraction)))
 
-    # Warm up SFT on the dataset
-    run_sft(
-        cfg,
-        warmup_ds,
-        warmup_path,
-        cfg.warmup_epochs,
-        tokenizer,
-        train_data_config,
-        warmup_run_name,
+    have_local_warmup = bool(list(warmup_path.glob("checkpoint-*")))
+    use_hub = (
+        not have_local_warmup
+        and not cfg.recompute_warmup
+        and cfg.warmup_repo
+        and not cfg.test
     )
+    if use_hub:
+        if local_rank == 0:
+            download_warmup_from_hub(
+                warmup_path, cfg.warmup_repo, cfg.warmup_epochs
+            )
+        _file_barrier(warmup_path, "hub_warmup", local_rank, world_size)
+        have_local_warmup = bool(list(warmup_path.glob("checkpoint-*")))
+
+    if cfg.recompute_warmup or not have_local_warmup:
+        run_sft(
+            cfg,
+            warmup_ds,
+            warmup_path,
+            cfg.warmup_epochs,
+            tokenizer,
+            train_data_config,
+            warmup_run_name,
+        )
+    elif local_rank == 0:
+        print(f"Using existing warmup checkpoints in {warmup_path}")
 
     # Build gradient indices and score at each warmup epoch checkpoint,
     # weighting by the checkpoint's learning rate, then sum for final scores.
