@@ -372,7 +372,8 @@ class IndexConfig(AttributionConfig, Serializable):
     """Whether to skip building the gradient index."""
 
     stats_sample_size: int | None = 10_000
-    """Number of examples to use for estimating normalizer statistics."""
+    """Number of examples to use for estimating the autocorrelation Hessian.
+    This feature is experimental and may be removed."""
 
     loss_fn: Literal["ce", "kl"] = "ce"
     """Loss function to use."""

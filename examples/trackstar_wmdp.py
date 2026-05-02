@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Example: score pile-10k against mean WMDP bio gradients using trackstar.
 
-Computes adafactor normalizers and hessians on both query and value
-datasets (up to 10k samples each). Hessians are not recomputed during
-build or score.
+Computes hessians on both query and value datasets (up to 10k samples each). 
+Hessians are not recomputed during build or score.
 """
 
 import subprocess
@@ -22,10 +21,6 @@ cmd = [
     "runs/trackstar_wmdp",
     "--model",
     "EleutherAI/pythia-160m",
-    "--normalizer",
-    "adafactor",
-    "--stats_sample_size",
-    "10000",
     # Value dataset
     "--data.dataset",
     "NeelNanda/pile-10k",

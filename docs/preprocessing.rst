@@ -8,7 +8,7 @@ Operations
 
 **Preconditioning** (``--hessian_path``): Applies a per-module matrix transformation derived from a Hessian approximation, such as the second moment matrix of gradients. For inner product scoring, :math:`H^{-1}` is applied to the query side. For cosine similarity scoring, :math:`H^{-1/2}` must be applied to both sides symmetrically. Many hessians are supported including K-FAC, EK-FAC, and (mixed) gradient second moments.
 
-**Optimizer normalization** (``--normalizer``): Scales each gradient element by the inverse root-mean-square (RMS) of that parameter's gradient history — e.g., Adam normalization divides by :math:`\sqrt{E[g^2]} + \varepsilon`, where :math:`E[g^2]` is the mean of squared gradients across the dataset. Applied elementwise during gradient collection. Unlike the Adam optimizer used during training, this uses a simple mean over the dataset rather than an exponential moving average. This downweights parameters with large gradient magnitudes and amplifies signal in directions with consistently small gradients. Adam- and Adafactor-style second moment estimates are supported. Adafactor-style normalization uses less GPU VRAM.
+**Optimizer normalization** (``--optimizer_state_path``): Scales each gradient element using second moment information from a training optimizer buffer — e.g., Adam normalization divides by :math:`\sqrt{E[g^2]} + \varepsilon`, where :math:`E[g^2]` is the mean of squared gradients across the dataset. Applied elementwise during gradient collection. This downweights parameters with large gradient magnitudes and amplifies signal in directions with consistently small gradients. Adam- and Adafactor-style second moment estimates are supported. Adafactor-style normalization uses less GPU VRAM.
 
 **Unit normalization** (``--unit_normalize``): Normalizes each gradient vector to unit L2 norm before similarity computation, enabling cosine similarity when used with inner product scoring.
 
@@ -20,7 +20,7 @@ Every similarity computation involves two sides:
 - **Index gradients**: Gradients from the training dataset you want to search.
 - **Query gradients**: Gradients from the dataset whose most similar training examples you want to find.
 
-In select cases, preprocessing may be applied only to query gradients.
+When unit normalization is not used, preprocessing may be applied only to query gradients.
 
 .. list-table::
    :header-rows: 1
@@ -31,7 +31,7 @@ In select cases, preprocessing may be applied only to query gradients.
      - Notes
    * - Optimizer normalization
      - No
-     - Apply the same ``--normalizer`` when collecting both query and index gradients
+     - Apply the same ``--optimizer_state_path`` when collecting both query and index gradients
    * - Preconditioning (inner product)
      - Yes
      - :math:`H^{-1}` applied to query only; relative score rankings are preserved
@@ -54,36 +54,34 @@ Cosine similarity with an optimizer normalizer (full gradients)
 
 The Adam normalizer scales each parameter's gradient by :math:`1/(\sqrt{v} + \varepsilon)`, where :math:`v = E[g^2]` is the mean of squared gradients across the dataset. Applied before cosine similarity, this reweights the gradient space by the inverse RMS of each parameter's gradient history, correcting for directions with consistently high-magnitude gradients.
 
-The normalizer is applied during gradient collection, so the same ``--normalizer`` must be set when collecting both query and index gradients.
+The normalizer is applied during gradient collection, so the same ``--optimizer_state_path`` must be set when collecting both query and index gradients.
 
 .. code-block:: bash
 
    # Reduce query dataset to a single mean gradient with optimizer normalization
-   # The normalizer is fit internally on 10,000 training items.
    bergson reduce runs/query \
        --model EleutherAI/pythia-14m \
        --dataset NeelNanda/pile-10k \
        --truncation \
        --projection_dim 0 \
-       --normalizer adafactor \
-       --stats_sample_size 10000 \
+       --optimizer_state_path <path> \
        --aggregation mean \
        --skip_hessians
 
 
-   # Score: collect training gradients with the same normalizer, unit normalize for cosine similarity
+   # Score: collect training gradients with the same optimizer buffer, unit normalize for cosine similarity
    bergson score runs/scores \
        --query_path runs/query \
        --model EleutherAI/pythia-14m \
        --dataset NeelNanda/pile-10k \
        --truncation \
        --projection_dim 0 \
-       --normalizer adafactor \
+       --optimizer_state_path <path> \
        --processor_path runs/query \
        --unit_normalize \
        --skip_hessians
 
-Both commands use ``--projection_dim 0`` to preserve the full gradient, and the same ``--normalizer`` to ensure consistent per-parameter scaling. The ``score`` command applies unit normalization to both the loaded query gradient and each training gradient, giving cosine similarity in the optimizer-normalized space.
+Both commands use ``--projection_dim 0`` to preserve the full gradient, and the same ``--optimizer_state_path`` to ensure consistent per-parameter scaling. The ``score`` command applies unit normalization to both the loaded query gradient and each training gradient, giving cosine similarity in the optimizer-normalized space.
 
 Inner product with an optimizer normalizer (full gradients)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -102,8 +100,7 @@ Unlike cosine similarity, inner product preserves gradient magnitude, so trainin
        --dataset NeelNanda/pile-10k \
        --truncation \
        --projection_dim 0 \
-       --normalizer adafactor \
-       --stats_sample_size 10000 \
+       --optimizer_state_path <path> \
        --aggregation mean \
        --skip_hessians
 
@@ -114,7 +111,7 @@ Unlike cosine similarity, inner product preserves gradient magnitude, so trainin
        --dataset NeelNanda/pile-10k \
        --truncation \
        --projection_dim 0 \
-       --normalizer adafactor \
+       --optimizer_state_path <path> \
        --skip_hessians
 
 **Inner product vs cosine similarity:** Use inner product when gradient magnitude carries information (larger gradients indicate stronger relevance). Use cosine similarity to compare direction independently of magnitude, which is more robust when examples differ systematically in gradient norm (e.g., due to different sequence lengths or loss scales).
@@ -161,7 +158,7 @@ All commands must use the same ``--projection_dim`` and identical model configur
 
 .. note::
 
-   **Preprocessing order:** Optimizer normalization must be applied during gradient collection (set ``--normalizer`` at both ``reduce`` and ``score`` time). It cannot be applied after the mean-reduction in ``reduce`` - the normalizer is non-linear so applying it to the mean gradient is not the same as normalizing each gradient then taking the mean.
+   **Preprocessing order:** Optimizer normalization must be applied during gradient collection (set ``--optimizer_state_path`` at both ``reduce`` and ``score`` time). It cannot be applied after the mean-reduction in ``reduce`` - the normalization is non-linear so applying it to the mean gradient is not the same as normalizing each gradient then taking the mean.
 
 Randomly projected gradients with unit normalization, hessians, build, and score
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
