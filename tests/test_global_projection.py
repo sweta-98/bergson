@@ -134,7 +134,8 @@ def test_per_module_shapes_unchanged():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_global_projector_e2e(tmp_path: Path, model, dataset):
-    proj_dim = 64
+    # CudaProjector requires proj_dim to be a multiple of 512.
+    proj_dim = 512
     cfg = IndexConfig(
         run_path=str(tmp_path),
         skip_hessians=True,
