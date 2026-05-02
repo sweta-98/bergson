@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Example: score pile-10k against mean WMDP bio gradients using trackstar.
 
-Computes hessians on both query and value datasets (up to 10k samples each). 
+Computes hessians on both query and value datasets (up to 10k samples each).
 Hessians are not recomputed during build or score.
 """
 
