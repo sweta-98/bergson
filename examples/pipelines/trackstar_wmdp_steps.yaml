@@ -1,10 +1,7 @@
-# Step-by-step equivalent of examples/pipelines/trackstar_wmdp.yaml. Each
-# stage of the trackstar pipeline (value hessian, query hessian, mix, query
-# index, score) is its own pipeline entry, so individual steps can be re-run,
-# inspected, or swapped out without invoking the trackstar wrapper.
-#
+# Step-by-step TrackStar pipeline example. 
+
 # Run with:
-#   bergson pipeline examples/pipelines/trackstar_wmdp_pieces.yaml
+#   bergson pipeline examples/pipelines/trackstar_wmdp_steps.yaml
 
 # Step 1/5: Compute autocorrelation hessian on the value (training) dataset.
 - build:

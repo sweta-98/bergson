@@ -363,8 +363,8 @@ class IndexConfig(AttributionConfig, Serializable):
     optimizer_state: str = ""
     """Source for optimizer second moments used to normalize gradients.
     Either a local path (a checkpoint directory containing ``optimizer.pt``,
-    or a path to an optimizer state file directly) or a Hugging Face Hub
-    reference ``org/name[@revision][:subpath]``."""
+    or a path to an optimizer state file directly) or a Hugging Face URI
+    ``hf://<repo>[@<revision>][/<path>]``."""
 
     skip_hessians: bool = False
     """Whether to skip estimating hessian statistics"""

@@ -166,7 +166,7 @@ def test_load_optimizer_local_dir(tmp_path):
 
 
 def test_load_optimizer_hub_dispatch(tmp_path, monkeypatch):
-    """Hub-shaped specs should dispatch to hf_hub_download with parsed args."""
+    """hf:// URIs should dispatch to hf_hub_download with parsed args."""
     from bergson.utils import load_from_optimizer as mod
 
     model = _create_model()
@@ -176,18 +176,25 @@ def test_load_optimizer_hub_dispatch(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_download(repo_id, filename, revision=None, **_):
-        calls.append((repo_id, filename, revision))
+    def fake_download(repo_id, filename, revision=None, repo_type=None, **_):
+        calls.append((repo_id, filename, revision, repo_type))
         return str(cached)
 
     monkeypatch.setattr(mod, "hf_hub_download", fake_download)
 
     cases = [
-        ("org/repo", ("org/repo", "optimizer.pt", None)),
-        ("org/repo@rev", ("org/repo", "optimizer.pt", "rev")),
-        ("org/repo:checkpoint-1", ("org/repo", "checkpoint-1/optimizer.pt", None)),
-        ("org/repo:custom.pt", ("org/repo", "custom.pt", None)),
-        ("org/repo@v2:sub/dir/optimizer.pth", ("org/repo", "sub/dir/optimizer.pth", "v2")),
+        ("hf://org/repo", ("org/repo", "optimizer.pt", None, "model")),
+        ("hf://org/repo@rev", ("org/repo", "optimizer.pt", "rev", "model")),
+        ("hf://org/repo/checkpoint-1", ("org/repo", "checkpoint-1/optimizer.pt", None, "model")),
+        ("hf://org/repo/custom.pt", ("org/repo", "custom.pt", None, "model")),
+        (
+            "hf://org/repo@v2/sub/dir/optimizer.pth",
+            ("org/repo", "sub/dir/optimizer.pth", "v2", "model"),
+        ),
+        (
+            "hf://datasets/org/repo/optimizer.pt",
+            ("org/repo", "optimizer.pt", None, "dataset"),
+        ),
     ]
     for spec, expected in cases:
         calls.clear()
@@ -199,7 +206,7 @@ def test_load_optimizer_invalid_spec():
     from bergson.utils.load_from_optimizer import load_optimizer
 
     with pytest.raises(FileNotFoundError):
-        load_optimizer("a/b/c/d")
+        load_optimizer("not/a/local/path")
 
 
 # ---------------------------------------------------------------------------

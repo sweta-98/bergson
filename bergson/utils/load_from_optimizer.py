@@ -1,62 +1,51 @@
-import re
 from enum import Enum
 from pathlib import Path
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import parse_hf_uri
 from peft import PeftModel, get_peft_model_state_dict
 from transformers import PreTrainedModel
 
 from bergson.gradients import AdafactorNormalizer, AdamNormalizer, Normalizer
 
-# Hub reference: ``org/name[@revision][:subpath]``. ``org`` and ``name`` each
-# have to be a single path segment (no '/'), and ``@``/``:`` are reserved as
-# separators for the optional revision and in-repo subpath.
-HUB_REF_RE = re.compile(
-    r"^(?P<repo>[^/@:]+/[^/@:]+)"
-    r"(?:@(?P<revision>[^:]+))?"
-    r"(?::(?P<subpath>.+))?$"
-)
-
 
 def load_optimizer(optimizer_state: str) -> dict:
-    """Load an optimizer state dict from a local path or Hugging Face Hub.
+    """Load an optimizer state dict from a local path or Hugging Face URI.
 
     ``optimizer_state`` may be:
 
     - a local file: loaded directly.
     - a local directory: ``optimizer.pt`` inside it is loaded.
-    - a Hub reference ``org/name[@revision][:subpath]``. ``subpath`` is
-      treated as a file if it ends in ``.pt``/``.pth`` and otherwise as a
-      directory containing ``optimizer.pt``. When omitted, ``optimizer.pt``
-      at the repo root is downloaded.
+    - a Hugging Face URI ``hf://<repo>[@<revision>][/<path>]``. The path
+      is treated as a file when it ends in ``.pt``/``.pth`` and otherwise
+      as a directory containing ``optimizer.pt``. An omitted/empty path
+      resolves to ``optimizer.pt`` at the repo root.
     """
-    local = Path(optimizer_state)
-    if local.exists():
-        path = local / "optimizer.pt" if local.is_dir() else local
-    else:
-        match = HUB_REF_RE.match(optimizer_state)
-        if not match:
-            raise FileNotFoundError(
-                f"Optimizer state '{optimizer_state}' is not a local path and "
-                f"does not look like a Hugging Face Hub reference "
-                f"(org/name[@rev][:subpath])."
-            )
-
-        repo = match.group("repo")
-        revision = match.group("revision")
-        subpath = match.group("subpath") or ""
-
-        if subpath.endswith((".pt", ".pth")):
-            filename = subpath
-        elif subpath:
-            filename = f"{subpath.rstrip('/')}/optimizer.pt"
+    if optimizer_state.startswith("hf://"):
+        uri = parse_hf_uri(optimizer_state)
+        if uri.path_in_repo.endswith((".pt", ".pth")):
+            filename = uri.path_in_repo
+        elif uri.path_in_repo:
+            filename = f"{uri.path_in_repo.rstrip('/')}/optimizer.pt"
         else:
             filename = "optimizer.pt"
-
         path = Path(
-            hf_hub_download(repo_id=repo, filename=filename, revision=revision)
+            hf_hub_download(
+                repo_id=uri.id,
+                filename=filename,
+                revision=uri.revision,
+                repo_type=uri.type,
+            )
         )
+    else:
+        local = Path(optimizer_state)
+        if not local.exists():
+            raise FileNotFoundError(
+                f"Optimizer state '{optimizer_state}' is not a local path "
+                f"and does not start with 'hf://'."
+            )
+        path = local / "optimizer.pt" if local.is_dir() else local
 
     return torch.load(path, map_location="cpu", weights_only=False)
 
@@ -179,8 +168,8 @@ def load_from_optimizer(
             state indices to layer names.
         optimizer_state: Local path to an optimizer state file or a
             checkpoint directory containing ``optimizer.pt``, or a Hugging
-            Face Hub reference ``org/name[@revision][:subpath]``
-            (see :func:`load_optimizer`).
+            Face URI ``hf://<repo>[@<revision>][/<path>]`` (see
+            :func:`load_optimizer`).
         include_bias: Whether to include bias second moments.
         target_modules: Optional set of module names to include. If ``None``,
             all linear layers are included.
