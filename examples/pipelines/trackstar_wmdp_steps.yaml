@@ -1,4 +1,4 @@
-# Step-by-step TrackStar pipeline example. 
+# Step-by-step TrackStar pipeline example.
 
 # Run with:
 #   bergson pipeline examples/pipelines/trackstar_wmdp_steps.yaml

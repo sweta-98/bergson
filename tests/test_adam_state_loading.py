@@ -185,7 +185,10 @@ def test_load_optimizer_hub_dispatch(tmp_path, monkeypatch):
     cases = [
         ("hf://org/repo", ("org/repo", "optimizer.pt", None, "model")),
         ("hf://org/repo@rev", ("org/repo", "optimizer.pt", "rev", "model")),
-        ("hf://org/repo/checkpoint-1", ("org/repo", "checkpoint-1/optimizer.pt", None, "model")),
+        (
+            "hf://org/repo/checkpoint-1",
+            ("org/repo", "checkpoint-1/optimizer.pt", None, "model"),
+        ),
         ("hf://org/repo/custom.pt", ("org/repo", "custom.pt", None, "model")),
         (
             "hf://org/repo@v2/sub/dir/optimizer.pth",
