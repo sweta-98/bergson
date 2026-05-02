@@ -170,7 +170,9 @@ def test_user_quotes_previous_assistant(tokenizer):
     asst1_char = rendered.find(ans1)
     user_quote_char = rendered.find(ans1, asst1_char + 1)
     ans2_char = rendered.find(ans2)
-    assert asst1_char >= 0 and user_quote_char > asst1_char and ans2_char > user_quote_char
+    assert (
+        asst1_char >= 0 and user_quote_char > asst1_char and ans2_char > user_quote_char
+    )
 
     asst1_token = encodings.char_to_token(asst1_char)
     user_quote_token = encodings.char_to_token(user_quote_char)
@@ -206,7 +208,5 @@ def test_identical_assistant_turns(tokenizer):
     assert labels[first_token] != -100
     assert labels[second_token] != -100
 
-    gap = [
-        i for i in range(first_token, second_token) if labels[i] == -100
-    ]
+    gap = [i for i in range(first_token, second_token) if labels[i] == -100]
     assert gap, "Expected -100 region between the two identical assistant turns"
