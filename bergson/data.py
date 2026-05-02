@@ -21,7 +21,7 @@ from datasets import (
     load_from_disk,
 )
 from numpy.lib.recfunctions import structured_to_unstructured
-from numpy.typing import DTypeLike
+from numpy.typing import DTypeLike, NDArray
 from transformers import PreTrainedTokenizerFast, logging
 
 from .config import DataConfig
@@ -538,11 +538,11 @@ class Scores:
     def __len__(self) -> int:
         return len(self.mmap)
 
-    def __getitem__(self, key: Any) -> Any:
+    def __getitem__(self, key: Any) -> NDArray:
         items = self.mmap[key]
         return structured_to_unstructured(items[self._score_fields])
 
-    def get(self, key: Any, score_idx: int = 0) -> Any:
+    def get(self, key: Any, score_idx: int = 0) -> NDArray:
         """Get scores for a specific score index."""
         return self.mmap[key][f"score_{score_idx}"]
 
@@ -552,9 +552,7 @@ class Scores:
         return all(np.all(self.mmap[f"written_{i}"]) for i in range(self.num_scores))
 
 
-def load_scores(
-    path: Path,
-) -> Scores:
+def load_scores(path: Path) -> Scores:
     bin_path = path / "scores.bin"
     info_path = path / "info.json"
 
