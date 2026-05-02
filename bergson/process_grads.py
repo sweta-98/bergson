@@ -5,8 +5,22 @@ from typing import Literal
 
 import torch
 
+from bergson.config import HessianConfig
 from bergson.gradients import GradientProcessor
 from bergson.utils.math import compute_lambda, damped_psd_power
+
+
+def assert_autocorrelation_hessian(path: Path) -> None:
+    """Verify that ``path`` contains an autocorrelation hessian."""
+    cfg_path = path / "hessian_config.yaml"
+    assert cfg_path.exists(), f"Missing 'hessian_config.yaml' in '{path}'."
+
+    hessian_cfg = HessianConfig.load_yaml(cfg_path)
+    assert hessian_cfg.method == "autocorrelation", (
+        f"Hessian at '{path}' was computed with method "
+        f"'{hessian_cfg.method}'; mix_autocorrelation_matrices only "
+        f"supports autocorrelation."
+    )
 
 
 def normalize_grad(
@@ -80,6 +94,9 @@ def mix_autocorrelation_matrices(
     query_path = Path(query_path)
     index_path = Path(index_path)
     output_path = Path(output_path)
+
+    assert_autocorrelation_hessian(query_path)
+    assert_autocorrelation_hessian(index_path)
 
     q_proc = GradientProcessor.load(query_path)
     i_proc = GradientProcessor.load(index_path)

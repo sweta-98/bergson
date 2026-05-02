@@ -360,10 +360,11 @@ class IndexConfig(AttributionConfig, Serializable):
     processor_path: str = ""
     """Path to a precomputed processor."""
 
-    optimizer_state_path: str = ""
-    """Path to a training checkpoint directory containing an optimizer.pt
-    or directly to an optimizer state file. Loads exp_avg_sq second
-    moments to normalize gradients."""
+    optimizer_state: str = ""
+    """Source for optimizer second moments used to normalize gradients.
+    Either a local path (a checkpoint directory containing ``optimizer.pt``,
+    or a path to an optimizer state file directly) or a Hugging Face URI
+    ``hf://<repo>[@<revision>][/<path>]``."""
 
     skip_hessians: bool = False
     """Whether to skip estimating hessian statistics"""
@@ -372,7 +373,8 @@ class IndexConfig(AttributionConfig, Serializable):
     """Whether to skip building the gradient index."""
 
     stats_sample_size: int | None = 10_000
-    """Number of examples to use for estimating normalizer statistics."""
+    """Number of examples to use for estimating the autocorrelation Hessian.
+    This feature is experimental and may be removed."""
 
     loss_fn: Literal["ce", "kl"] = "ce"
     """Loss function to use."""
@@ -566,6 +568,29 @@ class HessianPipelineConfig:
 
     resume: bool = False
     """Skip pipeline steps whose output directory already exists."""
+
+
+@dataclass
+class MixConfig(Serializable):
+    """Config for mixing two autocorrelation hessians."""
+
+    query_path: str = ""
+    """Directory containing the query autocorrelation hessian
+    (a saved GradientProcessor)."""
+
+    index_path: str = ""
+    """Directory containing the index autocorrelation hessian
+    (a saved GradientProcessor)."""
+
+    output_path: str = ""
+    """Directory to write the mixed hessian to."""
+
+    target_downweight_components: int = 1000
+    """Number of gradient components to downweight via automatic lambda
+    selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is
+    computed so that the sorted singular-value curves of the query and
+    index hessians intersect at this component. Typical value is
+    ~1000 out of ~65K total components."""
 
 
 @dataclass

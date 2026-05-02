@@ -2,10 +2,52 @@ from enum import Enum
 from pathlib import Path
 
 import torch
+from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import parse_hf_uri
 from peft import PeftModel, get_peft_model_state_dict
 from transformers import PreTrainedModel
 
 from bergson.gradients import AdafactorNormalizer, AdamNormalizer, Normalizer
+
+
+def load_optimizer(optimizer_state: str) -> dict:
+    """Load an optimizer state dict from a local path or Hugging Face URI.
+
+    ``optimizer_state`` may be:
+
+    - a local file: loaded directly.
+    - a local directory: ``optimizer.pt`` inside it is loaded.
+    - a Hugging Face URI ``hf://<repo>[@<revision>][/<path>]``. The path
+      is treated as a file when it ends in ``.pt``/``.pth`` and otherwise
+      as a directory containing ``optimizer.pt``. An omitted/empty path
+      resolves to ``optimizer.pt`` at the repo root.
+    """
+    if optimizer_state.startswith("hf://"):
+        uri = parse_hf_uri(optimizer_state)
+        if uri.path_in_repo.endswith((".pt", ".pth")):
+            filename = uri.path_in_repo
+        elif uri.path_in_repo:
+            filename = f"{uri.path_in_repo.rstrip('/')}/optimizer.pt"
+        else:
+            filename = "optimizer.pt"
+        path = Path(
+            hf_hub_download(
+                repo_id=uri.id,
+                filename=filename,
+                revision=uri.revision,
+                repo_type=uri.type,
+            )
+        )
+    else:
+        local = Path(optimizer_state)
+        if not local.exists():
+            raise FileNotFoundError(
+                f"Optimizer state '{optimizer_state}' is not a local path "
+                f"and does not start with 'hf://'."
+            )
+        path = local / "optimizer.pt" if local.is_dir() else local
+
+    return torch.load(path, map_location="cpu", weights_only=False)
 
 
 class OptimizerStateFormat(Enum):
@@ -108,7 +150,7 @@ def get_normalizers(
 
 def load_from_optimizer(
     model: PreTrainedModel | PeftModel,
-    optimizer_state_path: str,
+    optimizer_state: str,
     include_bias: bool = False,
     target_modules: set[str] | None = None,
 ) -> dict[str, Normalizer]:
@@ -124,8 +166,10 @@ def load_from_optimizer(
     Args:
         model: The model whose parameter names are used to map optimizer
             state indices to layer names.
-        optimizer_state_path: Path to either a checkpoint directory containing
-            ``optimizer.pt`` or directly to an optimizer state file.
+        optimizer_state: Local path to an optimizer state file or a
+            checkpoint directory containing ``optimizer.pt``, or a Hugging
+            Face URI ``hf://<repo>[@<revision>][/<path>]`` (see
+            :func:`load_optimizer`).
         include_bias: Whether to include bias second moments.
         target_modules: Optional set of module names to include. If ``None``,
             all linear layers are included.
@@ -133,11 +177,7 @@ def load_from_optimizer(
     Returns:
         Dictionary mapping layer names to normalizer instances.
     """
-    optimizer_path = Path(optimizer_state_path)
-    if optimizer_path.is_dir():
-        optimizer_path = optimizer_path / "optimizer.pt"
-
-    optimizer_state = torch.load(optimizer_path, map_location="cpu", weights_only=False)
+    optimizer_state_dict = load_optimizer(optimizer_state)
 
     # The optimizer state is keyed by position in the trainable parameter list.
     # For PEFT checkpoints, only include PEFT params.
@@ -162,7 +202,7 @@ def load_from_optimizer(
     device = next(model.parameters()).device
 
     normalizers = get_normalizers(
-        optimizer_state,
+        optimizer_state_dict,
         target_param_index_to_name,
         target_modules,
         adapter_suffix,
@@ -170,14 +210,14 @@ def load_from_optimizer(
         device,
     )
     assert normalizers, (
-        f"No optimizer second moments found in '{optimizer_state_path}'. "
+        f"No optimizer second moments found in '{optimizer_state}'. "
         "Ensure the checkpoint was saved from an Adam-family or Adafactor optimizer."
     )
 
     types = {type(n).__name__ for n in normalizers.values()}
     print(
         f"Loaded {len(normalizers)} normalizers ({', '.join(types)}) "
-        f"from '{optimizer_state_path}'"
+        f"from '{optimizer_state}'"
     )
     return normalizers
 
