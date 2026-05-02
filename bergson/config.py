@@ -570,6 +570,29 @@ class HessianPipelineConfig:
 
 
 @dataclass
+class MixConfig(Serializable):
+    """Config for mixing two autocorrelation hessians."""
+
+    query_path: str = ""
+    """Directory containing the query autocorrelation hessian
+    (a saved GradientProcessor)."""
+
+    index_path: str = ""
+    """Directory containing the index autocorrelation hessian
+    (a saved GradientProcessor)."""
+
+    output_path: str = ""
+    """Directory to write the mixed hessian to."""
+
+    target_downweight_components: int = 1000
+    """Number of gradient components to downweight via automatic lambda
+    selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is
+    computed so that the sorted singular-value curves of the query and
+    index hessians intersect at this component. Typical value is
+    ~1000 out of ~65K total components."""
+
+
+@dataclass
 class TrackstarConfig:
     """Config for the trackstar pipeline query dataset."""
 

@@ -12,6 +12,7 @@ from .config import (
     HessianConfig,
     HessianPipelineConfig,
     IndexConfig,
+    MixConfig,
     PreprocessConfig,
     QueryConfig,
     ScoreConfig,
@@ -20,6 +21,7 @@ from .config import (
 from .diagnose import DiagnoseConfig, diagnose
 from .hessians.hessian_approximations import approximate_hessians
 from .magic import MagicConfig, run_magic
+from .process_grads import mix_autocorrelation_matrices
 from .query.query_index import query
 from .score.score import score_dataset
 from .trackstar import trackstar
@@ -82,8 +84,8 @@ class Hessian(Serializable):
         validate_run_path(self.index_cfg)
 
         if self.hessian_cfg.method == "autocorrelation":
-            self.skip_index = True
-            self.skip_hessians = False
+            self.index_cfg.skip_index = True
+            self.index_cfg.skip_hessians = False
             build(self.index_cfg, PreprocessConfig())
         else:
             approximate_hessians(self.index_cfg, self.hessian_cfg)
@@ -96,6 +98,29 @@ class Magic(MagicConfig):
     def execute(self):
         """Run MAGIC attribution."""
         run_magic(self)
+
+
+@dataclass
+class Mix(MixConfig):
+    """Mix two autocorrelation hessians into a single GradientProcessor.
+
+    Loads autocorrelation hessians from ``query_path`` and ``index_path``,
+    computes a mixing coefficient via the §A.1.3 procedure of Chang et al.
+    (2024), and writes the mixed GradientProcessor to ``output_path``.
+    """
+
+    def execute(self):
+        if not self.query_path or not self.index_path or not self.output_path:
+            raise ValueError(
+                "mix requires --query_path, --index_path, "
+                "and --output_path to be set."
+            )
+        mix_autocorrelation_matrices(
+            query_path=self.query_path,
+            index_path=self.index_path,
+            output_path=self.output_path,
+            target_downweight_components=self.target_downweight_components,
+        )
 
 
 @dataclass
@@ -181,6 +206,7 @@ class Main:
         Ekfac,
         Hessian,
         Magic,
+        Mix,
         Query,
         Reduce,
         Score,
