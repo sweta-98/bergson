@@ -17,7 +17,7 @@ def supports_fast_jl(device: torch.device) -> bool:
     if device.type != "cuda":
         return False
     try:
-        import fast_jl
+        import fast_jl  # pyright: ignore[reportMissingImports]
 
         num_sms = torch.cuda.get_device_properties(device.index).multi_processor_count
         # Smallest call shape that exercises the kernel without allocating much.

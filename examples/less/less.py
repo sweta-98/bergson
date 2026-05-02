@@ -359,7 +359,7 @@ def build_subset_indices(
             "--projection_target",
             "global",
             "--token_batch_size",
-            "512",
+            "256",
             "--precision",
             cfg.precision,
             "--overwrite",
