@@ -1,11 +1,64 @@
+import re
 from enum import Enum
 from pathlib import Path
 
 import torch
+from huggingface_hub import hf_hub_download
 from peft import PeftModel, get_peft_model_state_dict
 from transformers import PreTrainedModel
 
 from bergson.gradients import AdafactorNormalizer, AdamNormalizer, Normalizer
+
+# Hub reference: ``org/name[@revision][:subpath]``. ``org`` and ``name`` each
+# have to be a single path segment (no '/'), and ``@``/``:`` are reserved as
+# separators for the optional revision and in-repo subpath.
+HUB_REF_RE = re.compile(
+    r"^(?P<repo>[^/@:]+/[^/@:]+)"
+    r"(?:@(?P<revision>[^:]+))?"
+    r"(?::(?P<subpath>.+))?$"
+)
+
+
+def load_optimizer(optimizer_state: str) -> dict:
+    """Load an optimizer state dict from a local path or Hugging Face Hub.
+
+    ``optimizer_state`` may be:
+
+    - a local file: loaded directly.
+    - a local directory: ``optimizer.pt`` inside it is loaded.
+    - a Hub reference ``org/name[@revision][:subpath]``. ``subpath`` is
+      treated as a file if it ends in ``.pt``/``.pth`` and otherwise as a
+      directory containing ``optimizer.pt``. When omitted, ``optimizer.pt``
+      at the repo root is downloaded.
+    """
+    local = Path(optimizer_state)
+    if local.exists():
+        path = local / "optimizer.pt" if local.is_dir() else local
+    else:
+        match = HUB_REF_RE.match(optimizer_state)
+        if not match:
+            raise FileNotFoundError(
+                f"Optimizer state '{optimizer_state}' is not a local path and "
+                f"does not look like a Hugging Face Hub reference "
+                f"(org/name[@rev][:subpath])."
+            )
+
+        repo = match.group("repo")
+        revision = match.group("revision")
+        subpath = match.group("subpath") or ""
+
+        if subpath.endswith((".pt", ".pth")):
+            filename = subpath
+        elif subpath:
+            filename = f"{subpath.rstrip('/')}/optimizer.pt"
+        else:
+            filename = "optimizer.pt"
+
+        path = Path(
+            hf_hub_download(repo_id=repo, filename=filename, revision=revision)
+        )
+
+    return torch.load(path, map_location="cpu", weights_only=False)
 
 
 class OptimizerStateFormat(Enum):
@@ -108,7 +161,7 @@ def get_normalizers(
 
 def load_from_optimizer(
     model: PreTrainedModel | PeftModel,
-    optimizer_state_path: str,
+    optimizer_state: str,
     include_bias: bool = False,
     target_modules: set[str] | None = None,
 ) -> dict[str, Normalizer]:
@@ -124,8 +177,10 @@ def load_from_optimizer(
     Args:
         model: The model whose parameter names are used to map optimizer
             state indices to layer names.
-        optimizer_state_path: Path to either a checkpoint directory containing
-            ``optimizer.pt`` or directly to an optimizer state file.
+        optimizer_state: Local path to an optimizer state file or a
+            checkpoint directory containing ``optimizer.pt``, or a Hugging
+            Face Hub reference ``org/name[@revision][:subpath]``
+            (see :func:`load_optimizer`).
         include_bias: Whether to include bias second moments.
         target_modules: Optional set of module names to include. If ``None``,
             all linear layers are included.
@@ -133,11 +188,7 @@ def load_from_optimizer(
     Returns:
         Dictionary mapping layer names to normalizer instances.
     """
-    optimizer_path = Path(optimizer_state_path)
-    if optimizer_path.is_dir():
-        optimizer_path = optimizer_path / "optimizer.pt"
-
-    optimizer_state = torch.load(optimizer_path, map_location="cpu", weights_only=False)
+    optimizer_state_dict = load_optimizer(optimizer_state)
 
     # The optimizer state is keyed by position in the trainable parameter list.
     # For PEFT checkpoints, only include PEFT params.
@@ -162,7 +213,7 @@ def load_from_optimizer(
     device = next(model.parameters()).device
 
     normalizers = get_normalizers(
-        optimizer_state,
+        optimizer_state_dict,
         target_param_index_to_name,
         target_modules,
         adapter_suffix,
@@ -170,14 +221,14 @@ def load_from_optimizer(
         device,
     )
     assert normalizers, (
-        f"No optimizer second moments found in '{optimizer_state_path}'. "
+        f"No optimizer second moments found in '{optimizer_state}'. "
         "Ensure the checkpoint was saved from an Adam-family or Adafactor optimizer."
     )
 
     types = {type(n).__name__ for n in normalizers.values()}
     print(
         f"Loaded {len(normalizers)} normalizers ({', '.join(types)}) "
-        f"from '{optimizer_state_path}'"
+        f"from '{optimizer_state}'"
     )
     return normalizers
 

@@ -315,7 +315,7 @@ def build_subset_indices(
     data_path: Path,
     format_template: str = "",
     conversation_column: str = "",
-    optimizer_state_path: str = "",
+    optimizer_state: str = "",
     nproc_per_node: int = 0,
 ) -> None:
     """Build a gradient index per subset found under *data_path*.
@@ -364,8 +364,8 @@ def build_subset_indices(
             cfg.precision,
             "--overwrite",
         ]
-        if optimizer_state_path:
-            cmd += ["--optimizer_state_path", optimizer_state_path]
+        if optimizer_state:
+            cmd += ["--optimizer_state", optimizer_state]
         if format_template:
             cmd += ["--format_template", format_template]
         if conversation_column:
@@ -836,7 +836,7 @@ def main(
                 str(ckpt_dir),
                 train_data_path,
                 conversation_column="messages",
-                optimizer_state_path=str(ckpt_dir),
+                optimizer_state=str(ckpt_dir),
                 nproc_per_node=world_size,
             )
 

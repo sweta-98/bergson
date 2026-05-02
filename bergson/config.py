@@ -360,10 +360,11 @@ class IndexConfig(AttributionConfig, Serializable):
     processor_path: str = ""
     """Path to a precomputed processor."""
 
-    optimizer_state_path: str = ""
-    """Path to a training checkpoint directory containing an optimizer.pt
-    or directly to an optimizer state file. Loads exp_avg_sq second
-    moments to normalize gradients."""
+    optimizer_state: str = ""
+    """Source for optimizer second moments used to normalize gradients.
+    Either a local path (a checkpoint directory containing ``optimizer.pt``,
+    or a path to an optimizer state file directly) or a Hugging Face Hub
+    reference ``org/name[@revision][:subpath]``."""
 
     skip_hessians: bool = False
     """Whether to skip estimating hessian statistics"""

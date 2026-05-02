@@ -138,6 +138,71 @@ def test_missing_optimizer_file(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# load_optimizer (local + Hub) tests
+# ---------------------------------------------------------------------------
+
+
+def test_load_optimizer_local_file(tmp_path):
+    from bergson.utils.load_from_optimizer import load_optimizer
+
+    model = _create_model()
+    state = _create_fake_optimizer_state(model)
+    opt_path = tmp_path / "optimizer.pt"
+    torch.save(state, opt_path)
+
+    loaded = load_optimizer(str(opt_path))
+    assert "state" in loaded and "param_groups" in loaded
+
+
+def test_load_optimizer_local_dir(tmp_path):
+    from bergson.utils.load_from_optimizer import load_optimizer
+
+    model = _create_model()
+    state = _create_fake_optimizer_state(model)
+    torch.save(state, tmp_path / "optimizer.pt")
+
+    loaded = load_optimizer(str(tmp_path))
+    assert "state" in loaded
+
+
+def test_load_optimizer_hub_dispatch(tmp_path, monkeypatch):
+    """Hub-shaped specs should dispatch to hf_hub_download with parsed args."""
+    from bergson.utils import load_from_optimizer as mod
+
+    model = _create_model()
+    state = _create_fake_optimizer_state(model)
+    cached = tmp_path / "optimizer.pt"
+    torch.save(state, cached)
+
+    calls = []
+
+    def fake_download(repo_id, filename, revision=None, **_):
+        calls.append((repo_id, filename, revision))
+        return str(cached)
+
+    monkeypatch.setattr(mod, "hf_hub_download", fake_download)
+
+    cases = [
+        ("org/repo", ("org/repo", "optimizer.pt", None)),
+        ("org/repo@rev", ("org/repo", "optimizer.pt", "rev")),
+        ("org/repo:checkpoint-1", ("org/repo", "checkpoint-1/optimizer.pt", None)),
+        ("org/repo:custom.pt", ("org/repo", "custom.pt", None)),
+        ("org/repo@v2:sub/dir/optimizer.pth", ("org/repo", "sub/dir/optimizer.pth", "v2")),
+    ]
+    for spec, expected in cases:
+        calls.clear()
+        mod.load_optimizer(spec)
+        assert calls == [expected], f"{spec} -> {calls}"
+
+
+def test_load_optimizer_invalid_spec():
+    from bergson.utils.load_from_optimizer import load_optimizer
+
+    with pytest.raises(FileNotFoundError):
+        load_optimizer("a/b/c/d")
+
+
+# ---------------------------------------------------------------------------
 # get_optimizer_state_format / get_unfactored_second_moment unit tests
 # ---------------------------------------------------------------------------
 
