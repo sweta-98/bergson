@@ -17,6 +17,72 @@ from bergson.utils.utils import get_device, get_device_index
 _SHARD_KINDS = ("activation_sharded", "gradient_sharded")
 
 
+def sum_sharded_dirs(
+    input_dirs: list[Path],
+    output_dir: Path,
+    distributed: DistributedConfig,
+) -> None:
+    """Sum per-rank shards across ``input_dirs`` into ``output_dir``."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    launch_distributed_run(
+        "sum_sharded_dirs",
+        _sum_sharded_dirs_worker,
+        [input_dirs, output_dir],
+        distributed,
+    )
+
+
+def _sum_sharded_dirs_worker(
+    rank: int,
+    local_rank: int,
+    world_size: int,
+    input_dirs: list[Path],
+    output_dir: Path,
+) -> None:
+    _init_dist(rank, local_rank, world_size)
+    device = get_device(local_rank)
+    shard_name = f"shard_{rank}.safetensors"
+    in_paths = [d / shard_name for d in input_dirs]
+    _sum_my_shard(in_paths, output_dir / shard_name, device=device)
+    if world_size > 1:
+        dist.barrier()
+
+
+def _init_dist(rank: int, local_rank: int, world_size: int) -> None:
+    """Common dist init for workers in this module."""
+    if torch.cuda.is_available():
+        torch.cuda.set_device(get_device_index(local_rank))
+    if world_size > 1:
+        addr = os.environ.get("MASTER_ADDR", "localhost")
+        port = os.environ.get("MASTER_PORT", "29500")
+        dist.init_process_group(
+            "nccl",
+            init_method=f"tcp://{addr}:{port}",
+            device_id=torch.device(get_device(local_rank)),
+            rank=rank,
+            timeout=timedelta(hours=1),
+            world_size=world_size,
+        )
+
+
+def _sum_my_shard(
+    in_paths: list[Path],
+    out_path: Path,
+    device: str,
+) -> None:
+    """Per-rank stream-sum: load each input shard, add into accumulator, save."""
+    acc: dict[str, torch.Tensor] = {}
+    for c, p in enumerate(in_paths):
+        with safe_open(p, framework="pt", device=device) as f:
+            for k in f.keys():
+                t = f.get_tensor(k)
+                if c == 0:
+                    acc[k] = t.clone()
+                else:
+                    acc[k].add_(t)
+    save_file({k: v.cpu() for k, v in acc.items()}, out_path)
+
+
 def aggregate_segment_covariances(
     run_path: str | Path,
     method: str,
@@ -40,12 +106,6 @@ def aggregate_segment_covariances(
     logger = get_logger("aggregate_segment_covariances")
     base_run = Path(run_path)
 
-    # Resolve skip-or-clean in the main process before spawning workers, so
-    # all workers see a consistent on-disk state when they start. Resume is
-    # split into two sub-stages because the worker writes covariances first
-    # and eigvecs second; a crash between them must not leave the segment
-    # half-done. The worker re-checks ``total_processed.pt`` to decide
-    # whether to skip the cov-sum step.
     segments_to_process: list[int] = []
     for seg in range(n_segments):
         seg_dir = base_run / f"segment_{seg}"
@@ -76,13 +136,13 @@ def aggregate_segment_covariances(
 
     launch_distributed_run(
         "aggregate_segment_covariances",
-        _aggregate_worker,
+        _aggregate_cov_worker,
         [base_run, method, per_segment, segments_to_process],
         distributed,
     )
 
 
-def _aggregate_worker(
+def _aggregate_cov_worker(
     rank: int,
     local_rank: int,
     world_size: int,
@@ -91,22 +151,8 @@ def _aggregate_worker(
     per_segment: int,
     segments_to_process: list[int],
 ) -> None:
-    """Per-rank worker. Each rank only touches ``shard_{rank}.safetensors``."""
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
-
+    """Sum cov shards + total_processed, then eigendecompose, in one launch."""
+    _init_dist(rank, local_rank, world_size)
     logger = get_logger("aggregate_segment_covariances")
     device = get_device(local_rank)
     shard_name = f"shard_{rank}.safetensors"
@@ -116,29 +162,14 @@ def _aggregate_worker(
         out_dir = seg_dir / method
         ckpt_method_dirs = [seg_dir / f"ckpt_{i}" / method for i in range(per_segment)]
 
-        # Cov-sum sub-stage: skip if a previous (resumed) run already wrote
-        # the segment-averaged covariances. ``total_processed.pt`` is the
-        # last file written in the cov-sum stage, so its presence is a
-        # safe sentinel.
         cov_done = (out_dir / "total_processed.pt").exists()
-        if cov_done:
-            logger.info(
-                f"[seg {seg} rank {rank}] cov-sum already done, skipping to eigendecomp"
-            )
-        else:
-            logger.info(
-                f"[seg {seg} rank {rank}] summing {per_segment} checkpoints "
-                f"into {out_dir} on {device}"
-            )
-
+        if not cov_done:
+            logger.info(f"[seg {seg} rank {rank}] summing covariances → {out_dir}")
             for kind in _SHARD_KINDS:
                 (out_dir / kind).mkdir(parents=True, exist_ok=True)
-                # Each rank reads only its own shard from each checkpoint.
                 in_paths = [d / kind / shard_name for d in ckpt_method_dirs]
-                out_path = out_dir / kind / shard_name
-                _sum_my_shard(in_paths, out_path, device=device)
+                _sum_my_shard(in_paths, out_dir / kind / shard_name, device=device)
 
-            # total_processed.pt is a tiny scalar; only one rank writes it.
             if rank == 0:
                 total = None
                 for d in ckpt_method_dirs:
@@ -150,14 +181,10 @@ def _aggregate_worker(
                     total = t if total is None else total + t
                 torch.save(total, out_dir / "total_processed.pt")
 
-            # All ranks must finish writing covariances + total_processed
-            # before eigendecomposition reads them back.
             if world_size > 1:
                 dist.barrier()
 
-        # Eigendecompose the segment-averaged covariances in place.
-        # compute_eigendecomposition is itself rank-aware and distributes
-        # keys across ranks via fair_distribute_by_cost.
+        logger.info(f"[seg {seg} rank {rank}] eigendecomposing → {out_dir}")
         total_processed = torch.load(
             out_dir / "total_processed.pt",
             map_location="cpu",
@@ -173,23 +200,39 @@ def _aggregate_worker(
         dist.barrier()
 
 
-def _sum_my_shard(
-    in_paths: list[Path],
-    out_path: Path,
-    device: str,
+def aggregate_segment_lambdas(
+    run_path: str | Path,
+    method: str,
+    n_segments: int,
+    per_segment: int,
+    distributed: DistributedConfig,
+    *,
+    resume: bool = False,
+    input_subdir: str = "averaged_ev_correct_sharded",
+    output_subdir: str = "eigenvalue_correction_sharded",
 ) -> None:
-    """Sharded version of in place a.add_(b) for a list of tensors.
-    Each rank only sums its own shard across the checkpoints and writes one
-    output shard.
-    """
-    acc: dict[str, torch.Tensor] = {}
-    for c, p in enumerate(in_paths):
-        with safe_open(p, framework="pt", device=device) as f:
-            for k in f.keys():
-                t = f.get_tensor(k)
-                if c == 0:
-                    acc[k] = t.clone()
-                else:
-                    acc[k].add_(t)
-    # safetensors save_file writes from CPU.
-    save_file({k: v.cpu() for k, v in acc.items()}, out_path)
+    """Sum per-checkpoint lambdas into per-segment lambda."""
+    logger = get_logger("aggregate_segment_lambdas")
+    base_run = Path(run_path)
+
+    for seg in range(n_segments):
+        seg_dir = base_run / f"segment_{seg}"
+        out_dir = seg_dir / method / output_subdir
+
+        if out_dir.exists():
+            if resume:
+                logger.info(f"[seg {seg}] skip — exists at {out_dir}")
+                continue
+            shutil.rmtree(out_dir)
+
+        input_dirs = [
+            seg_dir / f"ckpt_{i}" / method / input_subdir for i in range(per_segment)
+        ]
+        for d in input_dirs:
+            if not d.exists():
+                raise FileNotFoundError(
+                    f"Missing per-ckpt lambda dir {d}; did step 3 finish?"
+                )
+
+        logger.info(f"[seg {seg}] summing lambdas → {out_dir}")
+        sum_sharded_dirs(input_dirs, out_dir, distributed)

@@ -42,15 +42,24 @@ will be filled in incrementally:
 """
 
 import gc
+import shutil
+from copy import deepcopy
+from pathlib import Path
 
+from ..build import build
 from ..config import (
     ApproxUnrollingConfig,
     HessianConfig,
     IndexConfig,
+    PreprocessConfig,
 )
 from ..utils.logger import get_logger
 from .checkpoint_hessians import precompute_checkpoint_hessians
-from .segment_aggregation import aggregate_segment_covariances
+from .checkpoint_lambdas import precompute_checkpoint_averaged_lambdas
+from .segment_aggregation import (
+    aggregate_segment_covariances,
+    aggregate_segment_lambdas,
+)
 
 # Total number of steps in the full SOURCE pipeline. Used only for the
 # user-facing "Step k/N_TOTAL_STEPS:" prefix. Bump as steps land.
@@ -124,7 +133,7 @@ def approx_unrolling_pipeline(
     # where the worker ran in-process and may still hold model references.
     gc.collect()
 
-    # ── Step 2: Per-segment covariance aggregation ────────────────────────
+    # ── Step 2: Per-segment covariance aggregation + eigendecomposition ───
     logger.info(
         f"Step 2/{_N_TOTAL_STEPS}: "
         f"Aggregating per-checkpoint covariances into segment averages..."
@@ -138,12 +147,60 @@ def approx_unrolling_pipeline(
         resume=resume,
     )
 
-    # ── Steps 3–6: TBD ────────────────────────────────────────────────────
-    # 3. Eigendecomposition of segment-averaged covariances (+ optional lambda).
-    # 4. Per-checkpoint train-gradient build, then per-segment average.
-    # 5. Build query gradient at the final checkpoint.
+    # ── Step 3: Per-checkpoint lambda in segment eigenbasis ───────────────
+    if hessian_cfg.ev_correction:
+        logger.info(
+            f"Step 3/{_N_TOTAL_STEPS}: "
+            f"Per-checkpoint lambda using segment eigvecs..."
+        )
+        precompute_checkpoint_averaged_lambdas(
+            index_cfg,
+            hessian_cfg,
+            approx_unrolling_cfg,
+            resume=resume,
+        )
+    else:
+        logger.info(f"Step 3/{_N_TOTAL_STEPS}: skipped (ev_correction=False).")
+
+    # ── Step 4: Per-segment lambda aggregation ────────────────────────────
+    if hessian_cfg.ev_correction:
+        logger.info(
+            f"Step 4/{_N_TOTAL_STEPS}: "
+            f"Aggregating per-checkpoint lambdas into segment lambdas..."
+        )
+        aggregate_segment_lambdas(
+            run_path=index_cfg.run_path,
+            method=hessian_cfg.method,
+            n_segments=n_segments,
+            per_segment=n_ckpts // n_segments,
+            distributed=index_cfg.distributed,
+            resume=resume,
+        )
+    else:
+        logger.info(f"Step 4/{_N_TOTAL_STEPS}: skipped (ev_correction=False).")
+
+    # ── Step 5: Mean query gradient at the final checkpoint ───────────────
+    logger.info(
+        f"Step 5/{_N_TOTAL_STEPS}: "
+        f"Building mean query gradient at the final checkpoint..."
+    )
+    query_path = Path(index_cfg.run_path) / "query"
+    if resume and query_path.exists():
+        logger.info(f"  skip — exists at {query_path}")
+    else:
+        if query_path.exists():
+            shutil.rmtree(query_path)
+        query_cfg = deepcopy(index_cfg)
+        query_cfg.model = str(approx_unrolling_cfg.checkpoints[-1])
+        query_cfg.data = approx_unrolling_cfg.query
+        query_cfg.run_path = str(query_path)
+        query_cfg.projection_dim = 0
+        query_cfg.skip_hessians = True
+        build(query_cfg, PreprocessConfig(aggregation="mean"))
+
+    # ── Step 6: TBD ───────────────────────────────────────────────────────
     # 6. Walk query through segments via F_S / F_r → ψ_ℓ; per-segment score.
     logger.info(
-        f"[SOURCE pipeline] steps 1-2 complete. "
-        f"Steps 3-{_N_TOTAL_STEPS} not yet implemented."
+        f"[SOURCE pipeline] steps 1-5 complete. "
+        f"Step {_N_TOTAL_STEPS} not yet implemented."
     )

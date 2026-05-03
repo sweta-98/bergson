@@ -549,6 +549,9 @@ class ApproxUnrollingConfig(Serializable):
     lr: float = 1e-5
     """Learning rate to use for the approximate unrolling optimization."""
 
+    query: DataConfig = field(default_factory=DataConfig)
+    """Query dataset spec; mean gradient at the final checkpoint."""
+
 
 @dataclass
 class HessianConfig(Serializable):
