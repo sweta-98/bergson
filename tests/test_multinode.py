@@ -98,8 +98,7 @@ def test_multinode_build_two_nodes_one_gpu_each(tmp_path: Path):
 
     for i, proc in enumerate(procs):
         assert proc.returncode == 0, (
-            f"Node {1 - i if i == 0 else 0} exited {proc.returncode}:\n"
-            f"{outputs[i]}"
+            f"Node {1 - i if i == 0 else 0} exited {proc.returncode}:\n" f"{outputs[i]}"
         )
 
     assert run_path.exists(), (
