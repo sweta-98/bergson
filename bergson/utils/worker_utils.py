@@ -35,7 +35,7 @@ from bergson.data import (
 from bergson.format import apply_format
 from bergson.gradients import GradientProcessor, Normalizer
 from bergson.utils import assert_type, get_layer_list, weighted_causal_lm_ce
-from bergson.utils.utils import simple_parse_kwargs_string
+from bergson.utils.utils import get_device, simple_parse_kwargs_string
 
 BIG_NUM = np.iinfo(np.int64).max
 
@@ -65,7 +65,6 @@ def create_processor(
     """Handle processor creation and normalizer loading."""
     local_rank = cfg.distributed.local_rank
     rank = cfg.distributed.rank
-    device_idx = 0 if torch.cuda.device_count() == 1 else local_rank
 
     processor_path = Path(cfg.processor_path)
     if (processor_path / "processor_config.yaml").exists():
@@ -74,7 +73,7 @@ def create_processor(
 
         processor = GradientProcessor.load(
             processor_path,
-            map_location=f"cuda:{device_idx}",
+            map_location=get_device(local_rank),
             skip_hessians=cfg.skip_hessians,
         )
     else:
@@ -166,8 +165,7 @@ def setup_model_and_peft(
     elif cfg.fsdp or not torch.cuda.is_available():
         device_map = "cpu"
     else:
-        device_idx = 0 if torch.cuda.device_count() == 1 else local_rank
-        device_map = {"": f"cuda:{device_idx}"}
+        device_map = {"": get_device(local_rank)}
 
     quantization_config = None
     if cfg.precision in ("int4", "int8"):

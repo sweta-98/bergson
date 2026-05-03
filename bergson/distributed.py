@@ -70,37 +70,35 @@ def launch_distributed_run(
     world_size = dist_config.world_size
     start_rank = dist_config.start_rank
 
-    # Multi-node environment
-    if dist_config.nnode > 1:
-        master_addr = os.environ.get("MASTER_ADDR", "localhost")
-        master_port = os.environ.get("MASTER_PORT", "29500")
-    else:
-        master_addr = "localhost"
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            _, master_port = s.getsockname()
-        master_port = str(master_port)
-
     if world_size <= 1:
         worker(0, 0, 1, *const_worker_args)
     else:
         mp.set_sharing_strategy("file_system")
 
         # Pin CUDA_VISIBLE_DEVICES per child so each only sees its assigned
-        # GPU (kills the lazy-init phantom contexts on cuda:0). If the
-        # parent already had a CUDA_VISIBLE_DEVICES slice (multi-node setups, slurm GPU
-        # binding, two bergson jobs on one host), index into that slice
-        # instead of overwriting it with bare physical indices.
+        # GPU. If the parent already had a CUDA_VISIBLE_DEVICES slice, index 
+        # into that slice instead of overwriting it.
         parent_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
-        visible = (
+        parent_cvd = (
             [d.strip() for d in parent_cuda_visible_devices.split(",") if d.strip()]
             if parent_cuda_visible_devices
             else [str(j) for j in range(local_world_size)]
         )
-        assert len(visible) >= local_world_size, (
-            f"CUDA_VISIBLE_DEVICES has {len(visible)} entries "
+        assert len(parent_cvd) >= local_world_size, (
+            f"CUDA_VISIBLE_DEVICES has {len(parent_cvd)} entries "
             f"({parent_cuda_visible_devices!r}) but nproc_per_node={local_world_size}"
         )
+
+        # Multi-node environment
+        if dist_config.nnode > 1:
+            master_addr = os.environ.get("MASTER_ADDR", "localhost")
+            master_port = os.environ.get("MASTER_PORT", "29500")
+        else:
+            master_addr = "localhost"
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("", 0))
+                _, master_port = s.getsockname()
+            master_port = str(master_port)
 
         ctx = None
         try:
@@ -118,7 +116,7 @@ def launch_distributed_run(
                         "WORLD_SIZE": str(world_size),
                         "MASTER_ADDR": master_addr,
                         "MASTER_PORT": master_port,
-                        "CUDA_VISIBLE_DEVICES": visible[i],
+                        "CUDA_VISIBLE_DEVICES": parent_cvd[i],
                     }
                     for i in range(local_world_size)
                 },
