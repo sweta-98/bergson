@@ -76,7 +76,7 @@ def launch_distributed_run(
         mp.set_sharing_strategy("file_system")
 
         # Pin CUDA_VISIBLE_DEVICES per child so each only sees its assigned
-        # GPU. If the parent already had a CUDA_VISIBLE_DEVICES slice, index 
+        # GPU. If the parent already had a CUDA_VISIBLE_DEVICES slice, index
         # into that slice instead of overwriting it.
         parent_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
         parent_cvd = (

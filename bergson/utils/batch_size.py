@@ -13,7 +13,6 @@ from transformers import PreTrainedModel
 from bergson.config import IndexConfig
 from bergson.gradients import GradientProcessor
 
-
 if TYPE_CHECKING:
     from bergson.collector.gradient_collectors import (
         HookCollectorBase,
