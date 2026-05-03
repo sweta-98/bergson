@@ -10,6 +10,7 @@ from safetensors.torch import save_file
 
 from bergson.config import DistributedConfig
 from bergson.distributed import launch_distributed_run
+from bergson.hessians.eigenvectors import compute_eigendecomposition
 from bergson.utils.logger import get_logger
 from bergson.utils.utils import get_device, get_device_index
 
@@ -25,32 +26,39 @@ def aggregate_segment_covariances(
     *,
     resume: bool = False,
 ) -> None:
-    """Sum per-checkpoint covariances + ``total_processed`` per segment.
+    """Sum per-checkpoint covariances per segment, then eigendecompose.
 
     Output layout::
 
         <run_path>/segment_{i}/<method>/
             activation_sharded/shard_*.safetensors
             gradient_sharded/shard_*.safetensors
+            eigen_activation_sharded/shard_*.safetensors
+            eigen_gradient_sharded/shard_*.safetensors
             total_processed.pt
-
-    Eigendecomposition is **not** done here — it's a separate step that
-    consumes the directories this function produces.
     """
     logger = get_logger("aggregate_segment_covariances")
     base_run = Path(run_path)
 
     # Resolve skip-or-clean in the main process before spawning workers, so
-    # all workers see a consistent on-disk state when they start.
+    # all workers see a consistent on-disk state when they start. Resume is
+    # split into two sub-stages because the worker writes covariances first
+    # and eigvecs second; a crash between them must not leave the segment
+    # half-done. The worker re-checks ``total_processed.pt`` to decide
+    # whether to skip the cov-sum step.
     segments_to_process: list[int] = []
     for seg in range(n_segments):
         seg_dir = base_run / f"segment_{seg}"
         out_dir = seg_dir / method
+        # TODO: cov_done only checks the total_processed.pt sentinel, not
+        # the actual shard subdirs.
+        cov_done = (out_dir / "total_processed.pt").exists()
+        eigen_done = all((out_dir / f"eigen_{kind}").exists() for kind in _SHARD_KINDS)
 
-        if out_dir.exists():
-            if resume:
-                logger.info(f"[seg {seg}] skip — exists at {out_dir}")
-                continue
+        if resume and cov_done and eigen_done:
+            logger.info(f"[seg {seg}] skip — cov + eigvecs both exist")
+            continue
+        if not resume and out_dir.exists():
             shutil.rmtree(out_dir)
 
         for i in range(per_segment):
@@ -108,29 +116,58 @@ def _aggregate_worker(
         out_dir = seg_dir / method
         ckpt_method_dirs = [seg_dir / f"ckpt_{i}" / method for i in range(per_segment)]
 
-        logger.info(
-            f"[seg {seg} rank {rank}] summing {per_segment} checkpoints "
-            f"into {out_dir} on {device}"
+        # Cov-sum sub-stage: skip if a previous (resumed) run already wrote
+        # the segment-averaged covariances. ``total_processed.pt`` is the
+        # last file written in the cov-sum stage, so its presence is a
+        # safe sentinel.
+        cov_done = (out_dir / "total_processed.pt").exists()
+        if cov_done:
+            logger.info(
+                f"[seg {seg} rank {rank}] cov-sum already done, skipping to eigendecomp"
+            )
+        else:
+            logger.info(
+                f"[seg {seg} rank {rank}] summing {per_segment} checkpoints "
+                f"into {out_dir} on {device}"
+            )
+
+            for kind in _SHARD_KINDS:
+                (out_dir / kind).mkdir(parents=True, exist_ok=True)
+                # Each rank reads only its own shard from each checkpoint.
+                in_paths = [d / kind / shard_name for d in ckpt_method_dirs]
+                out_path = out_dir / kind / shard_name
+                _sum_my_shard(in_paths, out_path, device=device)
+
+            # total_processed.pt is a tiny scalar; only one rank writes it.
+            if rank == 0:
+                total = None
+                for d in ckpt_method_dirs:
+                    t = torch.load(
+                        d / "total_processed.pt",
+                        map_location="cpu",
+                        weights_only=False,
+                    )
+                    total = t if total is None else total + t
+                torch.save(total, out_dir / "total_processed.pt")
+
+            # All ranks must finish writing covariances + total_processed
+            # before eigendecomposition reads them back.
+            if world_size > 1:
+                dist.barrier()
+
+        # Eigendecompose the segment-averaged covariances in place.
+        # compute_eigendecomposition is itself rank-aware and distributes
+        # keys across ranks via fair_distribute_by_cost.
+        total_processed = torch.load(
+            out_dir / "total_processed.pt",
+            map_location="cpu",
+            weights_only=False,
         )
-
         for kind in _SHARD_KINDS:
-            (out_dir / kind).mkdir(parents=True, exist_ok=True)
-            # Each rank reads only its own shard from each checkpoint.
-            in_paths = [d / kind / shard_name for d in ckpt_method_dirs]
-            out_path = out_dir / kind / shard_name
-            _sum_my_shard(in_paths, out_path, device=device)
-
-        # total_processed.pt is a tiny scalar; only one rank needs to write it.
-        if rank == 0:
-            total = None
-            for d in ckpt_method_dirs:
-                t = torch.load(
-                    d / "total_processed.pt",
-                    map_location="cpu",
-                    weights_only=False,
-                )
-                total = t if total is None else total + t
-            torch.save(total, out_dir / "total_processed.pt")
+            compute_eigendecomposition(
+                str(out_dir / kind),
+                total_processed=total_processed,
+            )
 
     if world_size > 1:
         dist.barrier()
