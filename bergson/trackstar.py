@@ -74,6 +74,10 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         query_precond_cfg.run_path = query_precond_path
         query_precond_cfg.data = trackstar_cfg.query
         query_precond_cfg.skip_index = True
+        query_precond_cfg.max_tokens = None
+        query_precond_cfg.distributed.nnode = 1
+        query_precond_cfg.distributed.node_rank = 0
+        query_precond_cfg.distributed.nproc_per_node = 1
         query_precond_cfg.skip_preconditioners = False
         if trackstar_cfg.num_stats_sample_preconditioner:
             _limit_split_for_precond(query_precond_cfg)
@@ -100,6 +104,10 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         query_cfg = deepcopy(index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = trackstar_cfg.query
+        query_cfg.max_tokens = None
+        query_cfg.distributed.nnode = 1
+        query_cfg.distributed.node_rank = 0
+        query_cfg.distributed.nproc_per_node = 1
         query_cfg.processor_path = query_precond_path
         query_cfg.skip_preconditioners = True
         _validate(query_cfg)

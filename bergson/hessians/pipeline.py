@@ -59,6 +59,12 @@ def hessian_pipeline(
         query_cfg = deepcopy(index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = hessian_pipeline_cfg.query
+        query_cfg.max_tokens = None
+        # Query datasets are often tiny (single prompt). Force a single worker
+        # for this step so batch allocation does not require per-rank documents.
+        query_cfg.distributed.nnode = 1
+        query_cfg.distributed.node_rank = 0
+        query_cfg.distributed.nproc_per_node = 1
         query_cfg.projection_dim = 0
         query_cfg.skip_preconditioners = True
         _validate(query_cfg)
