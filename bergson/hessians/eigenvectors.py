@@ -79,22 +79,29 @@ class LambdaCollector(HookCollectorBase):
     """
 
     path: str
+    eigen_path: str | None = None
+    """Override read location for eigvecs; defaults to ``self.path``."""
+
+    output_subdir: str = "eigenvalue_correction_sharded"
+    """Subdir under ``self.path`` to write lambda shards into."""
 
     def setup(self) -> None:
         """Load eigenvectors and initialize storage."""
         self.shard_computer = ShardedMul()
         self.device = get_device(self.rank)
 
+        eigen_src = self.eigen_path or self.path
+
         # Load precomputed eigenvectors
         self.eigen_a = load_file(
             os.path.join(
-                self.path, f"eigen_activation_sharded/shard_{self.rank}.safetensors"
+                eigen_src, f"eigen_activation_sharded/shard_{self.rank}.safetensors"
             ),
             device=self.device,
         )
         self.eigen_g = load_file(
             os.path.join(
-                self.path, f"eigen_gradient_sharded/shard_{self.rank}.safetensors"
+                eigen_src, f"eigen_gradient_sharded/shard_{self.rank}.safetensors"
             ),
             device=self.device,
         )
@@ -166,7 +173,7 @@ class LambdaCollector(HookCollectorBase):
 
     def teardown(self) -> None:
         """Save eigenvalue corrections to disk."""
-        output_path = os.path.join(self.path, "eigenvalue_correction_sharded")
+        output_path = os.path.join(self.path, self.output_subdir)
         os.makedirs(output_path, exist_ok=True)
 
         save_file(

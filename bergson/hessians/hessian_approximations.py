@@ -67,11 +67,6 @@ def approximate_hessians(
     str
         Path to the directory containing the computed Hessian approximations.
     """
-    if not do_eigendecomposition and hessian_cfg.ev_correction:
-        raise ValueError(
-            "do_eigendecomposition=False is incompatible with "
-            "hessian_cfg.ev_correction=True (lambda needs the eigenvectors)."
-        )
     if index_cfg.debug:
         setup_reproducibility()
     index_cfg.run_path = index_cfg.run_path + f"/{hessian_cfg.method}"
@@ -179,8 +174,6 @@ def hessian_worker(
     dist.barrier() if dist.is_initialized() else None
 
     if not do_eigendecomposition:
-        # SOURCE path: stop after raw covariance collection. Segment
-        # averaging owns eigendecomposition + (optional) lambda.
         return
 
     total_processed = torch.load(
@@ -214,6 +207,8 @@ def collect_hessians(
     attention_cfgs: dict[str, AttentionConfig] | None = None,
     hessian_cfg: HessianConfig,
     ev_correction: bool = False,
+    eigen_path: str | None = None,
+    output_subdir: str = "eigenvalue_correction_sharded",
 ):
     """
     Compute Hessian approximations using the hooks specified in the collector.
@@ -231,7 +226,11 @@ def collect_hessians(
     }
     desc = f"Approximating Hessians with {hessian_cfg.method}"
     if ev_correction:
-        collector = LambdaCollector(**collector_args)
+        collector = LambdaCollector(
+            **collector_args,
+            eigen_path=eigen_path,
+            output_subdir=output_subdir,
+        )
         desc += " (eigenvalue correction)"
     else:
         collector_args["dtype"] = hessian_dtype
