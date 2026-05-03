@@ -65,6 +65,7 @@ def create_processor(
     """Handle processor creation and normalizer loading."""
     local_rank = cfg.distributed.local_rank
     rank = cfg.distributed.rank
+    device_idx = 0 if torch.cuda.device_count() == 1 else local_rank
 
     processor_path = Path(cfg.processor_path)
     if (processor_path / "processor_config.yaml").exists():
@@ -73,7 +74,7 @@ def create_processor(
 
         processor = GradientProcessor.load(
             processor_path,
-            map_location=f"cuda:{local_rank}",
+            map_location=f"cuda:{device_idx}",
             skip_hessians=cfg.skip_hessians,
         )
     else:
@@ -165,7 +166,8 @@ def setup_model_and_peft(
     elif cfg.fsdp or not torch.cuda.is_available():
         device_map = "cpu"
     else:
-        device_map = {"": f"cuda:{local_rank}"}
+        device_idx = 0 if torch.cuda.device_count() == 1 else local_rank
+        device_map = {"": f"cuda:{device_idx}"}
 
     quantization_config = None
     if cfg.precision in ("int4", "int8"):

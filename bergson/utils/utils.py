@@ -222,6 +222,14 @@ def convert_precision_to_torch(
 def get_device(rank: int = 0) -> str:
     """Get device string for the given rank.
 
-    Returns "cpu" if CUDA is not available.
+    Returns "cpu" if CUDA is not available. Returns "cuda:0" when only
+    one GPU is visible to this process — workers launched by
+    ``launch_distributed_run`` get ``CUDA_VISIBLE_DEVICES`` pinned to
+    a single GPU per process, so the only valid index is 0 regardless
+    of the logical rank.
     """
-    return f"cuda:{rank}" if torch.cuda.is_available() else "cpu"
+    if not torch.cuda.is_available():
+        return "cpu"
+    if torch.cuda.device_count() == 1:
+        return "cuda:0"
+    return f"cuda:{rank}"

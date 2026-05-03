@@ -124,8 +124,11 @@ def hessian_worker(
     ds : Dataset | IterableDataset
         The entire dataset to be indexed. A subset is assigned to each worker.
     """
+    device_idx = (
+        0 if torch.cuda.is_available() and torch.cuda.device_count() == 1 else local_rank
+    )
     if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
+        torch.cuda.set_device(device_idx)
 
     # These should be set by the main process
     if world_size > 1:
@@ -135,7 +138,7 @@ def hessian_worker(
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{local_rank}"),
+            device_id=torch.device(f"cuda:{device_idx}"),
             rank=rank,
             timeout=timedelta(hours=1),
             world_size=world_size,

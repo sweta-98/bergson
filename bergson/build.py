@@ -12,6 +12,7 @@ from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
 from bergson.utils.auto_batch_size import maybe_auto_batch_size
+from bergson.utils.preflight import test_fwd_bwd
 from bergson.utils.utils import assert_type, setup_reproducibility
 from bergson.utils.worker_utils import (
     create_processor,
@@ -48,7 +49,10 @@ def build_worker(
     ds : Dataset | IterableDataset
         The entire dataset to be processed. A subset is assigned to each worker.
     """
-    torch.cuda.set_device(local_rank)
+    # launch_distributed_run pins CUDA_VISIBLE_DEVICES per child, so each
+    # worker only sees its assigned GPU as cuda:0.
+    device_idx = 0 if torch.cuda.device_count() == 1 else local_rank
+    torch.cuda.set_device(device_idx)
 
     # These should be set by the main process
     if world_size > 1:
@@ -58,7 +62,7 @@ def build_worker(
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{local_rank}"),
+            device_id=torch.device(f"cuda:{device_idx}"),
             rank=rank,
             timeout=timedelta(minutes=30),
             world_size=world_size,
@@ -68,6 +72,7 @@ def build_worker(
     processor = create_processor(model, index_cfg, target_modules)
 
     maybe_auto_batch_size(index_cfg, model, ds, processor, target_modules, rank)
+    test_fwd_bwd(model, index_cfg.token_batch_size)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules

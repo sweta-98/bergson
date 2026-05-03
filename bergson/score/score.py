@@ -31,6 +31,7 @@ from bergson.utils.utils import (
     convert_precision_to_torch,
     get_gradient_dtype,
 )
+from bergson.utils.preflight import test_fwd_bwd
 from bergson.utils.worker_utils import (
     create_processor,
     setup_data_pipeline,
@@ -246,7 +247,10 @@ def score_worker(
     ds : Dataset | IterableDataset
         The entire dataset to be indexed. A subset is assigned to each worker.
     """
-    torch.cuda.set_device(local_rank)
+    # launch_distributed_run pins CUDA_VISIBLE_DEVICES per child, so each
+    # worker only sees its assigned GPU as cuda:0.
+    device_idx = 0 if torch.cuda.device_count() == 1 else local_rank
+    torch.cuda.set_device(device_idx)
 
     # These should be set by the main process
     if world_size > 1:
@@ -256,7 +260,7 @@ def score_worker(
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{local_rank}"),
+            device_id=torch.device(f"cuda:{device_idx}"),
             rank=rank,
             timeout=timedelta(hours=1),
             world_size=world_size,
@@ -264,6 +268,7 @@ def score_worker(
 
     model, target_modules = setup_model_and_peft(index_cfg)
     processor = create_processor(model, index_cfg, target_modules)
+    test_fwd_bwd(model, index_cfg.token_batch_size)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -283,7 +288,7 @@ def score_worker(
         if score_cfg.precision != "auto"
         else get_gradient_dtype(model)
     )
-    score_device = torch.device(f"cuda:{rank}")
+    score_device = torch.device(f"cuda:{device_idx}")
 
     if isinstance(ds, Dataset):
         kwargs["batches"] = allocate_batches(

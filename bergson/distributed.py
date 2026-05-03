@@ -102,6 +102,11 @@ def launch_distributed_run(
                         "WORLD_SIZE": str(world_size),
                         "MASTER_ADDR": master_addr,
                         "MASTER_PORT": master_port,
+                        # Each child sees only its assigned GPU. Without this
+                        # every child lazy-inits CUDA on cuda:0 before
+                        # set_device runs, leaking ~780 MiB per non-zero rank
+                        # on GPU 0. Children should reference cuda:0 internally.
+                        "CUDA_VISIBLE_DEVICES": str(i),
                     }
                     for i in range(local_world_size)
                 },
@@ -156,6 +161,7 @@ def dist_main(dataset, worker: Worker):
                     "LOCAL_RANK": str(i),
                     "MASTER_ADDR": "localhost",
                     "MASTER_PORT": str(port),
+                    "CUDA_VISIBLE_DEVICES": str(i),
                 }
                 for i in range(world_size)
             },
