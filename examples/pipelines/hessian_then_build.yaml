@@ -2,6 +2,9 @@
 # _init_covariance_dict assumes nn.Linear weight ordering and crashes on
 # HuggingFace Conv1D modules. See issue #254 — swap back to gpt2 once fixed.
 
+# Run with:
+#   bergson pipeline examples/pipelines/hessian_then_build.yaml
+
 - hessian:
     hessian_cfg:
       method: kfac

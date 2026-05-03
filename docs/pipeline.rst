@@ -55,7 +55,7 @@ A directory at ``run_path`` containing:
 - ``data.hf/`` — a HuggingFace dataset with per-example metadata and losses.
 - ``index_config.json`` — configuration snapshot.
 - ``processor_config.json`` — gradient processor configuration.
-- ``normalizers.pth`` — fitted normalizer state dicts.
+- ``normalizers.pth`` — normalizer state dicts.
 - ``hessians.pth`` — fitted hessian matrices.
 - ``hessians_eigen.pth`` — eigendecompositions of hessians.
 
@@ -108,7 +108,7 @@ A directory at ``run_path`` containing:
 - ``data.hf/`` — a HuggingFace dataset (single row with query index).
 - ``index_config.json`` — configuration snapshot.
 - ``processor_config.json`` — gradient processor configuration.
-- ``normalizers.pth`` — fitted normalizer state dicts.
+- ``normalizers.pth`` —  normalizer state dicts.
 - ``hessians.pth`` — fitted hessian matrices.
 - ``hessians_eigen.pth`` — eigendecompositions of hessians.
 
@@ -218,7 +218,7 @@ A directory at ``run_path``. With ``--method autocorrelation``:
 
 - ``index_config.json`` — configuration snapshot.
 - ``processor_config.json`` — gradient processor configuration.
-- ``normalizers.pth`` — fitted normalizer state dicts.
+- ``normalizers.pth`` — normalizer state dicts.
 - ``hessians.pth`` — fitted per-module hessian matrices.
 - ``hessians_eigen.pth`` — eigendecompositions of hessians.
 
@@ -269,7 +269,7 @@ depending on whether unit normalization is enabled. The recommended pipeline is:
 
 .. code-block:: text
 
-   bergson hessian → fit normalizers/hessians
+   bergson hessian → fit hessians
    bergson reduce  → aggregate query gradients (with preconditioning)
    bergson score   → score training data (sometimes with preconditioning)
 

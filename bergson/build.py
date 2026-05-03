@@ -8,7 +8,7 @@ from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
-from bergson.config import IndexConfig, PreprocessConfig
+from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
 from bergson.utils.auto_batch_size import maybe_auto_batch_size
@@ -138,6 +138,10 @@ def build(
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
     preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
+    if not index_cfg.skip_hessians:
+        HessianConfig(method="autocorrelation").save_yaml(
+            index_cfg.partial_run_path / "hessian_config.yaml"
+        )
 
     ds, _ = setup_data_pipeline(index_cfg)
 

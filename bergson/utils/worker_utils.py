@@ -78,12 +78,12 @@ def create_processor(
         )
     else:
         normalizers: dict[str, Normalizer] = {}
-        if cfg.optimizer_state_path:
+        if cfg.optimizer_state:
             from bergson.utils.load_from_optimizer import load_from_optimizer
 
             normalizers = load_from_optimizer(
                 model,
-                cfg.optimizer_state_path,
+                cfg.optimizer_state,
                 include_bias=cfg.include_bias,
                 target_modules=target_modules,
             )
@@ -93,6 +93,7 @@ def create_processor(
             projection_dim=cfg.projection_dim or None,
             reshape_to_square=cfg.reshape_to_square,
             projection_type=cfg.projection_type,
+            projection_target=cfg.projection_target,
             include_bias=cfg.include_bias,
         )
         if rank == 0:

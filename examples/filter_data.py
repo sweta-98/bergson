@@ -256,10 +256,6 @@ def run_trackstar(
         trackstar_path,
         "--model",
         model,
-        "--normalizer",
-        "adafactor",
-        "--stats_sample_size",
-        "10000",
         # Value dataset (the training data to score)
         "--data.dataset",
         args.dataset,

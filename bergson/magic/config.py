@@ -1,24 +1,14 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
-from ..config import AttributionConfig, DataConfig, TrainingConfig
+from ..config import ValidationConfig
 
-MagicQueryMethod = Literal["mean", "sum"]
 MagicSaveMode = Literal["all", "sqrt", "log"]
 
 
 @dataclass
-class MagicConfig(AttributionConfig, TrainingConfig):
+class MagicConfig(ValidationConfig):
     """Special config for MAGIC attribution."""
-
-    query: DataConfig = field(
-        default_factory=lambda: DataConfig(split="train"),
-    )
-    """Query/eval dataset for computing attribution target gradients.
-    If not specified, defaults to the training dataset."""
-
-    query_method: MagicQueryMethod = "mean"
-    """Method for reducing query gradients across batches."""
 
     save_mode: MagicSaveMode = "sqrt"
     """Checkpoint saving mode.
@@ -33,21 +23,6 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     The original MAGIC paper used 'log', but 'sqrt' is often a better choice when disk
     space is not a concern.
     """
-
-    subset_strategy: Literal["random", "sorted"] = "sorted"
-    """Strategy for selecting leave-k-out subsets for validation."""
-
-    num_subsets: int = 100
-    """Number of leave-k-out subsets for Spearman correlation."""
-
-    seed: int = 42
-    """Random seed for subset permutation."""
-
-    wandb_project: str = ""
-    """Weights & Biases project name. If set, logs training loss to W&B."""
-
-    resume: bool = False
-    """Resume a previously interrupted run from the last checkpoint."""
 
     backward_save_every: int = 0
     """How often (in steps) to save backward state for resume."""

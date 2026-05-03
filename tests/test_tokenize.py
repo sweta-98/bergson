@@ -113,3 +113,100 @@ def test_fully_truncated_span_skipped(tokenizer):
     labels = result["labels"][0]
     assert len(labels) == max_length
     # Should not raise, and should still have some labels from the first turn
+
+
+def test_assistant_content_repeated_in_later_turn(tokenizer):
+    earlier = "bin boot dev etc home lib"
+    later = "~ % " + earlier
+    batch = _make_batch(
+        [
+            [
+                {"role": "user", "content": "`ls`"},
+                {"role": "assistant", "content": earlier},
+                {"role": "user", "content": "`mkdir x`\n`ls`"},
+                {"role": "assistant", "content": later},
+            ]
+        ]
+    )
+    cfg = DataConfig(conversation_column="conversation")
+    result = tokenize(batch, args=cfg, tokenizer=tokenizer)
+
+    labels = result["labels"][0]
+    tokens = result["input_ids"][0]
+    rendered = tokenizer.decode(tokens)
+
+    earlier_start = rendered.find(earlier)
+    later_start = rendered.find(later)
+    assert earlier_start >= 0 and later_start > earlier_start
+
+    earlier_token = next(
+        i for i, t in enumerate(tokens) if labels[i] == t and labels[i] != -100
+    )
+    last_active = max(i for i, l in enumerate(labels) if l != -100)
+    assert last_active > earlier_token + len(tokenizer.encode(earlier))
+
+
+@pytest.mark.xfail(
+    reason="rfind-based span lookup can't distinguish a user echo of an "
+    "earlier assistant turn from the assistant turn itself when both "
+    "occurrences sit before the next assistant turn."
+)
+def test_user_quotes_previous_assistant(tokenizer):
+    ans1 = "alpha bravo charlie delta echo"
+    ans2 = "Yes, confirmed."
+    convo = [
+        {"role": "user", "content": "Pick five NATO words."},
+        {"role": "assistant", "content": ans1},
+        {"role": "user", "content": f"Earlier you said '{ans1}'. Right?"},
+        {"role": "assistant", "content": ans2},
+    ]
+    cfg = DataConfig(conversation_column="conversation")
+    result = tokenize(_make_batch([convo]), args=cfg, tokenizer=tokenizer)
+    labels = result["labels"][0]
+
+    rendered = tokenizer.apply_chat_template(convo, tokenize=False)
+    encodings = tokenizer(rendered, add_special_tokens=False)
+
+    asst1_char = rendered.find(ans1)
+    user_quote_char = rendered.find(ans1, asst1_char + 1)
+    ans2_char = rendered.find(ans2)
+    assert (
+        asst1_char >= 0 and user_quote_char > asst1_char and ans2_char > user_quote_char
+    )
+
+    asst1_token = encodings.char_to_token(asst1_char)
+    user_quote_token = encodings.char_to_token(user_quote_char)
+    ans2_token = encodings.char_to_token(ans2_char)
+
+    assert labels[asst1_token] != -100
+    assert labels[user_quote_token] == -100
+    assert labels[ans2_token] != -100
+
+
+def test_identical_assistant_turns(tokenizer):
+    repeated = "alpha bravo charlie delta echo"
+    convo = [
+        {"role": "user", "content": "Say it."},
+        {"role": "assistant", "content": repeated},
+        {"role": "user", "content": "Say it again."},
+        {"role": "assistant", "content": repeated},
+    ]
+    cfg = DataConfig(conversation_column="conversation")
+    result = tokenize(_make_batch([convo]), args=cfg, tokenizer=tokenizer)
+    labels = result["labels"][0]
+
+    rendered = tokenizer.apply_chat_template(convo, tokenize=False)
+    encodings = tokenizer(rendered, add_special_tokens=False)
+
+    first_char = rendered.find(repeated)
+    second_char = rendered.find(repeated, first_char + 1)
+    assert first_char >= 0 and second_char > first_char
+
+    first_token = encodings.char_to_token(first_char)
+    second_token = encodings.char_to_token(second_char)
+
+    assert labels[first_token] != -100
+    assert labels[second_token] != -100
+
+    gap = [i for i in range(first_token, second_token) if labels[i] == -100]
+    assert gap, "Expected -100 region between the two identical assistant turns"

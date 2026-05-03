@@ -4,7 +4,7 @@ import pytest
 import torch
 import torch.nn as nn
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model, get_peft_model_state_dict
+from peft import LoraConfig, PeftModel, get_peft_model, get_peft_model_state_dict
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
@@ -138,6 +138,81 @@ def test_missing_optimizer_file(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# load_optimizer (local + Hub) tests
+# ---------------------------------------------------------------------------
+
+
+def test_load_optimizer_local_file(tmp_path):
+    from bergson.utils.load_from_optimizer import load_optimizer
+
+    model = _create_model()
+    state = _create_fake_optimizer_state(model)
+    opt_path = tmp_path / "optimizer.pt"
+    torch.save(state, opt_path)
+
+    loaded = load_optimizer(str(opt_path))
+    assert "state" in loaded and "param_groups" in loaded
+
+
+def test_load_optimizer_local_dir(tmp_path):
+    from bergson.utils.load_from_optimizer import load_optimizer
+
+    model = _create_model()
+    state = _create_fake_optimizer_state(model)
+    torch.save(state, tmp_path / "optimizer.pt")
+
+    loaded = load_optimizer(str(tmp_path))
+    assert "state" in loaded
+
+
+def test_load_optimizer_hub_dispatch(tmp_path, monkeypatch):
+    """hf:// URIs should dispatch to hf_hub_download with parsed args."""
+    from bergson.utils import load_from_optimizer as mod
+
+    model = _create_model()
+    state = _create_fake_optimizer_state(model)
+    cached = tmp_path / "optimizer.pt"
+    torch.save(state, cached)
+
+    calls = []
+
+    def fake_download(repo_id, filename, revision=None, repo_type=None, **_):
+        calls.append((repo_id, filename, revision, repo_type))
+        return str(cached)
+
+    monkeypatch.setattr(mod, "hf_hub_download", fake_download)
+
+    cases = [
+        ("hf://org/repo", ("org/repo", "optimizer.pt", None, "model")),
+        ("hf://org/repo@rev", ("org/repo", "optimizer.pt", "rev", "model")),
+        (
+            "hf://org/repo/checkpoint-1",
+            ("org/repo", "checkpoint-1/optimizer.pt", None, "model"),
+        ),
+        ("hf://org/repo/custom.pt", ("org/repo", "custom.pt", None, "model")),
+        (
+            "hf://org/repo@v2/sub/dir/optimizer.pth",
+            ("org/repo", "sub/dir/optimizer.pth", "v2", "model"),
+        ),
+        (
+            "hf://datasets/org/repo/optimizer.pt",
+            ("org/repo", "optimizer.pt", None, "dataset"),
+        ),
+    ]
+    for spec, expected in cases:
+        calls.clear()
+        mod.load_optimizer(spec)
+        assert calls == [expected], f"{spec} -> {calls}"
+
+
+def test_load_optimizer_invalid_spec():
+    from bergson.utils.load_from_optimizer import load_optimizer
+
+    with pytest.raises(FileNotFoundError):
+        load_optimizer("not/a/local/path")
+
+
+# ---------------------------------------------------------------------------
 # get_optimizer_state_format / get_unfactored_second_moment unit tests
 # ---------------------------------------------------------------------------
 
@@ -256,7 +331,7 @@ def test_include_bias_loads_bias_normalizer(tmp_path):
     opt_path = tmp_path / "optimizer.pt"
     torch.save(opt_state, opt_path)
 
-    normalizers = load_from_optimizer(model, str(opt_path), include_bias=True)
+    normalizers = load_from_optimizer(model, str(opt_path), include_bias=True)  # type: ignore[arg-type]
     assert len(normalizers) == 1
     norm = next(iter(normalizers.values()))
     assert isinstance(norm, AdamNormalizer)
@@ -279,9 +354,10 @@ def test_include_bias_false_leaves_bias_unset(tmp_path):
     opt_path = tmp_path / "optimizer.pt"
     torch.save(opt_state, opt_path)
 
-    normalizers = load_from_optimizer(model, str(opt_path), include_bias=False)
+    normalizers = load_from_optimizer(model, str(opt_path), include_bias=False)  # type: ignore[arg-type]
     assert len(normalizers) == 1
     norm = next(iter(normalizers.values()))
+    assert isinstance(norm, AdamNormalizer)
     assert norm.bias_avg_sq is None
 
 
@@ -290,10 +366,10 @@ def test_include_bias_false_leaves_bias_unset(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _create_peft_model():
+def _create_peft_model() -> PeftModel:
     config = AutoConfig.from_pretrained("trl-internal-testing/tiny-Phi3ForCausalLM")
     base = AutoModelForCausalLM.from_config(config, torch_dtype=torch.float32)
-    return get_peft_model(
+    model = get_peft_model(
         base,
         LoraConfig(
             r=4,
@@ -303,6 +379,8 @@ def _create_peft_model():
             task_type="CAUSAL_LM",
         ),
     )
+    assert isinstance(model, PeftModel)
+    return model
 
 
 def _fake_optimizer_state_for_peft(peft_model):
@@ -403,8 +481,9 @@ def test_load_adam_checkpoint():
             continue
 
         raw = opt_state["state"][idx]["exp_avg_sq"]
-        loaded = normalizers[module_name].weight_avg_sq.cpu()
-        torch.testing.assert_close(loaded, raw)
+        norm = normalizers[module_name]
+        assert isinstance(norm, AdamNormalizer)
+        torch.testing.assert_close(norm.weight_avg_sq.cpu(), raw)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -462,5 +541,6 @@ def test_load_8bit_adam_checkpoint():
             continue
 
         raw = opt_state["state"][idx]["__bnb_optimizer_quant_state__"]["state2"]
-        loaded = normalizers[module_name].weight_avg_sq.cpu()
-        torch.testing.assert_close(loaded, raw)
+        norm = normalizers[module_name]
+        assert isinstance(norm, AdamNormalizer)
+        torch.testing.assert_close(norm.weight_avg_sq.cpu(), raw)

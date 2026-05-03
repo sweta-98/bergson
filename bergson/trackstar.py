@@ -55,8 +55,8 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
             return
         validate_run_path(cfg)
 
-    # Step 1: Compute normalizers and hessians on value dataset
-    print("Step 1/5: Computing normalizers and hessians on value dataset...")
+    # Step 1: Compute hessians on value dataset
+    print("Step 1/5: Computing hessians on value dataset...")
     if not _step_complete(value_hess_path, resume):
         value_hess_cfg = deepcopy(index_cfg)
         value_hess_cfg.run_path = value_hess_path
@@ -67,12 +67,12 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         _validate(value_hess_cfg)
         build(value_hess_cfg, hess_preprocess_cfg)
 
-    # Step 2: Compute normalizers and hessians on query dataset
-    print("Step 2/5: Computing normalizers and hessians on query dataset...")
+    # Step 2: Compute hessians on query dataset
+    print("Step 2/5: Computing hessians on query dataset...")
     if not _step_complete(query_hess_path, resume):
         query_hess_cfg = deepcopy(index_cfg)
         query_hess_cfg.run_path = query_hess_path
-        query_hess_cfg.data = trackstar_cfg.query
+        query_hess_cfg.data = deepcopy(trackstar_cfg.query)
         query_hess_cfg.skip_index = True
         query_hess_cfg.skip_hessians = False
         if trackstar_cfg.num_stats_sample_hessian:
@@ -99,7 +99,7 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
     if not _step_complete(query_path, resume):
         query_cfg = deepcopy(index_cfg)
         query_cfg.run_path = query_path
-        query_cfg.data = trackstar_cfg.query
+        query_cfg.data = deepcopy(trackstar_cfg.query)
         query_cfg.processor_path = query_hess_path
         query_cfg.skip_hessians = True
         _validate(query_cfg)
