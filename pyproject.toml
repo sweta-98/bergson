@@ -78,6 +78,9 @@ reportPrivateImportUsage = false
 [tool.setuptools.packages.find]
 include = ["bergson*"]
 
+[tool.uv.extra-build-dependencies]
+fast-jl = ["torch>=2.4,<2.10"]
+
 [tool.black]
 target-version = ["py310", "py311", "py312"]
 
