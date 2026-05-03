@@ -26,9 +26,12 @@ from bergson.score.score_writer import (
     MemmapTokenScoreWriter,
 )
 from bergson.score.scorer import Scorer
+from bergson.utils.batch_size import test_fwd_bwd
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
+    get_device,
+    get_device_index,
     get_gradient_dtype,
 )
 from bergson.utils.worker_utils import (
@@ -246,7 +249,7 @@ def score_worker(
     ds : Dataset | IterableDataset
         The entire dataset to be indexed. A subset is assigned to each worker.
     """
-    torch.cuda.set_device(local_rank)
+    torch.cuda.set_device(get_device_index(local_rank))
 
     # These should be set by the main process
     if world_size > 1:
@@ -256,7 +259,7 @@ def score_worker(
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{local_rank}"),
+            device_id=torch.device(get_device(local_rank)),
             rank=rank,
             timeout=timedelta(hours=1),
             world_size=world_size,
@@ -264,6 +267,7 @@ def score_worker(
 
     model, target_modules = setup_model_and_peft(index_cfg)
     processor = create_processor(model, index_cfg, target_modules)
+    test_fwd_bwd(model, index_cfg.token_batch_size)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -283,7 +287,7 @@ def score_worker(
         if score_cfg.precision != "auto"
         else get_gradient_dtype(model)
     )
-    score_device = torch.device(f"cuda:{rank}")
+    score_device = torch.device(get_device(local_rank))
 
     if isinstance(ds, Dataset):
         kwargs["batches"] = allocate_batches(
