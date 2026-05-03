@@ -2,43 +2,17 @@
 
 Mirrors :func:`bergson.hessians.pipeline.hessian_pipeline` in style: a flat
 sequence of numbered steps, each delegating to existing distributed
-primitives.
-
-Distributed model lifecycle
----------------------------
-Each step calls :func:`bergson.distributed.launch_distributed_run`, which:
-
-* In multi-GPU mode (``world_size > 1``), spawns a fresh batch of child
-  processes via ``mp.get_context("spawn").Process`` and joins them. Children
-  die after the step completes, automatically reclaiming GPU memory and the
-  loaded model — **no special cleanup needed across checkpoints**.
-* In single-GPU mode (``world_size <= 1``), runs the worker inline in the
-  parent process. The model loaded by ``setup_model_and_peft`` is local to
-  the worker function and becomes eligible for GC once the worker returns.
-  We additionally call :func:`gc.collect` between checkpoint passes to
-  encourage prompt release. ``CLAUDE.md`` forbids
-  ``torch.cuda.empty_cache``; the caching allocator will reuse freed
-  blocks for the next checkpoint anyway.
-
-This means the per-checkpoint loop in
-:func:`bergson.approx_unrolling.checkpoint_hessians.precompute_checkpoint_hessians`
-correctly loads-off and loads-in the next checkpoint on each iteration.
+primitives via :func:`bergson.distributed.launch_distributed_run`.
 
 Pipeline steps
 --------------
-Currently only step 1 is implemented. Subsequent steps are stubbed and
-will be filled in incrementally:
-
-1. **Per-checkpoint Hessian precompute.** Run :func:`approximate_hessians`
-   at each checkpoint, output to ``<run>/ckpt_{c}/<method>/``. EV correction
-   is forced off — segment averaging recomputes lambda once it knows the
-   segment eigenbasis.
-2. *(TBD)* Per-segment covariance averaging + eigendecomposition (+ optional
-   lambda).
-3. *(TBD)* Per-checkpoint training-gradient build, then per-segment average.
-4. *(TBD)* Build query gradient at the final checkpoint.
-5. *(TBD)* Walk query through segments via ``F_S`` / ``F_r`` → ``ψ_ℓ``.
-6. *(TBD)* Per-segment scoring, summed and divided by ``N``.
+1. Per-checkpoint covariance precompute (raw cov shards only, no eigvecs).
+2. Per-segment cov aggregation + eigendecomposition (one combined launch).
+3. Per-checkpoint lambda in segment eigenbasis (only if ``ev_correction``).
+4. Per-segment lambda aggregation (only if ``ev_correction``).
+5. Mean query gradient at the final checkpoint.
+6. *(TBD)* Walk query through segments via ``F_S`` / ``F_r`` → ``ψ_ℓ``;
+   per-segment score; sum.
 """
 
 import gc
