@@ -219,25 +219,9 @@ def convert_precision_to_torch(
             return torch.float32
 
 
-def get_device_index(rank: int = 0) -> int:
-    """Return the CUDA device index for the given rank.
-
-    Returns 0 when only one GPU is visible to this process — workers
-    launched by ``launch_distributed_run`` get ``CUDA_VISIBLE_DEVICES``
-    pinned to a single GPU per process, so the only valid index is 0
-    regardless of the logical rank.
-    """
-    if torch.cuda.is_available() and torch.cuda.device_count() == 1:
-        return 0
-    return rank
-
-
 def get_device(rank: int = 0) -> str:
     """Get device string for the given rank.
 
-    Returns "cpu" if CUDA is not available, otherwise ``cuda:<index>``
-    where the index respects CVD pinning (see ``get_device_index``).
+    Returns "cpu" if CUDA is not available.
     """
-    if not torch.cuda.is_available():
-        return "cpu"
-    return f"cuda:{get_device_index(rank)}"
+    return f"cuda:{rank}" if torch.cuda.is_available() else "cpu"

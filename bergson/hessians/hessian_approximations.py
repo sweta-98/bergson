@@ -20,8 +20,6 @@ from bergson.hessians.shampoo import ShampooCollector
 from bergson.hessians.tkfac import TraceCovarianceCollector
 from bergson.utils.utils import (
     convert_precision_to_torch,
-    get_device,
-    get_device_index,
     setup_reproducibility,
 )
 from bergson.utils.worker_utils import (
@@ -127,7 +125,7 @@ def hessian_worker(
         The entire dataset to be indexed. A subset is assigned to each worker.
     """
     if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
+        torch.cuda.set_device(local_rank)
 
     # These should be set by the main process
     if world_size > 1:
@@ -137,7 +135,7 @@ def hessian_worker(
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
+            device_id=torch.device(f"cuda:{local_rank}"),
             rank=rank,
             timeout=timedelta(hours=1),
             world_size=world_size,

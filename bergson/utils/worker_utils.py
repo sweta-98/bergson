@@ -35,7 +35,7 @@ from bergson.data import (
 from bergson.format import apply_format
 from bergson.gradients import GradientProcessor, Normalizer
 from bergson.utils import assert_type, get_layer_list, weighted_causal_lm_ce
-from bergson.utils.utils import get_device, simple_parse_kwargs_string
+from bergson.utils.utils import simple_parse_kwargs_string
 
 BIG_NUM = np.iinfo(np.int64).max
 
@@ -73,7 +73,7 @@ def create_processor(
 
         processor = GradientProcessor.load(
             processor_path,
-            map_location=get_device(local_rank),
+            map_location=f"cuda:{local_rank}",
             skip_hessians=cfg.skip_hessians,
         )
     else:
@@ -165,7 +165,7 @@ def setup_model_and_peft(
     elif cfg.fsdp or not torch.cuda.is_available():
         device_map = "cpu"
     else:
-        device_map = {"": get_device(local_rank)}
+        device_map = {"": f"cuda:{local_rank}"}
 
     quantization_config = None
     if cfg.precision in ("int4", "int8"):

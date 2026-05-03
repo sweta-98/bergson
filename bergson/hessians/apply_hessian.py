@@ -14,7 +14,6 @@ from torch import Tensor
 from bergson.data import create_index, load_gradients
 from bergson.hessians.sharded_computation import ShardedMul
 from bergson.utils.logger import get_logger
-from bergson.utils.utils import get_device, get_device_index
 
 
 @dataclass
@@ -38,22 +37,22 @@ class EkfacApplicator:
 
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
-        self.device = get_device(self.rank)
+        self.device = f"cuda:{self.rank}"
 
         self.sharded_computer = ShardedMul()
 
     def compute_ivhp_sharded(self):
         eigen_a = load_file(
             self.path + f"/eigen_activation_sharded/shard_{self.rank}.safetensors",
-            device=self.device,
+            device=f"cuda:{self.rank}",
         )
         eigen_g = load_file(
             self.path + f"/eigen_gradient_sharded/shard_{self.rank}.safetensors",
-            device=self.device,
+            device=f"cuda:{self.rank}",
         )
         lambda_factor = load_file(
             self.path + f"/eigenvalue_correction_sharded/shard_{self.rank}.safetensors",
-            device=self.device,
+            device=f"cuda:{self.rank}",
         )
 
         for k, v in lambda_factor.items():
@@ -152,7 +151,7 @@ def apply_worker(
     from datetime import timedelta
 
     if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
+        torch.cuda.set_device(local_rank)
 
     if world_size > 1:
         addr = os.environ.get("MASTER_ADDR", "localhost")
@@ -161,7 +160,7 @@ def apply_worker(
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
+            device_id=torch.device(f"cuda:{local_rank}"),
             rank=rank,
             timeout=timedelta(hours=1),
             world_size=world_size,
