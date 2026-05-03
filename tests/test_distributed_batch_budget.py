@@ -20,7 +20,6 @@ import torch.multiprocessing as mp
 
 from bergson.data import allocate_batches, pad_and_tensor
 
-
 # Bimodal length distribution: 80 very short examples plus one long one.
 # At token_batch_size=2048 the bin-packer produces one (80 × short) batch
 # and one (1 × long) batch; round-robin distribution puts them on
