@@ -17,7 +17,9 @@ def test_fwd_bwd(
     if device.type != "cuda":
         return
 
-    max_seq_len = getattr(model.config, "max_position_embeddings", 0) or token_batch_size
+    max_seq_len = (
+        getattr(model.config, "max_position_embeddings", 0) or token_batch_size
+    )
     seq_len = min(token_batch_size, max_seq_len)
     num_seqs = max(1, token_batch_size // seq_len)
 

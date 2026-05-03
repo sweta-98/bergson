@@ -26,12 +26,12 @@ from bergson.score.score_writer import (
     MemmapTokenScoreWriter,
 )
 from bergson.score.scorer import Scorer
+from bergson.utils.preflight import test_fwd_bwd
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
     get_gradient_dtype,
 )
-from bergson.utils.preflight import test_fwd_bwd
 from bergson.utils.worker_utils import (
     create_processor,
     setup_data_pipeline,
