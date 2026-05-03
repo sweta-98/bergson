@@ -7,8 +7,8 @@ rendezvous over loopback. Exercises the multi-node code path through
 (``rank = node_rank * nproc_per_node + local_rank``), and the rank-0-only
 partial-to-final move at the end.
 
-If multi-node rendezvous regresses (e.g. CUDA_VISIBLE_DEVICES pinning 
-breaks the per-node NCCL handshake, or only one node's data ever reaches disk), 
+If multi-node rendezvous regresses (e.g. CUDA_VISIBLE_DEVICES pinning
+breaks the per-node NCCL handshake, or only one node's data ever reaches disk),
 this test either times out or fails the gradient-count assertion.
 """
 
