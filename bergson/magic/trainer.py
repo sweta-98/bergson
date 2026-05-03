@@ -128,8 +128,12 @@ class TrainerState:
         else:
             grp = None
 
+        # Clone (not just detach) so the async writer reads a stable snapshot:
+        # detach() shares storage, so an in-place training update racing with
+        # the async save can corrupt a tensor's bytes mid-write, producing
+        # non-deterministic bytes for the same logical state.
         state = {
-            k: v.detach() if isinstance(v, torch.Tensor) else v
+            k: v.detach().clone() if isinstance(v, torch.Tensor) else v
             for k, v in self.state_dict().items()
         }
         fut = dcp.async_save(

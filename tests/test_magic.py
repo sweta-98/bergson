@@ -256,7 +256,7 @@ def test_magic_validation_loop_doc_token_dropout_equiv(model_name):
 
     assert abs(loss_doc - loss_full) > 1e-6, "dropout had no effect; test is degenerate"
     torch.testing.assert_close(
-        torch.tensor(loss_tok), torch.tensor(loss_doc), atol=1e-3, rtol=1e-4
+        torch.tensor(loss_tok), torch.tensor(loss_doc), atol=1e-5, rtol=1e-4
     )
 
 
@@ -410,7 +410,7 @@ def test_magic_per_token_sums_to_per_doc(model_name, dataset):
     assert per_doc.shape == (N,)
     assert per_tok.shape == (N, T)
 
-    torch.testing.assert_close(per_tok.sum(dim=-1), per_doc, atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(per_tok.sum(dim=-1), per_doc, atol=1e-5, rtol=1e-4)
 
 
 @pytest.mark.parametrize("model_name", MODEL_CONFIGS)
@@ -449,7 +449,7 @@ def test_magic_per_token_sums_to_per_doc_packed(model_name):
 
     # Every doc should receive at least one nonzero token contribution.
     assert (agg.abs() > 0).all(), f"Some doc has zero aggregated score: {agg}"
-    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-5, rtol=1e-4)
 
 
 @pytest.mark.parametrize("model_name", MODEL_CONFIGS)
@@ -493,7 +493,7 @@ def test_magic_per_token_sums_to_per_doc_with_padding(model_name):
     agg.scatter_add_(0, doc_ids.reshape(-1), per_tok.reshape(-1).to(torch.float64))
 
     assert (agg.abs() > 0).all(), f"Some doc has zero aggregated score: {agg}"
-    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-5, rtol=1e-4)
 
 
 def test_attach_doc_ids_if_missing():
@@ -596,7 +596,7 @@ def test_magic_unpacked_cli_aggregation(model_name):
     agg.scatter_add_(0, doc_ids.reshape(-1), per_tok.reshape(-1).to(torch.float64))
 
     assert (agg.abs() > 0).all(), f"Some doc has zero aggregated score: {agg}"
-    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-5, rtol=1e-4)
 
 
 @pytest.mark.parametrize("model_name", MODEL_CONFIGS)
@@ -634,7 +634,7 @@ def test_magic_packed_cli_aggregation_with_shuffle(model_name):
     agg.scatter_add_(0, doc_ids.reshape(-1), per_tok.reshape(-1).to(torch.float64))
 
     assert (agg.abs() > 0).all(), f"Some doc has zero aggregated score: {agg}"
-    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(agg, per_doc.to(torch.float64), atol=1e-5, rtol=1e-4)
 
 
 def test_magic_resume(dataset):
