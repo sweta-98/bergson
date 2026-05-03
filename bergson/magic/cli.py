@@ -22,6 +22,7 @@ from ..config import TrainingConfig, ValidationConfig
 from ..data import load_scores
 from ..distributed import grad_tree, launch_distributed_run
 from ..utils.logging import wandb_log_fn
+from ..utils.utils import get_device, get_device_index
 from ..utils.worker_utils import (
     setup_data_pipeline,
     setup_model_and_peft,
@@ -119,7 +120,7 @@ def prepare_trainer(
         attn_implementation="eager",
         apply_fsdp=False,
     )
-    model.to(f"cuda:{rank}")  # type: ignore[reportArgumentType]
+    model.to(get_device(rank))  # type: ignore[reportArgumentType]
 
     if target_modules:
         # Only train the PEFT adapter parameters
@@ -264,7 +265,7 @@ def worker(
     run_cfg: TrainingConfig,
     score_path: str = "",
 ):
-    torch.cuda.set_device(rank)
+    torch.cuda.set_device(get_device_index(rank))
 
     if world_size > 1:
         addr = os.environ.get("MASTER_ADDR", "localhost")
@@ -273,7 +274,7 @@ def worker(
         dist.init_process_group(
             "cpu:gloo,cuda:nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{rank}"),
+            device_id=torch.device(get_device(rank)),
             rank=rank,
             world_size=world_size,
         )
@@ -304,7 +305,7 @@ def worker(
     stream = DataStream(
         train_dataset,
         run_cfg.batch_size,
-        device=f"cuda:{rank}",
+        device=get_device(rank),
         input_key=run_cfg.data.prompt_column,
         weight_shape=w_shape,
     )
@@ -377,7 +378,7 @@ def worker(
     query_stream = DataStream(
         query_dataset,
         run_cfg.batch_size,
-        device=f"cuda:{rank}",
+        device=get_device(rank),
         input_key=run_cfg.query.prompt_column,
         weight_shape=(num_query_docs,),
     )
