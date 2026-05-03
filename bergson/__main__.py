@@ -34,28 +34,31 @@ from .yaml_pipeline import run_pipeline
 
 @dataclass
 class ApproxUnrolling(Serializable):
-    """Build a gradient index."""
+    """Run the SOURCE (approximate unrolling) training-data attribution pipeline.
 
-    approx_unrolling_cfg: ApproxUnrollingConfig
+    Currently only step 1 (per-checkpoint Hessian precompute) is wired up;
+    later steps land incrementally. See
+    :mod:`bergson.approx_unrolling.pipeline` for the step list.
+    """
 
     index_cfg: IndexConfig
 
     hessian_cfg: HessianConfig
 
-    score_cfg: ScoreConfig
+    approx_unrolling_cfg: ApproxUnrollingConfig
 
-    preprocess_cfg: PreprocessConfig
-
-    hessian_pipeline_cfg: HessianPipelineConfig
+    resume: bool = False
+    """If true, skip steps whose output directories already exist."""
 
     def execute(self):
-        """Build the gradient index."""
-        if self.index_cfg.skip_index and self.index_cfg.skip_hessians:
-            raise ValueError("Either skip_index or skip_hessians must be False")
+        from bergson.approx_unrolling.pipeline import approx_unrolling_pipeline
 
-        validate_run_path(self.index_cfg)
-
-        # approx_unrolling(approx_unrolling_cfg, self.index_cfg, self.preprocess_cfg)
+        approx_unrolling_pipeline(
+            self.index_cfg,
+            self.hessian_cfg,
+            self.approx_unrolling_cfg,
+            resume=self.resume,
+        )
 
 
 @dataclass
@@ -253,6 +256,7 @@ class Main:
     """Routes to the subcommands."""
 
     command: Union[
+        ApproxUnrolling,
         Build,
         Ekfac,
         Hessian,
