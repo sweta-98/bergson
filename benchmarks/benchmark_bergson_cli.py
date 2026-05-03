@@ -393,7 +393,7 @@ class Run:
         # Read the determined batch size from the query index
         with open(query_index_path / "index_config.yaml", "r") as f:
             query_cfg = IndexConfig(**yaml.safe_load(f))
-            determined_batch_size = query_cfg.token_batch_size
+            determined_batch_size = 2048 #query_cfg.token_batch_size
         print(
             f"Using token_batch_size: {determined_batch_size}"
             " (determined before timing)"
@@ -484,15 +484,18 @@ class Run:
                     new_common_args[i] = "--data.dataset"
                 elif arg == "--truncation":
                     new_common_args[i] = "--data.truncation"
+                elif arg == "--split":
+                    new_common_args[i] = "--data.split"
 
             ekfac_cmd = [
                 "bergson",
                 "ekfac",
                 str(benchmark_path / "ekfac"),
-                "--hessian_dtype",
-                "bf16",
                 "--lambda_damp_factor",
                 "0.1",
+                "--query.dataset",
+                str(query_dataset_path),
+                "--query.truncation",
                 *new_common_args,
             ]
 
@@ -511,6 +514,9 @@ class Run:
                 "bergson",
                 "trackstar",
                 str(benchmark_path / "trackstar"),
+                "--query.dataset",
+                str(query_dataset_path),
+                "--query.truncation",
                 *new_common_args,
             ]
             
