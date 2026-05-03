@@ -50,6 +50,7 @@ from ..config import (
 )
 from ..utils.logger import get_logger
 from .checkpoint_hessians import precompute_checkpoint_hessians
+from .segment_aggregation import aggregate_segment_covariances
 
 # Total number of steps in the full SOURCE pipeline. Used only for the
 # user-facing "Step k/N_TOTAL_STEPS:" prefix. Bump as steps land.
@@ -84,6 +85,21 @@ def approx_unrolling_pipeline(
     """
     logger = get_logger("approx_unrolling_pipeline")
 
+    n_ckpts = len(approx_unrolling_cfg.checkpoints)
+    n_segments = approx_unrolling_cfg.segments
+    if n_ckpts == 0:
+        raise ValueError("approx_unrolling_cfg.checkpoints is empty.")
+    if n_segments < 1:
+        raise ValueError(
+            f"approx_unrolling_cfg.segments must be ≥ 1, got {n_segments}."
+        )
+    if n_ckpts % n_segments != 0:
+        raise ValueError(
+            f"checkpoints ({n_ckpts}) must be divisible by segments "
+            f"({n_segments}); got {n_ckpts}/{n_segments} = "
+            f"{n_ckpts / n_segments:.3f} per segment."
+        )
+
     logger.info("=" * 70)
     logger.info(f"SOURCE pipeline → {index_cfg.run_path}")
     logger.info(f"  base model        : {index_cfg.model}")
@@ -108,13 +124,24 @@ def approx_unrolling_pipeline(
     # where the worker ran in-process and may still hold model references.
     gc.collect()
 
-    # ── Steps 2–6: TBD ────────────────────────────────────────────────────
-    # 2. Per-segment covariance averaging + eigendecomposition (+ lambda).
-    # 3. Per-checkpoint train-gradient build, then per-segment average.
-    # 4. Build query gradient at the final checkpoint.
-    # 5. Walk query through segments via F_S / F_r → ψ_ℓ per segment.
-    # 6. Per-segment score_dataset, then sum + 1/N.
+    # ── Step 2: Per-segment covariance aggregation ────────────────────────
     logger.info(
-        f"[SOURCE pipeline] step 1 complete. "
-        f"Steps 2-{_N_TOTAL_STEPS} not yet implemented."
+        f"Step 2/{_N_TOTAL_STEPS}: "
+        f"Aggregating per-checkpoint covariances into segment averages..."
+    )
+    aggregate_segment_covariances(
+        index_cfg,
+        hessian_cfg,
+        approx_unrolling_cfg,
+        resume=resume,
+    )
+
+    # ── Steps 3–6: TBD ────────────────────────────────────────────────────
+    # 3. Eigendecomposition of segment-averaged covariances (+ optional lambda).
+    # 4. Per-checkpoint train-gradient build, then per-segment average.
+    # 5. Build query gradient at the final checkpoint.
+    # 6. Walk query through segments via F_S / F_r → ψ_ℓ; per-segment score.
+    logger.info(
+        f"[SOURCE pipeline] steps 1-2 complete. "
+        f"Steps 3-{_N_TOTAL_STEPS} not yet implemented."
     )

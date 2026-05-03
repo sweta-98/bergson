@@ -36,7 +36,12 @@ HESSIAN_APPROXIMATIONS = {
 }
 
 
-def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> str:
+def approximate_hessians(
+    index_cfg: IndexConfig,
+    hessian_cfg: HessianConfig,
+    *,
+    do_eigendecomposition: bool = True,
+) -> str:
     """
     Approximate Hessian matrices using KFAC or EKFAC.
 
@@ -53,12 +58,20 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> 
         and gradient collection settings.
     hessian_cfg : HessianConfig
         Specifies the Hessian approximation method (kfac or ekfac).
+    do_eigendecomposition : bool
+        If True (default), compute the eigendecomposition of the covariance
+        matrices. Not needed when doing approximate unrolling
 
     Returns
     -------
     str
         Path to the directory containing the computed Hessian approximations.
     """
+    if not do_eigendecomposition and hessian_cfg.ev_correction:
+        raise ValueError(
+            "do_eigendecomposition=False is incompatible with "
+            "hessian_cfg.ev_correction=True (lambda needs the eigenvectors)."
+        )
     if index_cfg.debug:
         setup_reproducibility()
     index_cfg.run_path = index_cfg.run_path + f"/{hessian_cfg.method}"
@@ -73,7 +86,7 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> 
     launch_distributed_run(
         "hessian",
         hessian_worker,
-        [index_cfg, hessian_cfg, ds],
+        [index_cfg, hessian_cfg, ds, do_eigendecomposition],
         index_cfg.distributed,
     )
 
@@ -91,6 +104,7 @@ def hessian_worker(
     index_cfg: IndexConfig,
     hessian_cfg: HessianConfig,
     ds: Dataset,
+    do_eigendecomposition: bool = True,
 ):
     """
     Worker function for distributed Hessian approximation.
@@ -163,6 +177,11 @@ def hessian_worker(
     collect_hessians(**kwargs)
 
     dist.barrier() if dist.is_initialized() else None
+
+    if not do_eigendecomposition:
+        # SOURCE path: stop after raw covariance collection. Segment
+        # averaging owns eigendecomposition + (optional) lambda.
+        return
 
     total_processed = torch.load(
         f"{index_cfg.partial_run_path}/total_processed.pt",
