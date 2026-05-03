@@ -86,6 +86,22 @@ def launch_distributed_run(
     else:
         mp.set_sharing_strategy("file_system")
 
+        # Pin CUDA_VISIBLE_DEVICES per child so each only sees its assigned
+        # GPU (kills the lazy-init phantom contexts on cuda:0). If the
+        # parent already had a CVD slice (multi-node setups, slurm GPU
+        # binding, two bergson jobs on one host), index into that slice
+        # instead of overwriting it with bare physical indices.
+        parent_cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+        visible = (
+            [d.strip() for d in parent_cvd.split(",") if d.strip()]
+            if parent_cvd
+            else [str(j) for j in range(local_world_size)]
+        )
+        assert len(visible) >= local_world_size, (
+            f"CUDA_VISIBLE_DEVICES has {len(visible)} entries "
+            f"({parent_cvd!r}) but nproc_per_node={local_world_size}"
+        )
+
         ctx = None
         try:
             ctx = start_processes(
@@ -102,11 +118,7 @@ def launch_distributed_run(
                         "WORLD_SIZE": str(world_size),
                         "MASTER_ADDR": master_addr,
                         "MASTER_PORT": master_port,
-                        # Each child sees only its assigned GPU. Without this
-                        # every child lazy-inits CUDA on cuda:0 before
-                        # set_device runs, leaking ~780 MiB per non-zero rank
-                        # on GPU 0. Children should reference cuda:0 internally.
-                        "CUDA_VISIBLE_DEVICES": str(i),
+                        "CUDA_VISIBLE_DEVICES": visible[i],
                     }
                     for i in range(local_world_size)
                 },
@@ -161,7 +173,11 @@ def dist_main(dataset, worker: Worker):
                     "LOCAL_RANK": str(i),
                     "MASTER_ADDR": "localhost",
                     "MASTER_PORT": str(port),
-                    "CUDA_VISIBLE_DEVICES": str(i),
+                    "CUDA_VISIBLE_DEVICES": (
+                        os.environ["CUDA_VISIBLE_DEVICES"].split(",")[i].strip()
+                        if os.environ.get("CUDA_VISIBLE_DEVICES")
+                        else str(i)
+                    ),
                 }
                 for i in range(world_size)
             },
