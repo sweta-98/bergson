@@ -3,8 +3,6 @@ import torch.distributed as dist
 from jaxtyping import Float
 from torch import Tensor
 
-from bergson.utils.utils import get_device
-
 
 class ShardedMul:
     def __init__(
@@ -14,7 +12,9 @@ class ShardedMul:
 
         self.rank = dist.get_rank() if self.dist else 0
         self.world_size = dist.get_world_size() if self.dist else 1
-        self.device = torch.device(get_device(self.rank))
+        self.device = torch.device(
+            f"cuda:{self.rank}" if torch.cuda.is_available() else "cpu"
+        )
 
     def _init_covariance_dict(
         self,

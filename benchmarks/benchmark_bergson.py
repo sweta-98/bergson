@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Optional
 
 import torch
-from bergson.utils.auto_batch_size import determine_batch_size
 from datasets import Dataset
 from simple_parsing import ArgumentParser, ConflictResolution, field
 
@@ -30,6 +29,7 @@ from bergson.data import allocate_batches
 from bergson.gradients import GradientProcessor
 from bergson.score.score_writer import InMemorySequenceScoreWriter
 from bergson.score.scorer import Scorer
+from bergson.utils.auto_batch_size import determine_batch_size
 from bergson.utils.worker_utils import (
     setup_data_pipeline,
     setup_model_and_peft,
