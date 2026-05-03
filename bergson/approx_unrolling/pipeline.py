@@ -130,9 +130,11 @@ def approx_unrolling_pipeline(
         f"Aggregating per-checkpoint covariances into segment averages..."
     )
     aggregate_segment_covariances(
-        index_cfg,
-        hessian_cfg,
-        approx_unrolling_cfg,
+        run_path=index_cfg.run_path,
+        method=hessian_cfg.method,
+        n_segments=n_segments,
+        per_segment=n_ckpts // n_segments,
+        distributed=index_cfg.distributed,
         resume=resume,
     )
 
