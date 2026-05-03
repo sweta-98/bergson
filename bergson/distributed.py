@@ -88,18 +88,18 @@ def launch_distributed_run(
 
         # Pin CUDA_VISIBLE_DEVICES per child so each only sees its assigned
         # GPU (kills the lazy-init phantom contexts on cuda:0). If the
-        # parent already had a CVD slice (multi-node setups, slurm GPU
+        # parent already had a CUDA_VISIBLE_DEVICES slice (multi-node setups, slurm GPU
         # binding, two bergson jobs on one host), index into that slice
         # instead of overwriting it with bare physical indices.
-        parent_cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+        parent_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
         visible = (
-            [d.strip() for d in parent_cvd.split(",") if d.strip()]
-            if parent_cvd
+            [d.strip() for d in parent_cuda_visible_devices.split(",") if d.strip()]
+            if parent_cuda_visible_devices
             else [str(j) for j in range(local_world_size)]
         )
         assert len(visible) >= local_world_size, (
             f"CUDA_VISIBLE_DEVICES has {len(visible)} entries "
-            f"({parent_cvd!r}) but nproc_per_node={local_world_size}"
+            f"({parent_cuda_visible_devices!r}) but nproc_per_node={local_world_size}"
         )
 
         ctx = None
