@@ -1,4 +1,4 @@
-"""Multi-node bergson build, simulated on a single host.
+"""Multi-node bergson build simulated on a single node.
 
 Spawns two ``python -m bergson build`` processes that pretend to be separate
 nodes. Each owns one physical GPU via outer CUDA_VISIBLE_DEVICES, and they
@@ -7,9 +7,9 @@ rendezvous over loopback. Exercises the multi-node code path through
 (``rank = node_rank * nproc_per_node + local_rank``), and the rank-0-only
 partial-to-final move at the end.
 
-If multi-node rendezvous regresses (e.g. CVD pinning breaks the per-node
-NCCL handshake, or only one node's data ever reaches disk), this test
-either times out or fails the gradient-count assertion.
+If multi-node rendezvous regresses (e.g. CUDA_VISIBLE_DEVICES pinning 
+breaks the per-node NCCL handshake, or only one node's data ever reaches disk), 
+this test either times out or fails the gradient-count assertion.
 """
 
 import os
@@ -39,8 +39,6 @@ def test_multinode_build_two_nodes_one_gpu_each(tmp_path: Path):
     port = free_port()
 
     common_args = [
-        "python",
-        "-m",
         "bergson",
         "build",
         str(run_path),
