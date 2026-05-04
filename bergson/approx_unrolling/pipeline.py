@@ -11,7 +11,7 @@ Pipeline steps
 3. Per-checkpoint lambda in segment eigenbasis (only if ``ev_correction``).
 4. Per-segment lambda aggregation (only if ``ev_correction``).
 5. Mean query gradient at the final checkpoint.
-6. *(TBD)* Walk query through segments via ``F_S`` / ``F_r`` → ``ψ_ℓ``;
+6. *(TBD)* Walk query through segments via ``F_S`` / ``F_r`` -> ``psi_l``;
    per-segment score; sum.
 """
 
@@ -81,7 +81,7 @@ def approx_unrolling_pipeline(
         )
 
     logger.info("=" * 70)
-    logger.info(f"SOURCE pipeline → {index_cfg.run_path}")
+    logger.info(f"SOURCE pipeline -> {index_cfg.run_path}")
     logger.info(f"  base model        : {index_cfg.model}")
     logger.info(f"  checkpoints (C)   : {len(approx_unrolling_cfg.checkpoints)}")
     logger.info(f"  segments (L)      : {approx_unrolling_cfg.segments}")
@@ -170,7 +170,7 @@ def approx_unrolling_pipeline(
         build(query_cfg, PreprocessConfig(aggregation="mean"))
 
     # ── Step 6: TBD ───────────────────────────────────────────────────────
-    # 6. Walk query through segments via F_S / F_r → ψ_ℓ; per-segment score.
+    # 6. Walk query through segments via F_S / F_r -> psi_l; per-segment score.
     logger.info(
         f"[SOURCE pipeline] steps 1-5 complete. "
         f"Step {_N_TOTAL_STEPS} not yet implemented."

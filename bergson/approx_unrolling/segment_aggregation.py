@@ -164,7 +164,7 @@ def _aggregate_cov_worker(
 
         cov_done = (out_dir / "total_processed.pt").exists()
         if not cov_done:
-            logger.info(f"[seg {seg} rank {rank}] summing covariances → {out_dir}")
+            logger.info(f"[seg {seg} rank {rank}] summing covariances -> {out_dir}")
             for kind in _SHARD_KINDS:
                 (out_dir / kind).mkdir(parents=True, exist_ok=True)
                 in_paths = [d / kind / shard_name for d in ckpt_method_dirs]
@@ -184,7 +184,7 @@ def _aggregate_cov_worker(
             if world_size > 1:
                 dist.barrier()
 
-        logger.info(f"[seg {seg} rank {rank}] eigendecomposing → {out_dir}")
+        logger.info(f"[seg {seg} rank {rank}] eigendecomposing -> {out_dir}")
         total_processed = torch.load(
             out_dir / "total_processed.pt",
             map_location="cpu",
@@ -234,5 +234,5 @@ def aggregate_segment_lambdas(
                     f"Missing per-ckpt lambda dir {d}; did step 3 finish?"
                 )
 
-        logger.info(f"[seg {seg}] summing lambdas → {out_dir}")
+        logger.info(f"[seg {seg}] summing lambdas -> {out_dir}")
         sum_sharded_dirs(input_dirs, out_dir, distributed)

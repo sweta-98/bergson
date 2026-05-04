@@ -145,4 +145,4 @@ def _lambda_worker(
         cfg=index_cfg,
     )
     computer.forward_backward = fwd_bwd_hessian_factory(index_cfg, hessian_cfg)
-    computer.run_with_collector_hooks(desc=f"Lambda → {output_dir}")
+    computer.run_with_collector_hooks(desc=f"Lambda -> {output_dir}")

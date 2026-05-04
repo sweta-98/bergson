@@ -3,7 +3,7 @@
 For each entry in ``approx_unrolling_cfg.checkpoints`` (an absolute path or
 HF model ID), run the existing :func:`approximate_hessians` pipeline once.
 Each checkpoint's output lands at
-``<index_cfg.run_path>/segment_{ℓ}/ckpt_{i}/<method>/``, where ``ℓ`` is the
+``<index_cfg.run_path>/segment_{l}/ckpt_{i}/<method>/``, where ``l`` is the
 segment the checkpoint belongs to and ``i`` is its index *within* that
 segment. EV correction is forced off because per-checkpoint lambda is
 wasted work — the segment-averaging step recomputes it once it knows the
