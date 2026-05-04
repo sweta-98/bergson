@@ -138,7 +138,7 @@ class GradientCollector(HookCollectorBase):
         # mod_grads is deterministic for a given model.
         parts = list(self.mod_grads.values())
         n_rows = parts[0].shape[0]
-        total_grad_dim = sum(math.prod(P.shape[1:]) for P in parts)
+        total_grad_dim: int = sum(int(math.prod(P.shape[1:])) for P in parts)
 
         if self.global_projector is None:
             assert self.processor.projection_dim is not None
