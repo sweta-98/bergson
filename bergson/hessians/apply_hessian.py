@@ -28,10 +28,11 @@ class EkfacConfig:
 
 
 class EkfacApplicator:
-    def __init__(self, cfg: EkfacConfig):
+    def __init__(self, cfg: EkfacConfig, apply_fn=None):
         self.cfg = cfg
         self.path = cfg.hessian_method_path
         self.gradient_path = cfg.gradient_path
+        self.apply_fn = apply_fn
 
         self.logger = get_logger(
             "EkfacApplicator", level="DEBUG" if cfg.debug else "INFO"
@@ -103,13 +104,20 @@ class EkfacApplicator:
 
         self.logger.debug("Finished G' = Q_S^T @ G @ Q_A")
 
-        # Divide by damped eigenvalues in eigenbasis
+        # Apply eigenvalue function in eigenbasis (default = damped inverse).
         for k, v in lambda_factor.items():
-            self.sharded_computer._hadamard(
-                matrix_noi=transformed_gradients[k],
-                lambda_ci=v,
-                lambda_damp_factor=self.cfg.lambda_damp_factor,
-            )
+            if self.apply_fn is None:
+                self.sharded_computer._hadamard(
+                    matrix_noi=transformed_gradients[k],
+                    lambda_ci=v,
+                    lambda_damp_factor=self.cfg.lambda_damp_factor,
+                )
+            else:
+                self.sharded_computer._apply_eigfn(
+                    matrix_noi=transformed_gradients[k],
+                    lambda_ci=v,
+                    fn=self.apply_fn,
+                )
 
         self.logger.debug("Finished G' / lambda")
         del lambda_factor

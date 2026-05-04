@@ -52,17 +52,14 @@ def approx_unrolling_pipeline(
     Parameters
     ----------
     index_cfg : IndexConfig
-        Base index/run config. ``index_cfg.run_path`` is the parent directory
-        for **all** SOURCE artifacts (per-checkpoint outputs, per-segment
-        outputs, transformed queries, scores).
+        Base run config. ``index_cfg.run_path`` is the parent directory for
+        **all** SOURCE artifacts (per-checkpoint outputs, per-segment
+        outputs, transformed query, scores).
     hessian_cfg : HessianConfig
-        EKFAC method and dtype. ``ev_correction`` is forced off in step 1
-        (per-checkpoint) because per-checkpoint lambda is wasted work; the
-        eventual segment-averaging step recomputes it once per segment in
-        the segment's averaged eigenbasis.
+        EKFAC method and dtype. When ``ev_correction=True``, steps 3-4
+        produce the segment-eigenbasis lambda; otherwise they're skipped.
     approx_unrolling_cfg : ApproxUnrollingConfig
-        SOURCE-specific config: list of checkpoint revisions, segment count,
-        learning-rate schedule, etc.
+        Checkpoints, segment count, query dataset, etc.
     resume : bool
         If ``True``, skip steps whose output directories already exist.
     """

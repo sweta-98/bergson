@@ -93,6 +93,40 @@ class ShardedMul:
         else:
             self._sharded_hadamard(matrix_noi, lambda_ci, lambda_damp_factor)
 
+    def _apply_eigfn(
+        self,
+        matrix_noi: Float[Tensor, "n o i"],
+        lambda_ci: Float[Tensor, "c i"],
+        fn,
+    ):
+        """In-place: matrix_noi[:, row_block_r, :] *= fn(λ_r) per rank r."""
+        if not self.dist:
+            matrix_noi.mul_(fn(lambda_ci))
+        else:
+            self._sharded_apply_eigfn(matrix_noi, lambda_ci, fn)
+
+    def _sharded_apply_eigfn(
+        self,
+        matrix_noi: Float[Tensor, "n o i"],
+        lambda_ci: Float[Tensor, "c i"],
+        fn,
+    ):
+        """Sharded in-place ``matrix_noi *= fn(λ)`` (function-aware hadamard)."""
+        for rank_index in range(self.world_size):
+            if rank_index == self.rank:
+                shard_ci = lambda_ci
+            else:
+                shard_ci = torch.zeros_like(lambda_ci)
+
+            dist.broadcast(shard_ci, src=rank_index)
+
+            start_row = rank_index * shard_ci.shape[0]
+            end_row = (rank_index + 1) * shard_ci.shape[0]
+            matrix_noi[:, start_row:end_row, :].mul_(fn(shard_ci))
+
+            if self.rank != rank_index:
+                del shard_ci
+
     def _sharded_matmul(
         self,
         vector_nsa: Float[Tensor, "n s a"],
