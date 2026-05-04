@@ -11,8 +11,12 @@ Pipeline steps
 3. Per-checkpoint lambda in segment eigenbasis (only if ``ev_correction``).
 4. Per-segment lambda aggregation (only if ``ev_correction``).
 5. Mean query gradient at the final checkpoint.
-6. *(TBD)* Walk query through segments via ``F_S`` / ``F_r`` -> ``psi_l``;
-   per-segment score; sum.
+6. Phase 1: walk query backwards via F_S to build u_0..u_{L-2} at
+   ``<run>/segment_{l}/u/`` (u_{L-1} is just the top-level query).
+7. Phase 2: per-segment F_r on u_l to build psi_l at
+   ``<run>/segment_{l}/psi/``.
+8. Phase 3: per-segment scores at ``<run>/segment_{l}/scores/``, summed
+   into ``<run>/scores.npy``.
 """
 
 import gc
@@ -34,10 +38,16 @@ from .segment_aggregation import (
     aggregate_segment_covariances,
     aggregate_segment_lambdas,
 )
+from .source_math import (
+    compute_eta_K_per_segment,
+    score_per_segment_and_aggregate,
+    walk_query_phase1,
+    walk_query_phase2,
+)
 
 # Total number of steps in the full SOURCE pipeline. Used only for the
 # user-facing "Step k/N_TOTAL_STEPS:" prefix. Bump as steps land.
-_N_TOTAL_STEPS = 6
+_N_TOTAL_STEPS = 8
 
 
 def approx_unrolling_pipeline(
@@ -80,6 +90,8 @@ def approx_unrolling_pipeline(
             f"{n_ckpts / n_segments:.3f} per segment."
         )
 
+    eta_K_per_segment = compute_eta_K_per_segment(approx_unrolling_cfg)
+
     logger.info("=" * 70)
     logger.info(f"SOURCE pipeline -> {index_cfg.run_path}")
     logger.info(f"  base model        : {index_cfg.model}")
@@ -121,8 +133,7 @@ def approx_unrolling_pipeline(
     # ── Step 3: Per-checkpoint lambda in segment eigenbasis ───────────────
     if hessian_cfg.ev_correction:
         logger.info(
-            f"Step 3/{_N_TOTAL_STEPS}: "
-            f"Per-checkpoint lambda using segment eigvecs..."
+            f"Step 3/{_N_TOTAL_STEPS}: Per-checkpoint lambda using segment eigvecs..."
         )
         precompute_checkpoint_averaged_lambdas(
             index_cfg,
@@ -169,9 +180,39 @@ def approx_unrolling_pipeline(
         query_cfg.skip_hessians = True
         build(query_cfg, PreprocessConfig(aggregation="mean"))
 
-    # ── Step 6: TBD ───────────────────────────────────────────────────────
-    # 6. Walk query through segments via F_S / F_r -> psi_l; per-segment score.
+    # ── Step 6: Phase 1 -- walk query backwards via F_S ───────────────────
     logger.info(
-        f"[SOURCE pipeline] steps 1-5 complete. "
-        f"Step {_N_TOTAL_STEPS} not yet implemented."
+        f"Step 6/{_N_TOTAL_STEPS}: "
+        f"Phase 1 -- walking query backwards via F_S to build u_0..u_(L-1)..."
     )
+    logger.info(f"  eta_K per segment: {eta_K_per_segment}")
+    u_paths = walk_query_phase1(
+        run_path=index_cfg.run_path,
+        method=hessian_cfg.method,
+        eta_K_per_segment=eta_K_per_segment,
+        distributed=index_cfg.distributed,
+    )
+
+    # ── Step 7: Phase 2 -- per-segment F_r to build psi_0..psi_(L-1) ──────
+    logger.info(
+        f"Step 7/{_N_TOTAL_STEPS}: "
+        f"Phase 2 -- per-segment F_r on u_l to build psi_0..psi_(L-1)..."
+    )
+    psi_paths = walk_query_phase2(
+        run_path=index_cfg.run_path,
+        method=hessian_cfg.method,
+        eta_K_per_segment=eta_K_per_segment,
+        u_paths=u_paths,
+        distributed=index_cfg.distributed,
+    )
+
+    # ── Step 8: Phase 3 -- per-segment scoring + sum ──────────────────────
+    logger.info(
+        f"Step 8/{_N_TOTAL_STEPS}: " f"Phase 3 -- per-segment scoring + aggregation..."
+    )
+    out_path = score_per_segment_and_aggregate(
+        index_cfg=index_cfg,
+        psi_paths=psi_paths,
+        final_checkpoint=str(approx_unrolling_cfg.checkpoints[-1]),
+    )
+    logger.info(f"[SOURCE pipeline] DONE. Final scores at {out_path}")
