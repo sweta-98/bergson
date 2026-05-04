@@ -549,6 +549,14 @@ class ApproxUnrollingConfig(Serializable):
     lr: float = 1e-5
     """Learning rate to use for the approximate unrolling optimization."""
 
+    lr_list: list[float] = field(default_factory=list)
+    """Per-segment average LR; length must == segments. If empty,
+    inferred from the training run's log_history.json."""
+
+    step_size_list: list[int] = field(default_factory=list)
+    """Per-segment optimizer step count; length must == segments. If
+    empty, inferred from per-checkpoint step counts."""
+
     query: DataConfig = field(default_factory=DataConfig)
     """Query dataset spec; mean gradient at the final checkpoint."""
 
