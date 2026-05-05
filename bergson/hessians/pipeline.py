@@ -73,7 +73,6 @@ def hessian_pipeline(
         hessian_index_cfg.run_path = hessian_path
         _validate(hessian_index_cfg)
 
-        hessian_cfg.ev_correction = True
         approximate_hessians(hessian_index_cfg, hessian_cfg)
 
     # ── Step 3: Apply inverse Hessian to the mean query gradient ──────────
