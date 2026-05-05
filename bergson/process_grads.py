@@ -5,21 +5,17 @@ from typing import Literal
 
 import torch
 
-from bergson.config import HessianConfig
 from bergson.gradients import GradientProcessor
+from bergson.hessians.io import hessian_method
 from bergson.utils.math import compute_lambda, damped_psd_power
 
 
 def assert_autocorrelation_hessian(path: Path) -> None:
     """Verify that ``path`` contains an autocorrelation hessian."""
-    cfg_path = path / "hessian_config.yaml"
-    assert cfg_path.exists(), f"Missing 'hessian_config.yaml' in '{path}'."
-
-    hessian_cfg = HessianConfig.load_yaml(cfg_path)
-    assert hessian_cfg.method == "autocorrelation", (
-        f"Hessian at '{path}' was computed with method "
-        f"'{hessian_cfg.method}'; mix_autocorrelation_matrices only "
-        f"supports autocorrelation."
+    method = hessian_method(path)
+    assert method == "autocorrelation", (
+        f"Hessian at '{path}' was computed with method '{method}'; "
+        f"mix_autocorrelation_matrices only supports autocorrelation."
     )
 
 

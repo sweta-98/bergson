@@ -75,7 +75,23 @@ class Ekfac(Serializable):
 
 @dataclass
 class Hessian(Serializable):
-    """Approximate Hessian matrices using KFAC or EKFAC."""
+    """Approximate Hessian matrices using KFAC or EKFAC.
+
+    Output layout (consistent across methods)::
+
+        <run_path>/<method>/
+            hessian_config.yaml   # records ``method`` and other settings
+            index_config.yaml
+            ...method-specific artifacts...
+
+    K-FAC family methods write sharded safetensors of the Kronecker factors
+    and (when ``ev_correction``) the eigenvalue correction. Autocorrelation
+    writes the per-module Hessians plus their eigendecomposition through
+    ``GradientProcessor.save``. In both cases the saved
+    ``hessian_config.yaml`` is the canonical way to identify which method
+    produced a given directory; use ``bergson.hessians.io.load_hessian_config``
+    to read it back.
+    """
 
     hessian_cfg: HessianConfig
     index_cfg: IndexConfig
@@ -86,6 +102,12 @@ class Hessian(Serializable):
         validate_run_path(self.index_cfg)
 
         if self.hessian_cfg.method == "autocorrelation":
+            # Mirror the run_path/<method>/ layout that approximate_hessians uses
+            # for K-FAC family methods, so consumers can dispatch on method
+            # without having to know which subdirectory holds the artifacts.
+            self.index_cfg.run_path = (
+                self.index_cfg.run_path + f"/{self.hessian_cfg.method}"
+            )
             self.index_cfg.skip_index = True
             self.index_cfg.skip_hessians = False
             build(self.index_cfg, PreprocessConfig())
