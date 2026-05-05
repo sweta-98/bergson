@@ -363,7 +363,10 @@ def save_uncorrected_eigenvalues(
         total_processed = total_processed.to(device)
 
     payload: dict[str, Tensor] = {}
-    for key, eva_g_shard in eva_g_local.items():
+    # Sort: each rank's all_gather below must visit keys in the same order or
+    # NCCL collectives mismatch across ranks (set-derived dicts hash differently
+    # under per-process PYTHONHASHSEED randomization).
+    for key, eva_g_shard in sorted(eva_g_local.items()):
         eva_g_shard = eva_g_shard.to(device)
         eva_a_shard = eva_a_local[key].to(device)
 

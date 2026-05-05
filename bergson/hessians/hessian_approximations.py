@@ -154,6 +154,7 @@ def hessian_worker(
     model, peft_target_modules = setup_model_and_peft(index_cfg)
     if target_modules is None:
         target_modules = peft_target_modules
+    assert target_modules is not None
 
     kwargs = {
         "model": model,
@@ -169,9 +170,8 @@ def hessian_worker(
 
     if hessian_cfg.method == "identity":
         layer_dims = {
-            name: tuple(mod.weight.shape)
-            for name, mod in model.named_modules()
-            if name in target_modules
+            name: tuple(model.get_submodule(name).weight.shape)
+            for name in target_modules
         }
         dtype = convert_precision_to_torch(hessian_cfg.hessian_dtype)
         save_identity_factors(
@@ -234,10 +234,10 @@ def hessian_worker(
     if hessian_cfg.method == "foof":
         # F_FOOF = E[aaᵀ] ⊗ I. Synthesise identity Q_G and eva_g = 1 to reuse
         # the standard apply path.
+        # named_modules() returns un-stripped PEFT paths; get_submodule resolves
+        # the stripped target_modules names via PEFT's __getattr__ shim.
         out_dims = {
-            name: mod.weight.shape[0]
-            for name, mod in model.named_modules()
-            if name in target_modules
+            name: model.get_submodule(name).weight.shape[0] for name in target_modules
         }
         dtype = convert_precision_to_torch(hessian_cfg.hessian_dtype)
         save_identity_eigen(
