@@ -36,7 +36,7 @@ def test_reduce_cli(tmp_path: Path):
             "--aggregation",
             "mean",
             "--unit_normalize",
-            "--skip_preconditioners",
+            "--skip_hessians",
             "--token_batch_size",
             "1024",
         ],
@@ -65,7 +65,7 @@ def test_programmatic_reduce(tmp_path: Path):
         run_path=str(tmp_path / "reduction"),
         data=DataConfig(truncation=True, split="train[:100]"),
         model="EleutherAI/pythia-14m",
-        skip_preconditioners=True,
+        skip_hessians=True,
         token_batch_size=1024,
     )
 
@@ -78,7 +78,7 @@ def test_programmatic_reduce(tmp_path: Path):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_reduce_with_preconditioning(tmp_path: Path, model, dataset):
-    # Step 1: build an index WITH preconditioners
+    # Step 1: build an index WITH hessians
     build_cfg = IndexConfig(run_path=str(tmp_path / "build"), token_batch_size=1024)
 
     collect_gradients(
@@ -90,12 +90,12 @@ def test_reduce_with_preconditioning(tmp_path: Path, model, dataset):
 
     # Step 2: reduce with preconditioning pointing at the built index
     preprocess_cfg = PreprocessConfig(
-        aggregation="mean", preconditioner_path=str(build_cfg.partial_run_path)
+        aggregation="mean", hessian_path=str(build_cfg.partial_run_path)
     )
     reduce_index_cfg = IndexConfig(
-        run_path=str(tmp_path / "reduce_precond"),
+        run_path=str(tmp_path / "reduce_hess"),
         token_batch_size=1024,
-        skip_preconditioners=True,
+        skip_hessians=True,
     )
 
     collect_gradients(
@@ -117,7 +117,7 @@ def test_in_memory_reduce(tmp_path: Path, model, dataset):
     model.cuda()
     cfg = IndexConfig(
         run_path=str(tmp_path / "reduction"),
-        skip_preconditioners=True,
+        skip_hessians=True,
         token_batch_size=1024,
     )
     cfg.partial_run_path.mkdir(parents=True, exist_ok=True)

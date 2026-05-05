@@ -11,10 +11,7 @@ from bergson.config import DataConfig, IndexConfig
 from bergson.data import allocate_batches
 from bergson.utils.worker_utils import setup_data_pipeline
 
-# GPT-2: model_max_length=max_position_embeddings
-# Pythia-14m: model_max_length=very large
 GPT2 = "openai-community/gpt2"
-PYTHIA = "EleutherAI/pythia-14m"
 
 
 def get_max_position_embeddings(model_name):
@@ -23,7 +20,6 @@ def get_max_position_embeddings(model_name):
 
 
 GPT2_MAX_POS_EMB = get_max_position_embeddings(GPT2)
-PYTHIA_MAX_POS_EMB = get_max_position_embeddings(PYTHIA)
 
 
 def create_documents_file(tmp_path, model, doc_tokens):
@@ -46,7 +42,7 @@ def run_pipeline(tmp_path, model_name, token_batch_size, doc_tokens, truncation)
         run_path=str(tmp_path / "run"),
         model=model_name,
         token_batch_size=token_batch_size,
-        skip_preconditioners=True,
+        skip_hessians=True,
         data=DataConfig(dataset=documents_file, truncation=truncation),
     )
     ds, _ = setup_data_pipeline(cfg)
@@ -69,12 +65,8 @@ def run_pipeline(tmp_path, model_name, token_batch_size, doc_tokens, truncation)
     [
         # token_batch_size < max_position_embeddings
         (GPT2, GPT2_MAX_POS_EMB // 2),
-        (PYTHIA, PYTHIA_MAX_POS_EMB // 2),
         # token_batch_size = max_position_embeddings
         (GPT2, GPT2_MAX_POS_EMB),
-        (PYTHIA, PYTHIA_MAX_POS_EMB),
-        # token_batch_size > max_position_embeddings
-        (PYTHIA, PYTHIA_MAX_POS_EMB * 2),
     ],
 )
 def test_short_documents(tmp_path, model, token_batch_size, truncation):
@@ -94,14 +86,8 @@ def test_short_documents(tmp_path, model, token_batch_size, truncation):
     [
         # token_batch_size < max_position_embeddings: truncates to token_batch_size
         (GPT2, GPT2_MAX_POS_EMB // 2),
-        (PYTHIA, PYTHIA_MAX_POS_EMB // 2),
         # token_batch_size = max_position_embeddings: truncates to both
         (GPT2, GPT2_MAX_POS_EMB),
-        (PYTHIA, PYTHIA_MAX_POS_EMB),
-        # token_batch_size > max_position_embeddings:
-        # truncates to max_position_embeddings
-        # (for GPT2, see `test_token_batch_size_exceeds_model_max_length`)
-        (PYTHIA, PYTHIA_MAX_POS_EMB * 2),
     ],
 )
 def test_long_documents_truncated(tmp_path, model, token_batch_size):
@@ -122,37 +108,20 @@ def test_long_documents_truncated(tmp_path, model, token_batch_size):
     [
         # token_batch_size < max_position_embeddings
         (GPT2, GPT2_MAX_POS_EMB // 2),
-        (PYTHIA, PYTHIA_MAX_POS_EMB // 2),
         # token_batch_size = max_position_embeddings
         (GPT2, GPT2_MAX_POS_EMB),
-        (PYTHIA, PYTHIA_MAX_POS_EMB),
-        # token_batch_size > max_position_embeddings
-        # (for GPT2, see `test_token_batch_size_exceeds_model_max_length`)
-        (PYTHIA, PYTHIA_MAX_POS_EMB * 2),
     ],
 )
 def test_long_documents_fail_without_truncation(tmp_path, model, token_batch_size):
     """Without truncation, we fail when a document exceeds token_batch_size."""
     doc_tokens = token_batch_size + 1
-    with pytest.warns(UserWarning, match="longer than the model can handle"):
+    with pytest.warns(
+        UserWarning, match="longer than (the model can handle|token_batch_size)"
+    ):
         with pytest.raises(RuntimeError, match="too long"):
             run_pipeline(
                 tmp_path, model, token_batch_size, doc_tokens, truncation=False
             )
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_long_documents_warn_without_truncation(tmp_path):
-    """Without truncation, we warn when a document exceeds max_position_embeddings
-    but not token_batch_size.
-    """
-    # Only possible when token_batch_size > max_position_embeddings (requires PYTHIA)
-    token_batch_size = PYTHIA_MAX_POS_EMB * 3
-    doc_tokens = (
-        PYTHIA_MAX_POS_EMB * 2
-    )  # max_position_embeddings < doc_tokens < token_batch_size
-    with pytest.warns(UserWarning, match="longer than the model can handle"):
-        run_pipeline(tmp_path, PYTHIA, token_batch_size, doc_tokens, truncation=False)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

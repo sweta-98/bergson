@@ -9,7 +9,6 @@ SUBCOMMANDS = [
     "ekfac",
     "hessian",
     "magic",
-    "preconditioners",
     "query",
     "reduce",
     "score",

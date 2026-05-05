@@ -18,9 +18,11 @@ from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
 
-from ..config import TrainingConfig
+from ..config import TrainingConfig, ValidationConfig
+from ..data import load_scores
 from ..distributed import grad_tree, launch_distributed_run
 from ..utils.logging import wandb_log_fn
+from ..utils.utils import get_device, get_device_index
 from ..utils.worker_utils import (
     setup_data_pipeline,
     setup_model_and_peft,
@@ -118,7 +120,7 @@ def prepare_trainer(
         attn_implementation="eager",
         apply_fsdp=False,
     )
-    model.to(f"cuda:{rank}")  # type: ignore[reportArgumentType]
+    model.to(get_device(rank))  # type: ignore[reportArgumentType]
 
     if target_modules:
         # Only train the PEFT adapter parameters
@@ -169,37 +171,87 @@ def prepare_trainer(
     return trainer, fwd_state, model
 
 
+def attach_doc_ids_if_missing(dataset: Dataset) -> Dataset:
+    """Ensure the dataset has a ``doc_ids`` column.
+
+    ``doc_ids`` is a per-row list of length ``max_seq_len`` giving the
+    document id of every token position in that row. Chunked/packed
+    datasets already have it (multiple docs may share a chunk). For
+    one-doc-per-row datasets the column is synthesized as
+    ``[row_index] * max_seq_len`` so the two cases look identical to
+    downstream code (DataStream indexing, per-doc aggregation via
+    ``scatter_add(doc_ids, scores)``).
+
+    No-op if ``doc_ids`` is already present.
+    """
+    if "doc_ids" in dataset.column_names:
+        return dataset
+    if "length" in dataset.column_names:
+        seq_len = max(dataset["length"])
+    else:
+        seq_len = max(len(row) for row in dataset["input_ids"])
+    return dataset.map(
+        lambda _, idx: {"doc_ids": [idx] * seq_len},
+        with_indices=True,
+        desc="Attaching doc_ids",
+    )
+
+
 def pad_dataset_to_batch_size(
     dataset: Dataset,
     batch_size: int,
     num_docs: int,
     label: str,
     global_rank: int,
-) -> tuple[Dataset, int, int]:
+) -> tuple[Dataset, int, int, int]:
     """Pad dataset to be divisible by batch_size by repeating the last example.
 
-    Returns (padded_dataset, num_docs, pad_count). num_docs is updated only when
-    the dataset has no "doc_ids" column (i.e. each row is its own document).
-    pad_count is 0 if no padding was needed.
+    Returns (padded_dataset, num_docs, pad_count, weight_pad_count).
+
+    `pad_count` is the number of rows appended to the dataset (0 if unchanged).
+    `weight_pad_count` is the number of trailing entries of a *1D* per-doc
+    weight tensor that should be zeroed to silence the pad rows' training
+    contribution.
+
+    - If the dataset has a "doc_ids" column, `.select(total - 1, ...)` copies
+      the last doc's doc_ids into every pad row. Zeroing the last `pad_count`
+      entries of a weights-indexed-by-doc_id tensor would silence real docs,
+      so we instead route pad rows to a fresh synthetic doc id (=num_docs),
+      bump num_docs by 1, and set `weight_pad_count = 1`.
+    - Otherwise rows are self-identified docs: num_docs becomes the padded
+      length and `weight_pad_count = pad_count` zeros the pad rows directly.
+
+    In per-token (2D) mode callers should zero `weights[-pad_count:]` instead
+    — `weight_pad_count` applies only to 1D per-doc weights.
     """
     remainder = len(dataset) % batch_size
     if not remainder:
-        return dataset, num_docs, 0
+        return dataset, num_docs, 0, 0
 
     pad_count = batch_size - remainder
     total = len(dataset)
     pad_indices = list(range(total)) + [total - 1] * pad_count
     dataset = dataset.select(pad_indices)
 
-    # Update the number of documents to include the padded examples
-    if "doc_ids" not in dataset.column_names:
+    if "doc_ids" in dataset.column_names:
+        synthetic_doc_id = num_docs
+        new_doc_ids = [
+            row if i < total else [synthetic_doc_id] * len(row)
+            for i, row in enumerate(dataset["doc_ids"])
+        ]
+        dataset = dataset.remove_columns("doc_ids").add_column("doc_ids", new_doc_ids)
+        num_docs += 1
+        weight_pad_count = 1
+    else:
         num_docs = len(dataset)
+        weight_pad_count = pad_count
+
     if global_rank == 0:
         print(
             f"{label}: padded {pad_count}/{total} examples "
             f"(weight=0) to fill last batch"
         )
-    return dataset, num_docs, pad_count
+    return dataset, num_docs, pad_count, weight_pad_count
 
 
 def worker(
@@ -207,12 +259,13 @@ def worker(
     rank: int,
     world_size: int,
     train_dataset: Dataset,
-    query_dataset: Dataset,
+    query_dataset: Dataset | None,
     num_train_docs: int,
     num_query_docs: int,
-    run_cfg: MagicConfig,
+    run_cfg: TrainingConfig,
+    score_path: str = "",
 ):
-    torch.cuda.set_device(rank)
+    torch.cuda.set_device(get_device_index(rank))
 
     if world_size > 1:
         addr = os.environ.get("MASTER_ADDR", "localhost")
@@ -221,7 +274,7 @@ def worker(
         dist.init_process_group(
             "cpu:gloo,cuda:nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{rank}"),
+            device_id=torch.device(get_device(rank)),
             rank=rank,
             world_size=world_size,
         )
@@ -233,11 +286,13 @@ def worker(
     assert run_cfg.batch_size % world_size == 0
 
     # Pad train dataset to be divisible by batch_size (weight=0 for padding)
-    train_dataset, num_train_docs, pad_count = pad_dataset_to_batch_size(
-        train_dataset, run_cfg.batch_size, num_train_docs, "Train", global_rank
+    train_dataset, num_train_docs, pad_count, weight_pad_count = (
+        pad_dataset_to_batch_size(
+            train_dataset, run_cfg.batch_size, num_train_docs, "Train", global_rank
+        )
     )
 
-    if run_cfg.per_token:
+    if getattr(run_cfg, "per_token", False):
         seq_len = run_cfg.data.chunk_length
         if seq_len <= 0:
             seq_len = max(train_dataset["length"])
@@ -250,16 +305,22 @@ def worker(
     stream = DataStream(
         train_dataset,
         run_cfg.batch_size,
-        device=f"cuda:{rank}",
+        device=get_device(rank),
         input_key=run_cfg.data.prompt_column,
         weight_shape=w_shape,
     )
     if pad_count:
-        stream.weights.data[-pad_count:] = 0.0
+        if stream.weights.ndim == 1:
+            stream.weights.data[-weight_pad_count:] = 0.0
+        else:
+            stream.weights.data[-pad_count:] = 0.0
 
     log_fn = None
     if run_cfg.wandb_project and global_rank == 0:
         log_fn = wandb_log_fn(run_cfg.wandb_project, config=asdict(run_cfg))
+
+    if dist.is_initialized():
+        dist.barrier()
 
     schedule = run_cfg.lr_schedule.get_schedule(len(stream))
     trainer, fwd_state, model = prepare_trainer(
@@ -283,7 +344,7 @@ def worker(
         debug=run_cfg.debug,
         inplace=True,
         save_dir=ckpts_path,
-        save_mode=run_cfg.save_mode,
+        save_mode=getattr(run_cfg, "save_mode", "sqrt"),
         log_fn=log_fn,
         resume=resume,
         fsdp=run_cfg.fsdp,
@@ -292,9 +353,19 @@ def worker(
     if save_fut is not None:
         save_fut.result()  # ensure state0 is saved before validation loads it
 
+    # If no query dataset is provided, skip backward and validation entirely
+    if query_dataset is None:
+        return
+    elif not isinstance(run_cfg, ValidationConfig):
+        raise RuntimeError(
+            "run_cfg must be a ValidationConfig if query_dataset is provided"
+        )
+
     # Pad query dataset to be divisible by batch_size (weight=0 for padding)
-    query_dataset, num_query_docs, query_pad_count = pad_dataset_to_batch_size(
-        query_dataset, run_cfg.batch_size, num_query_docs, "Query", global_rank
+    query_dataset, num_query_docs, query_pad_count, query_weight_pad_count = (
+        pad_dataset_to_batch_size(
+            query_dataset, run_cfg.batch_size, num_query_docs, "Query", global_rank
+        )
     )
     if len(query_dataset) < run_cfg.batch_size:
         raise ValueError(
@@ -307,52 +378,81 @@ def worker(
     query_stream = DataStream(
         query_dataset,
         run_cfg.batch_size,
-        device=f"cuda:{rank}",
+        device=get_device(rank),
         input_key=run_cfg.query.prompt_column,
         weight_shape=(num_query_docs,),
     )
     if query_pad_count:
-        query_stream.weights.data[-query_pad_count:] = 0.0
+        # query_stream.weights is always 1D (weight_shape=(num_query_docs,))
+        query_stream.weights.data[-query_weight_pad_count:] = 0.0
 
     query_grads, baseline = compute_query_gradients(
         fwd_state, model, query_stream, run_cfg.query_method, run_cfg.fsdp
     )
 
-    stream.requires_grad = True
-    opt_grads = [
-        torch.zeros_like(buf)
-        for buf in tree_iter(fwd_state.opt_state)
-        if isinstance(buf, torch.Tensor) and buf.is_floating_point()
-    ]
-    bwd_state = BackwardState(query_grads, opt_grads, torch.zeros_like(stream.weights))
+    if not score_path:
+        # Sanity check
+        if not isinstance(run_cfg, MagicConfig):
+            raise RuntimeError("run_cfg must be a MagicConfig to compute scores")
 
-    bwd_state = trainer.backward(
-        ckpts_path,
-        stream,
-        bwd_state,
-        fwd_state,
-        debug=run_cfg.debug,
-        inplace=True,
-        fsdp=run_cfg.fsdp,
-        resume=run_cfg.resume,
-        save_every=run_cfg.backward_save_every,
-        save_mode=run_cfg.save_mode,
-    )
-    if world_size > 1:
-        dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.SUM)
+        stream.requires_grad = True
+        opt_grads = [
+            torch.zeros_like(buf)
+            for buf in tree_iter(fwd_state.opt_state)
+            if isinstance(buf, torch.Tensor) and buf.is_floating_point()
+        ]
+        bwd_state = BackwardState(
+            query_grads,
+            opt_grads,
+            torch.zeros_like(stream.weights),
+        )
 
-    scores = bwd_state.weight_grads.cpu()
-    if pad_count:
-        scores = scores[:-pad_count]
-    if global_rank == 0:
-        print(f"Baseline loss: {baseline}")
+        bwd_state = trainer.backward(
+            ckpts_path,
+            stream,
+            bwd_state,
+            fwd_state,
+            debug=run_cfg.debug,
+            inplace=True,
+            fsdp=run_cfg.fsdp,
+            resume=run_cfg.resume,
+            save_every=run_cfg.backward_save_every,
+            save_mode=run_cfg.save_mode,
+        )
+        if world_size > 1:
+            dist.all_reduce(bwd_state.weight_grads, op=dist.ReduceOp.SUM)
 
-        summ = describe(scores.flatten())
-        print(f"Score summary: {summ}")
+        scores = bwd_state.weight_grads.cpu()
+        if pad_count:
+            if scores.ndim == 1:
+                scores = scores[:-weight_pad_count]
+            else:
+                scores = scores[:-pad_count]
 
-        score_path = os.path.join(run_cfg.run_path, "scores.pt")
-        torch.save(scores, score_path)
-        print(f"Saved attribution scores to {score_path}")
+        if global_rank == 0:
+            print(f"Baseline loss: {baseline}")
+
+            summ = describe(scores.flatten())
+            print(f"Score summary: {summ}")
+
+            score_path = os.path.join(run_cfg.run_path, "scores.pt")
+            torch.save(scores, score_path)
+            print(f"Saved attribution scores to {score_path}")
+    elif os.path.isdir(score_path):
+        scores = torch.from_numpy(load_scores(Path(score_path))[:])
+    else:
+        scores = torch.load(score_path, map_location="cpu")
+
+        # Per-token scores are indexed by (shuffled_chunk_idx, token_idx).
+        # Save doc_ids alongside so downstream can aggregate per-doc with
+        # one scatter_add and no reference to the raw dataset or seed.
+        if scores.ndim == 2:
+            doc_ids = torch.tensor(train_dataset["doc_ids"])
+            if pad_count:
+                doc_ids = doc_ids[:-pad_count]
+            doc_ids_path = os.path.join(run_cfg.run_path, "doc_ids.pt")
+            torch.save(doc_ids, doc_ids_path)
+            print(f"Saved doc_ids to {doc_ids_path}")
 
     stream.requires_grad = False
 
@@ -360,14 +460,13 @@ def worker(
     diffs = []
     score_sums = []
 
-    if run_cfg.subset_jitter_std > 0.0:
+    if run_cfg.subset_strategy == "random":
         rng = torch.Generator().manual_seed(run_cfg.seed)
-
-        scale = scores.std()
-        jitter = torch.randn_like(scores, generator=rng) * run_cfg.subset_jitter_std
-        perm = torch.argsort(scores + jitter * scale)
-    else:
+        perm = torch.randperm(len(scores), generator=rng)
+    elif run_cfg.subset_strategy == "sorted":
         perm = scores.argsort()
+    else:
+        raise ValueError(f"Unsupported subset strategy: {run_cfg.subset_strategy}")
 
     # Shuffle the order of the subsets so that the estimate of correlation on the
     # progress bar is unbiased. This does not change the final correlation since all
@@ -391,7 +490,10 @@ def worker(
 
         stream.weights.fill_(1.0)
         if pad_count:
-            stream.weights.data[-pad_count:] = 0.0
+            if stream.weights.ndim == 1:
+                stream.weights.data[-weight_pad_count:] = 0.0
+            else:
+                stream.weights.data[-pad_count:] = 0.0
         stream.weights[subset] = 0.0
 
         for x in stream:
@@ -446,7 +548,7 @@ def worker(
         )
 
 
-def run_magic(run_cfg: MagicConfig):
+def run_magic(run_cfg: TrainingConfig, *, score_path: str = ""):
     run_path = Path(run_cfg.run_path)
     is_main_node = int(os.environ.get("SLURM_PROCID", 0)) == 0
     multi_node = run_cfg.distributed.nnode > 1
@@ -473,11 +575,15 @@ def run_magic(run_cfg: MagicConfig):
             time.sleep(0.5)
 
     train_ds, train_n = setup_data_pipeline(run_cfg)
+    train_ds = attach_doc_ids_if_missing(train_ds)
 
     # Shuffle the train_ds with the seed.
     train_ds = train_ds.shuffle(seed=run_cfg.seed)
 
-    query_ds, query_n = setup_data_pipeline(run_cfg, run_cfg.query)
+    if isinstance(run_cfg, ValidationConfig):
+        query_ds, query_n = setup_data_pipeline(run_cfg, run_cfg.query)
+    else:
+        query_ds, query_n = None, 0
 
     if barrier is not None and is_main_node:
         barrier.touch()
@@ -485,7 +591,7 @@ def run_magic(run_cfg: MagicConfig):
     launch_distributed_run(
         "run_magic",
         worker,
-        [train_ds, query_ds, train_n, query_n, run_cfg],
+        [train_ds, query_ds, train_n, query_n, run_cfg, score_path],
         run_cfg.distributed,
     )
 

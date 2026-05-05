@@ -18,9 +18,10 @@ from datasets import (
     IterableDatasetDict,
     concatenate_datasets,
     load_dataset,
+    load_from_disk,
 )
 from numpy.lib.recfunctions import structured_to_unstructured
-from numpy.typing import DTypeLike
+from numpy.typing import DTypeLike, NDArray
 from transformers import PreTrainedTokenizerFast, logging
 
 from .config import DataConfig
@@ -429,13 +430,14 @@ def load_data_string(
 ) -> Dataset:
     """Load a dataset from a string identifier or path."""
     if data_str.endswith(".csv"):
-        ds = Dataset.from_csv(data_str)
+        ds = load_dataset("csv", data_files=data_str, split=split)
     elif data_str.endswith(".json") or data_str.endswith(".jsonl"):
-        ds = Dataset.from_json(data_str)
-    elif Path(data_str).is_dir() and (Path(data_str) / "dataset_info.json").exists():
-        ds = Dataset.load_from_disk(data_str, keep_in_memory=False)
-        if isinstance(ds, DatasetDict):
-            ds = ds[split]
+        ds = load_dataset("json", data_files=data_str, split=split)
+    elif Path(data_str).is_dir() and (
+        (Path(data_str) / "dataset_info.json").exists()
+        or (Path(data_str) / "dataset_dict.json").exists()
+    ):
+        ds = load_from_disk(data_str, keep_in_memory=False)
     else:
         try:
             kwargs = simple_parse_kwargs_string(data_kwargs)
@@ -448,9 +450,17 @@ def load_data_string(
         except ValueError as e:
             # Automatically use load_from_disk if appropriate
             if "load_from_disk" in str(e):
-                ds = Dataset.load_from_disk(data_str, keep_in_memory=False)
+                ds = load_from_disk(data_str, keep_in_memory=False)
             else:
                 raise e
+
+    if isinstance(ds, DatasetDict):
+        if "[" in split or "+" in split:
+            raise NotImplementedError(
+                f"Split slicing/concatenation expressions are not supported "
+                f"for load_from_disk paths: {split!r}"
+            )
+        ds = ds[split]
 
     ds = assert_type(Dataset, ds)
     return ds
@@ -528,11 +538,11 @@ class Scores:
     def __len__(self) -> int:
         return len(self.mmap)
 
-    def __getitem__(self, key: Any) -> Any:
+    def __getitem__(self, key: Any) -> NDArray:
         items = self.mmap[key]
         return structured_to_unstructured(items[self._score_fields])
 
-    def get(self, key: Any, score_idx: int = 0) -> Any:
+    def get(self, key: Any, score_idx: int = 0) -> NDArray:
         """Get scores for a specific score index."""
         return self.mmap[key][f"score_{score_idx}"]
 
@@ -542,9 +552,7 @@ class Scores:
         return all(np.all(self.mmap[f"written_{i}"]) for i in range(self.num_scores))
 
 
-def load_scores(
-    path: Path,
-) -> Scores:
+def load_scores(path: Path) -> Scores:
     bin_path = path / "scores.bin"
     info_path = path / "info.json"
 
@@ -654,24 +662,31 @@ def tokenize(
         return tokenizer(batch[args.prompt_column], **kwargs)
 
     # Make sure we only compute loss on the assistant's responses
-    # Chat templates already include special tokens (BOS/EOS) in the rendered
-    # string, so we must disable add_special_tokens to avoid duplicates.
     strings = tokenizer.apply_chat_template(convos, tokenize=False)
-    encodings = tokenizer(strings, add_special_tokens=False, **kwargs)
+    encodings = tokenizer(strings, **kwargs)
     labels_list: list[list[int]] = []
 
     for i, convo in enumerate(convos):
-        # Find the spans of the assistant's responses in the tokenized output
-        pos = 0
+        # Find the spans (start, end) of the assistant's responses in the tokens
         spans: list[tuple[int, int]] = []
 
-        for msg in convo:
+        # We use rfind to find the last match in the string so if the answer is
+        # duplicated in the user prompt we don't select that.
+
+        # We work backwards through the messages and restrict the search to not
+        # use previously matching substrings so if two assistant messages
+        # have the same content they won't both match the right-most substring.
+        search_end = len(strings[i])
+
+        for msg in reversed(convo):
             if msg["role"] != "assistant":
                 continue
 
             ans = msg["content"]
-            start = strings[i].rfind(ans, pos)
+            start = strings[i].rfind(ans, 0, search_end)
             if start < 0:
+                print("String under test: ", strings[i])
+                print("Substring search: ", ans)
                 raise RuntimeError(
                     "Failed to find completion in the chat-formatted conversation. "
                     "Make sure the chat template does not alter the completion, e.g. "
@@ -679,18 +694,35 @@ def tokenize(
                 )
 
             # move past this match
-            pos = start + len(ans)
+            end = start + len(ans)
 
-            start_token = encodings.char_to_token(i, start)
-            end_token = encodings.char_to_token(i, pos)
-            spans.append((start_token, end_token))
+            start_token_idx = encodings.char_to_token(i, start)
+            end_token_idx = encodings.char_to_token(i, end)
+            # When end falls on the last char, char_to_token returns None;
+            # look up the token for the previous char and advance by one.
+            if end_token_idx is None and end > 0:
+                prev = encodings.char_to_token(i, end - 1)
+                if prev is not None:
+                    end_token_idx = prev + 1
+            spans.append((start_token_idx, end_token_idx))
+
+            # Update the boundary; the next message must be found before this one
+            search_end = start
+
+        spans = list(reversed(spans))
 
         # Labels are -100 everywhere except where the assistant's response is
         tokens = encodings["input_ids"][i]
         labels = [-100] * len(tokens)
         for start, end in spans:
-            if start is not None and end is not None:
-                labels[start:end] = tokens[start:end]
+            if start is None:
+                # Entire span is beyond the truncation boundary, so we skip.
+                continue
+            if end is None:
+                # Span starts in-bounds but extends past truncation, so we
+                # label up to the end of the truncated sequence
+                end = len(tokens)
+            labels[start:end] = tokens[start:end]
 
         labels_list.append(labels)
 
@@ -771,7 +803,11 @@ def tokenize_and_chunk(
         token_chunks = [
             token_stream[i * chunk_size : (i + 1) * chunk_size] for i in range(n_chunks)
         ]
-        return {"input_ids": token_chunks, "doc_ids": doc_chunks}
+        return {
+            "input_ids": token_chunks,
+            "doc_ids": doc_chunks,
+            "length": [chunk_size] * n_chunks,
+        }
 
     # Cap parallelism so each worker gets enough documents to fill many chunks,
     # since tail tokens that don't fill a chunk are dropped per-worker.

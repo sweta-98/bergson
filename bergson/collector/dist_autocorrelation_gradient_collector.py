@@ -10,17 +10,17 @@ from torch import Tensor
 
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig
-from bergson.process_preconditioners import process_preconditioners
+from bergson.process_autocorrelation import process_autocorrelation_matrices
 from bergson.utils.utils import get_gradient_dtype
 
 
 @dataclass(kw_only=True)
-class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
+class GradientCollectorWithDistributedAutocorrelationMatrices(HookCollectorBase):
     """
     Collects per-sample gradients from model layers and writes them to disk.
-    Preconditioners are distributed across nodes, and data from each node is
-    distributed to each preconditioner at every step. This enables the computation
-    of preconditioners that are too large to fit on a single device.
+    Autocorrelation matrices are distributed across nodes, and data from each
+    node is distributed to each matrix at every step. This enables the
+    computation of matrices that are too large to fit on a single device.
 
     - For each forward/backward hook, we compute the the gradient or a low-rank
     approximation via random projections, if cfg.projection_dim is set.
@@ -40,7 +40,7 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
         """
         Initialize collector state.
         """
-        assert not self.cfg.skip_preconditioners
+        assert not self.cfg.skip_hessians
 
         assert isinstance(
             self.model.device, torch.device
@@ -89,11 +89,11 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
     @HookCollectorBase.split_attention_heads
     def backward_hook(self, module: nn.Module, g: Float[Tensor, "N S O"]):
         """Compute per-sample gradient and store for distributed
-        preconditioner exchange."""
+        hessian exchange."""
         name: str = module._name  # type: ignore[assignment]
         P = self._compute_gradient(module, g)
 
-        # Keep gradients in original dtype for preconditioner computation
+        # Keep gradients in original dtype for hessian computation
         self.mod_grads[name] = P
 
     def process_batch(self, indices: list[int], **kwargs):
@@ -102,9 +102,9 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
         assert losses is not None, "losses must be provided in kwargs"
 
         # Send gradients to owning ranks and compute outer products there
-        exchange_preconditioner_gradients(
+        exchange_hessian_gradients(
             self.mod_grads,
-            self.processor.preconditioners,
+            self.processor.hessians,
             self.module_to_rank,
             self.owned_modules,
             self.rank,
@@ -128,10 +128,10 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
             dist.reduce(self.per_doc_losses, dst=0)
 
         grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-        if self.processor.preconditioners:
-            process_preconditioners(
+        if self.processor.hessians:
+            process_autocorrelation_matrices(
                 self.processor,
-                self.processor.preconditioners,
+                self.processor.hessians,
                 len(self.data),
                 grad_sizes,
                 self.rank,
@@ -153,15 +153,15 @@ class GradientCollectorWithDistributedPreconditioners(HookCollectorBase):
             self.processor.save(self.cfg.partial_run_path)
 
 
-def exchange_preconditioner_gradients(
+def exchange_hessian_gradients(
     mod_grads: dict[str, torch.Tensor],
-    preconditioners: dict[str, torch.Tensor],
+    hessians: dict[str, torch.Tensor],
     module_to_rank: dict[str, int],
     owned_modules: set[str],
     rank: int,
 ):
     """
-    Send gradients to the ranks that own their preconditioners, and accumulate
+    Send gradients to the ranks that own their hessians, and accumulate
     outer products on the owning ranks.
     Each rank sends gradients for modules it doesn't own to the owning ranks,
     and receives gradients for modules it owns to compute outer products.
@@ -172,10 +172,10 @@ def exchange_preconditioner_gradients(
             continue
 
         g = g.float()
-        if name in preconditioners:
-            preconditioners[name].addmm_(g.mT, g)
+        if name in hessians:
+            hessians[name].addmm_(g.mT, g)
         else:
-            preconditioners[name] = g.mT @ g
+            hessians[name] = g.mT @ g
 
     if not dist.is_initialized():
         return
@@ -245,7 +245,7 @@ def exchange_preconditioner_gradients(
             feature_dim = mod_grads[name].shape[-1]
             g = flat.to(device, non_blocking=True).view(-1, feature_dim).float()
 
-            if name in preconditioners:
-                preconditioners[name].addmm_(g.mT, g)
+            if name in hessians:
+                hessians[name].addmm_(g.mT, g)
             else:
-                preconditioners[name] = g.mT @ g
+                hessians[name] = g.mT @ g

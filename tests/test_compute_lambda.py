@@ -9,7 +9,7 @@ def _make_eigen(eigvals: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return eigvals, torch.eye(d, dtype=eigvals.dtype)
 
 
-def test_identical_preconditioners():
+def test_identical_hessians():
     """When R_eval == R_train, σ_eval[k] == σ_train[k] so λ = 0.5."""
     eigvals = torch.arange(100, 0, -1, dtype=torch.float64)
     eigen = {"mod": _make_eigen(eigvals)}

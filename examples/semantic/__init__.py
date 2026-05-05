@@ -12,7 +12,7 @@ from .asymmetric import (
     AsymmetricConfig,
     AsymmetricMetrics,
     compute_asymmetric_metrics,
-    compute_style_preconditioner,
+    compute_style_hessian,
     create_asymmetric_dataset,
     create_asymmetric_index,
     print_metrics,
@@ -35,16 +35,16 @@ from .experiment import (
     create_index,
     finetune,
     main,
-    run_preconditioner_comparison,
+    run_hessian_comparison,
+)
+from .hessians import (
+    build_style_indices,
+    compute_between_hessian,
+    compute_between_hessian_covariance,
+    compute_between_hessian_means,
+    compute_mixed_hessian,
 )
 from .metrics import build_style_lookup, compute_metrics, compute_metrics_groupwise
-from .preconditioners import (
-    build_style_indices,
-    compute_between_preconditioner,
-    compute_between_preconditioner_covariance,
-    compute_between_preconditioner_means,
-    compute_mixed_preconditioner,
-)
 from .scoring import (
     compute_scores_fast,
     compute_scores_with_bergson,
@@ -64,16 +64,16 @@ __all__ = [
     "build_style_lookup",
     "compute_metrics_groupwise",
     "compute_metrics",
-    # Preconditioners
+    # Hessians
     "build_style_indices",
-    "compute_between_preconditioner_covariance",
-    "compute_between_preconditioner_means",
-    "compute_between_preconditioner",
-    "compute_mixed_preconditioner",
+    "compute_between_hessian_covariance",
+    "compute_between_hessian_means",
+    "compute_between_hessian",
+    "compute_mixed_hessian",
     # Experiment
     "create_index",
     "finetune",
-    "run_preconditioner_comparison",
+    "run_hessian_comparison",
     "main",
     # Asymmetric style experiment
     "AsymmetricConfig",
@@ -82,7 +82,7 @@ __all__ = [
     "create_asymmetric_index",
     "score_asymmetric_eval",
     "compute_asymmetric_metrics",
-    "compute_style_preconditioner",
+    "compute_style_hessian",
     "print_metrics",
     "run_asymmetric_experiment",
     # Attribute preservation experiment

@@ -6,12 +6,12 @@ from pathlib import Path
 from datasets import Dataset, DatasetDict, concatenate_datasets, load_from_disk
 
 from .data import create_data
-from .metrics import compute_metrics
-from .preconditioners import (
+from .hessians import (
     build_style_indices,
-    compute_between_preconditioner_means,
-    compute_mixed_preconditioner,
+    compute_between_hessian_means,
+    compute_mixed_hessian,
 )
+from .metrics import compute_metrics
 from .scoring import compute_scores_fast
 
 
@@ -40,7 +40,7 @@ def create_index(dataset_name: str, analysis_model_name: str) -> None:
         "--fsdp",
         "--projection_dim",
         "16",
-        "--skip_preconditioners",
+        "--skip_hessians",
     ]
 
     print(" ".join(cmd))
@@ -93,19 +93,19 @@ def finetune(
     print(result.stderr)
 
 
-def run_preconditioner_comparison() -> dict[str, dict[str, float]]:
+def run_hessian_comparison() -> dict[str, dict[str, float]]:
     """Compare three preconditioning strategies on pirate+shakespeare data.
 
     Strategies:
-    1. baseline: Preconditioner computed on whole combined dataset
+    1. baseline: Hessian computed on whole combined dataset
     2. mixed: 0.5 * R_pirate + 0.5 * R_shakespeare
     3. r_between: R_pirate + R_shakespeare - R_combined (isolates style direction)
-    4. no_precond: No preconditioning (control)
+    4. no_hess: No preconditioning (control)
 
     Returns:
         Dictionary mapping strategy names to their computed statistics.
     """
-    base_path = Path("runs/precond_comparison")
+    base_path = Path("runs/hess_comparison")
 
     # 1. Build indices if needed
     print("\n" + "=" * 60)
@@ -113,31 +113,31 @@ def run_preconditioner_comparison() -> dict[str, dict[str, float]]:
     print("=" * 60)
     build_style_indices()
 
-    # 2. Compute derived preconditioners
+    # 2. Compute derived hessians
     print("\n" + "=" * 60)
-    print("STEP 2: Computing derived preconditioners")
+    print("STEP 2: Computing derived hessians")
     print("=" * 60)
-    compute_mixed_preconditioner(
+    compute_mixed_hessian(
         base_path / "pirate",
         base_path / "shakespeare",
         base_path / "mixed_50_50",
     )
     # Use means-based approach (more targeted at style direction)
-    compute_between_preconditioner_means(
+    compute_between_hessian_means(
         base_path / "pirate",
         base_path / "shakespeare",
         base_path / "between",
     )
 
-    # 3. Score with each preconditioner strategy (using fast index-vs-index scoring)
+    # 3. Score with each hessian strategy (using fast index-vs-index scoring)
     print("\n" + "=" * 60)
     print("STEP 3: Computing scores with each strategy")
     print("=" * 60)
     strategies: list[tuple[str | None, str]] = [
         ("combined", "baseline"),  # Standard: precondition with combined R
         ("mixed_50_50", "mixed"),  # 50-50 mix of style-specific Rs
-        ("between", "r_between"),  # Between-group preconditioner
-        (None, "no_precond"),  # No preconditioning (control)
+        ("between", "r_between"),  # Between-group hessian
+        (None, "no_hess"),  # No preconditioning (control)
     ]
 
     for prec_path, name in strategies:
@@ -146,7 +146,7 @@ def run_preconditioner_comparison() -> dict[str, dict[str, float]]:
         compute_scores_fast(
             base_path / "combined",  # Use precomputed gradients from combined index
             output_path,
-            preconditioner_path=(base_path / prec_path if prec_path else None),
+            hessian_path=(base_path / prec_path if prec_path else None),
         )
 
     # 4. Compare metrics across strategies
@@ -172,7 +172,7 @@ def run_preconditioner_comparison() -> dict[str, dict[str, float]]:
     print("=" * 60)
     print(f"{'Strategy':<15} {'Style Diff':<12} {'Fact Diff':<12} {'Subject Diff':<12}")
     print("-" * 51)
-    for name in ["no_precond", "baseline", "mixed", "r_between"]:
+    for name in ["no_hess", "baseline", "mixed", "r_between"]:
         if name in all_stats and all_stats[name]:
             s = all_stats[name]
             style_diff = s.get("intra_style", 0) - s.get("inter_style", 0)
@@ -229,8 +229,8 @@ def main() -> None:
         final_dataset.save_to_disk(final_dataset_path)
         print(f"Merged dataset saved to: {final_dataset_path}")
 
-    # Run the preconditioner comparison experiment
-    run_preconditioner_comparison()
+    # Run the hessian comparison experiment
+    run_hessian_comparison()
 
 
 if __name__ == "__main__":

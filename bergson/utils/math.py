@@ -143,10 +143,10 @@ def compute_lambda(
     index_eigen: Mapping[str, tuple[Tensor, Tensor]],
     target_components: int = 1000,
 ) -> float:
-    """Compute the mixing coefficient λ for TrackStar preconditioner mixing.
+    """Compute the mixing coefficient λ for TrackStar hessian mixing.
 
     Given eigendecompositions of query (R_eval) and index (R_train)
-    preconditioners, finds λ such that the sorted singular-value curves
+    hessians, finds λ such that the sorted singular-value curves
     of ``λ·R_eval`` and ``(1-λ)·R_train`` intersect at the
     ``target_components``-th component.  This downweights the top
     ``target_components`` high-magnitude gradient directions that are
@@ -165,9 +165,9 @@ def compute_lambda(
 
     Args:
         query_eigen: Per-module eigendecompositions of the query (eval)
-            preconditioner.  Maps module name → (eigenvalues, eigenvectors).
+            hessian.  Maps module name → (eigenvalues, eigenvectors).
         index_eigen: Per-module eigendecompositions of the index (train)
-            preconditioner.  Maps module name → (eigenvalues, eigenvectors).
+            hessian.  Maps module name → (eigenvalues, eigenvectors).
         target_components: Number of gradient components to downweight.
             ~1000 out of ~65K is typical (T-REx → λ≈0.90, C4 → λ≈0.99).
 
@@ -200,7 +200,7 @@ def compute_lambda(
         target_components = total
 
     # Pool and sort all eigenvalues (= singular values for PSD matrices)
-    # independently for query and index preconditioners.
+    # independently for query and index hessians.
     sorted_query = torch.sort(all_query, descending=True).values
     sorted_index = torch.sort(all_index, descending=True).values
 

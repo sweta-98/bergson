@@ -8,11 +8,16 @@ from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
-from bergson.config import IndexConfig, PreprocessConfig
+from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
-from bergson.utils.auto_batch_size import maybe_auto_batch_size
-from bergson.utils.utils import assert_type, setup_reproducibility
+from bergson.utils.batch_size import maybe_auto_batch_size, test_fwd_bwd
+from bergson.utils.utils import (
+    assert_type,
+    get_device,
+    get_device_index,
+    setup_reproducibility,
+)
 from bergson.utils.worker_utils import (
     create_processor,
     setup_data_pipeline,
@@ -48,7 +53,7 @@ def build_worker(
     ds : Dataset | IterableDataset
         The entire dataset to be processed. A subset is assigned to each worker.
     """
-    torch.cuda.set_device(local_rank)
+    torch.cuda.set_device(get_device_index(local_rank))
 
     # These should be set by the main process
     if world_size > 1:
@@ -58,7 +63,7 @@ def build_worker(
         dist.init_process_group(
             "nccl",
             init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(f"cuda:{local_rank}"),
+            device_id=torch.device(get_device(local_rank)),
             rank=rank,
             timeout=timedelta(minutes=30),
             world_size=world_size,
@@ -68,6 +73,7 @@ def build_worker(
     processor = create_processor(model, index_cfg, target_modules)
 
     maybe_auto_batch_size(index_cfg, model, ds, processor, target_modules, rank)
+    test_fwd_bwd(model, index_cfg.token_batch_size)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -138,6 +144,10 @@ def build(
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
     preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
+    if not index_cfg.skip_hessians:
+        HessianConfig(method="autocorrelation").save_yaml(
+            index_cfg.partial_run_path / "hessian_config.yaml"
+        )
 
     ds, _ = setup_data_pipeline(index_cfg)
 
