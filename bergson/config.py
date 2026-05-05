@@ -548,6 +548,17 @@ class HessianConfig(Serializable):
     """Whether to use dataset labels for Hessian (empirical Fisher) approximation.
     If false, the model predictions will be used."""
 
+    projection_dim: int = 0
+    """If > 0, compress the K-FAC factors (A and S) and the EK-FAC eigenvalue
+    correction via the same per-layer random projection used by ``bergson build``.
+    Set this to the same value as the gradient store these factors will be applied
+    to, with matching ``projection_type``. Only supported with ``method='kfac'`` and
+    ``projection_target='per_module'``."""
+
+    projection_type: Literal["normal", "rademacher"] = "rademacher"
+    """Type of random projection used when ``projection_dim > 0``. Must match the
+    value used in ``bergson build``."""
+
 
 @dataclass
 class FaissConfig:

@@ -145,6 +145,20 @@ def hessian_worker(
 
     model, target_modules = setup_model_and_peft(index_cfg)
 
+    if hessian_cfg.projection_dim > 0:
+        if hessian_cfg.method != "kfac":
+            raise ValueError(
+                "K-FAC factor compression (projection_dim > 0) is only supported with "
+                f"method='kfac', got method='{hessian_cfg.method}'."
+            )
+        if index_cfg.projection_target != "per_module":
+            raise ValueError(
+                "K-FAC factor compression requires projection_target='per_module' "
+                "(global projection cannot compose with the per-layer Kronecker "
+                "factorization). Got projection_target="
+                f"'{index_cfg.projection_target}'."
+            )
+
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
     }
@@ -173,10 +187,16 @@ def hessian_worker(
     compute_eigendecomposition(
         os.path.join(index_cfg.partial_run_path, "activation_sharded"),
         total_processed=total_processed,
+        projection_dim=hessian_cfg.projection_dim,
+        projection_type=hessian_cfg.projection_type,
+        side="right",
     )
     compute_eigendecomposition(
         os.path.join(index_cfg.partial_run_path, "gradient_sharded"),
         total_processed=total_processed,
+        projection_dim=hessian_cfg.projection_dim,
+        projection_type=hessian_cfg.projection_type,
+        side="left",
     )
 
     dist.barrier() if dist.is_initialized() else None
@@ -212,7 +232,11 @@ def collect_hessians(
     }
     desc = f"Approximating Hessians with {hessian_cfg.method}"
     if ev_correction:
-        collector = LambdaCollector(**collector_args)
+        collector = LambdaCollector(
+            **collector_args,
+            projection_dim=hessian_cfg.projection_dim,
+            projection_type=hessian_cfg.projection_type,
+        )
         desc += " (eigenvalue correction)"
     else:
         collector_args["dtype"] = hessian_dtype
