@@ -33,7 +33,7 @@ for model in "${MODELS[@]}"; do
 
         START_TIME=$(date +%s)
 
-        CUDA_VISIBLE_DEVICES=6 python -m benchmarks.benchmark_magic \
+        python -m benchmarks.benchmark_magic \
             "$model" \
             "$tokens" \
             "runs/bergson_magic" \

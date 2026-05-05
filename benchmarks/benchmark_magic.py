@@ -100,7 +100,7 @@ class RunConfig:
     notes: str | None = None
     """Optional notes for the run."""
 
-    num_gpus: int = 1
+    num_gpus: int = 8
     """Number of GPUs to use for benchmarking."""
 
     batch_size: int = 8
@@ -400,8 +400,9 @@ class Run:
             num_subsets=0,  # skip validation
             data=DataConfig(
                 dataset=self.run_cfg.dataset,
-                split="train",
-                truncation=True,
+                split="train[:1%]",
+                #truncation=True,
+                chunk_length=512,
             ),
             query=DataConfig(
                 dataset=str(query_dataset_path),
