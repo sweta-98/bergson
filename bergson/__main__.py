@@ -77,7 +77,7 @@ class Ekfac(Serializable):
 class Hessian(Serializable):
     """Approximate Hessian matrices using KFAC or EKFAC.
 
-    Output layout (consistent across methods)::
+    Output layout:
 
         <run_path>/<method>/
             hessian_config.yaml   # records ``method`` and other settings
