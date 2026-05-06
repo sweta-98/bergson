@@ -48,6 +48,18 @@ class EkfacApplicator:
         self.sharded_computer = ShardedMul()
 
     def compute_ivhp_sharded(self):
+        if os.path.isdir(
+            os.path.join(self.path, "whitening_projection_activation_sharded")
+        ):
+            if self.cfg.ev_correction:
+                raise ValueError(
+                    "ev_correction=True is incompatible with precomputed "
+                    "whitening-projection matrices (the EK-FAC eigenvalue "
+                    "correction does not decompose into per-side row/column ops "
+                    "and so was disallowed at hessian-build time)."
+                )
+            return self._compute_ivhp_with_whitening_projection()
+
         eigen_a = load_file(
             self.path + f"/eigen_activation_sharded/shard_{self.rank}.safetensors",
             device=self.device,
@@ -142,6 +154,89 @@ class EkfacApplicator:
         self.logger.debug("Finished H^{-1} G = Q_S @ (G' / lambda) @ Q_A^T")
         del eigen_a
         gc.collect()
+
+        torch.cuda.synchronize()
+        for k, v in transformed_gradients.items():
+            grad_buffer[k][:] = v.to(device="cpu", non_blocking=True).flatten(1).numpy()
+
+        grad_buffer.flush()
+
+        self.logger.info(f"Saved IVHP gradients to {self.cfg.run_path}")
+
+    def _compute_ivhp_with_whitening_projection(self):
+        """IVHP via precomputed `M = (cov + αI)^{-1} P^T` matrices.
+
+        For each layer, compute ``M_S^T G M_A`` of shape ``[N, p, p]`` in two
+        sharded matmuls — the per-side damped curvature inverse and the
+        random projection are both already folded into the ``M`` matrices
+        (built by ``compute_whitening_projection_matrices`` at hessian time),
+        so no eigenbasis rotation or eigenvalue divide is needed here.
+        """
+        M_a = load_file(
+            self.path
+            + f"/whitening_projection_activation_sharded/shard_{self.rank}.safetensors",
+            device=self.device,
+        )
+        M_g = load_file(
+            self.path
+            + f"/whitening_projection_gradient_sharded/shard_{self.rank}.safetensors",
+            device=self.device,
+        )
+
+        for k in M_a:
+            M_a[k] = M_a[k].to(dtype=torch.float32)
+            M_g[k] = M_g[k].to(dtype=torch.float32)
+
+        # Per-layer output is [p_S, p_A] flattened; M shards are [d/W, p].
+        grad_sizes = {name: M_g[name].shape[1] * M_a[name].shape[1] for name in M_a}
+
+        mmap = load_gradients(self.gradient_path)
+        with open(os.path.join(self.gradient_path, "info.json")) as f:
+            info = json.load(f)
+
+        grad_buffer = create_index(
+            Path(self.cfg.run_path),
+            num_grads=info["num_grads"],
+            grad_sizes=grad_sizes,
+            dtype=np.float32,
+        )
+
+        self.logger.info(
+            f"Loaded gradients for {len(mmap)} queries and computing IVHP "
+            "via whitening-projection matrices..."
+        )
+
+        transformed_gradients: dict[str, Tensor] = {}
+        for k, M_a_shard in M_a.items():
+            M_g_shard = M_g[k]
+
+            # Recover full per-layer dims from shard shapes.
+            d_S = M_g_shard.shape[0] * self.world_size
+            d_A = M_a_shard.shape[0] * self.world_size
+
+            gradients_noi = torch.from_numpy(mmap[k][:]).to(
+                device=self.device, dtype=torch.float32
+            )
+            gradients_noi = gradients_noi.view(-1, d_S, d_A)
+
+            # Step 1: G @ M_A : [N, d_S, d_A] @ [d_A, p] -> [N, d_S, p]
+            intermediate = self.sharded_computer._matmul(
+                vector_nsa=gradients_noi, matrix_cb=M_a_shard
+            )
+
+            # Step 2: M_S^T @ (G @ M_A) -> [N, p_S, p_A].
+            # Computed as ((G @ M_A)^T @ M_S)^T to fit the row-sharded M_g
+            # shape via _matmul.
+            intermediate = self.sharded_computer._matmul(
+                vector_nsa=intermediate.transpose(-2, -1), matrix_cb=M_g_shard
+            ).transpose(-2, -1)
+
+            transformed_gradients[k] = intermediate
+
+        del M_a, M_g
+        gc.collect()
+
+        self.logger.debug("Finished M_S^T @ G @ M_A")
 
         torch.cuda.synchronize()
         for k, v in transformed_gradients.items():
