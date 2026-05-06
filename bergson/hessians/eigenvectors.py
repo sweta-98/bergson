@@ -1,7 +1,6 @@
 import gc
 import os
 from dataclasses import dataclass
-from typing import Literal
 
 import torch
 import torch.distributed as dist
@@ -11,7 +10,7 @@ from safetensors.torch import load_file, save_file
 from torch import Tensor
 from tqdm import tqdm
 
-from bergson.collector.collector import HookCollectorBase, create_projection_matrix
+from bergson.collector.collector import HookCollectorBase
 from bergson.hessians.sharded_computation import ShardedMul
 from bergson.utils.logger import get_logger
 from bergson.utils.utils import (
@@ -77,21 +76,9 @@ class LambdaCollector(HookCollectorBase):
 
     Transforms activations and gradients using precomputed eigenvectors,
     then computes outer products for diagonal correction terms.
-
-    When ``projection_dim > 0`` the precomputed eigenvectors live in the
-    compressed [p, p] space, so we project the raw activations and output
-    gradients with the same per-layer random matrices used by ``bergson build``
-    before applying the eigenvectors.
     """
 
     path: str
-
-    projection_dim: int = 0
-    """If > 0, project activations (right) and output gradients (left) before
-    transforming them with the (compressed) eigenvectors."""
-
-    projection_type: Literal["normal", "rademacher"] = "rademacher"
-    """Random projection family used to compress activations and gradients."""
 
     def setup(self) -> None:
         """Load eigenvectors and initialize storage."""
@@ -121,21 +108,10 @@ class LambdaCollector(HookCollectorBase):
         name = assert_type(str, module._name)
         # a shape: [N, S, I]
 
-        if self.projection_dim > 0:
-            P = create_projection_matrix(
-                identifier=f"{name}/right",
-                m=self.projection_dim,
-                n=a.shape[-1],
-                dtype=a.dtype,
-                device=a.device,
-                projection_type=self.projection_type,
-            )
-            a = a @ P.T  # [N, S, p]
-
         # Transform: a @ eigen_a
         transformed = self.shard_computer._matmul(
             vector_nsa=a, matrix_cb=self.eigen_a[name]
-        )  # shape [N, S, I] (or [N, S, p] when compressed)
+        )  # shape [N, S, I]
 
         # Cache for use in backward pass
         self.transformed_a_cache[name] = transformed
@@ -145,21 +121,10 @@ class LambdaCollector(HookCollectorBase):
         name = assert_type(str, module._name)
         # g shape: [N, S, O]
 
-        if self.projection_dim > 0:
-            P = create_projection_matrix(
-                identifier=f"{name}/left",
-                m=self.projection_dim,
-                n=g.shape[-1],
-                dtype=g.dtype,
-                device=g.device,
-                projection_type=self.projection_type,
-            )
-            g = g @ P.T  # [N, S, p]
-
         # Transform: g @ eigen_g
         transformed_g = self.shard_computer._matmul(
             vector_nsa=g, matrix_cb=self.eigen_g[name]
-        )  # shape [N, S, O] (or [N, S, p] when compressed)
+        )  # shape [N, S, O]
 
         # Compute outer product: sum_n (transformed_a_n^T @ transformed_g_n)
         # Einstein notation: [N, S, I] x [N, S, O] -> [N, O, I]
@@ -250,10 +215,6 @@ def _compute_full_matrix(
 def compute_eigendecomposition(
     covariance_path: str,
     total_processed: int | Tensor,
-    *,
-    projection_dim: int = 0,
-    projection_type: Literal["normal", "rademacher"] = "rademacher",
-    side: Literal["left", "right"] | None = None,
 ) -> dict[str, Tensor]:
     """
     Compute eigendecomposition from covariance matrices (Eq. 18 from paper).
@@ -263,22 +224,9 @@ def compute_eigendecomposition(
     via _compute_full_matrix(). Output sharding is inferred from the
     eigenvector shapes.
 
-    When ``projection_dim > 0`` and ``side`` is set, each gathered covariance
-    matrix M of shape [d, d] is compressed to ``P @ M @ P.T`` of shape
-    ``[projection_dim, projection_dim]`` before eigendecomposition. ``P`` is the
-    same per-layer random projection matrix (keyed by ``f"{name}/{side}"``)
-    that ``bergson build`` uses to project gradients, so the resulting
-    eigenvectors operate in the same compressed space as projected gradients.
-
     Args:
         covariance_path: Full path to the covariance sharded directory.
         total_processed: Number of samples used to compute covariance.
-        projection_dim: If > 0, compress each covariance matrix using a
-            per-layer random projection before eigendecomposing.
-        projection_type: Random projection family to use when compressing.
-        side: Which side projection to apply ("right" for activation
-            covariance, "left" for gradient covariance). Required when
-            ``projection_dim > 0``.
 
     Returns:
         Per-key eigenvalue shards (each `[m/world_size]`) on CPU. The
@@ -289,11 +237,6 @@ def compute_eigendecomposition(
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     device = get_device(rank)
-
-    if projection_dim > 0 and side is None:
-        raise ValueError(
-            "side must be specified ('left' or 'right') when projection_dim > 0."
-        )
 
     # Handle total_processed as tensor if needed
     if isinstance(total_processed, int):
@@ -309,16 +252,8 @@ def compute_eigendecomposition(
         # Get dimensions for fair distribution (columns not sharded, shape[-1]=d)
         key_dimensions = {key: f.get_tensor(key).shape[-1] for key in all_keys}
 
-    if projection_dim > 0:
-        # After compression each matrix is [projection_dim, projection_dim], so
-        # eigendecomposition cost is identical across keys. We still use the
-        # same fair_distribute helper below for consistent ordering.
-        eigen_dimensions = {key: projection_dim for key in all_keys}
-    else:
-        eigen_dimensions = key_dimensions
-
     # Distribute keys fairly based on O(d³) eigendecomposition cost
-    all_assignments = fair_distribute_by_cost(eigen_dimensions, world_size)
+    all_assignments = fair_distribute_by_cost(key_dimensions, world_size)
     keys_for_this_rank = all_assignments[rank]
 
     covariance_eigenvectors = {}
@@ -337,18 +272,6 @@ def compute_eigendecomposition(
             rank=rank,
             world_size=world_size,
         )
-
-        if projection_dim > 0:
-            assert side is not None
-            P = create_projection_matrix(
-                identifier=f"{key}/{side}",
-                m=projection_dim,
-                n=matrix.shape[0],
-                dtype=matrix.dtype,
-                device=matrix.device,
-                projection_type=projection_type,
-            )
-            matrix = P @ matrix @ P.T
 
         # original_dtype = matrix.dtype
         matrix_normalized = matrix.to(torch.float64) / total_processed
@@ -374,7 +297,7 @@ def compute_eigendecomposition(
 
     covariance_eigenvectors = _gather_and_shard_along_dim0(
         input_dict=covariance_eigenvectors,
-        full_shape_per_key={k: (m, m) for k, m in eigen_dimensions.items()},
+        full_shape_per_key={k: (m, m) for k, m in key_dimensions.items()},
         dtype=original_dtype,  # type: ignore
         rank=rank,
         world_size=world_size,
@@ -382,7 +305,7 @@ def compute_eigendecomposition(
     )
     covariance_eigenvalues = _gather_and_shard_along_dim0(
         input_dict=covariance_eigenvalues,
-        full_shape_per_key={k: (m,) for k, m in eigen_dimensions.items()},
+        full_shape_per_key={k: (m,) for k, m in key_dimensions.items()},
         dtype=original_dtype,  # type: ignore
         rank=rank,
         world_size=world_size,

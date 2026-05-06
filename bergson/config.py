@@ -549,11 +549,13 @@ class HessianConfig(Serializable):
     If false, the model predictions will be used."""
 
     projection_dim: int = 0
-    """If > 0, compress the K-FAC factors (A and S) and the EK-FAC eigenvalue
-    correction via the same per-layer random projection used by ``bergson build``.
+    """If > 0, fold the same per-layer random projection used by ``bergson build``
+    into the damped inverse of the Kronecker factors (A and S) so each per-side
+    factor is compressed to a ``[d, projection_dim]`` whitening-projection matrix.
     Set this to the same value as the gradient store these factors will be applied
-    to, with matching ``projection_type``. Only supported with ``method='kfac'`` and
-    ``projection_target='per_module'``."""
+    to, with matching ``projection_type``. Works for any Kronecker-factored method
+    (``kfac``, ``shampoo``, ...). Requires ``projection_target='per_module'`` and
+    is incompatible with ``ev_correction=True``."""
 
     projection_type: Literal["normal", "rademacher"] = "rademacher"
     """Type of random projection used when ``projection_dim > 0``. Must match the
