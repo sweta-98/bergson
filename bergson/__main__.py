@@ -80,7 +80,7 @@ class Hessian(Serializable):
     Output layout:
 
         <run_path>/<method>/
-            hessian_config.yaml   # records ``method`` and other settings
+            hessian_config.yaml
             index_config.yaml
             ...method-specific artifacts...
 
