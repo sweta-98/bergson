@@ -229,10 +229,11 @@ def compute_eigendecomposition(
         total_processed: Number of samples used to compute covariance.
 
     Returns:
-        Per-key eigenvalue shards (each `[m/world_size]`) on CPU. The
-        eigenvectors are written to disk; the eigenvalues are returned so
-        callers (e.g. `save_uncorrected_eigenvalues`) can use them without
-        reloading.
+        Per-key eigenvalue shards (each `[m/world_size]`) on CPU. Both the
+        eigenvectors and eigenvalues are persisted to disk (under
+        ``eigen_<basename>/`` and ``eigenvalue_<basename>/`` respectively);
+        the eigenvalues are also returned so in-process callers (e.g.
+        `save_uncorrected_eigenvalues`) can use them without reloading.
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -312,20 +313,28 @@ def compute_eigendecomposition(
         device=device,
     )
 
-    # Generic output path by adding eigen_prefix to the path
+    # Generic output paths by prefixing the covariance basename
     dirname = os.path.dirname(covariance_path)
     basename = os.path.basename(covariance_path)
-    output_path = os.path.join(dirname, "eigen_" + basename)
+    eigvec_path = os.path.join(dirname, "eigen_" + basename)
+    eigval_path = os.path.join(dirname, "eigenvalue_" + basename)
 
-    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(eigvec_path, exist_ok=True)
     save_file(
         covariance_eigenvectors,
-        os.path.join(output_path, f"shard_{rank}.safetensors"),
+        os.path.join(eigvec_path, f"shard_{rank}.safetensors"),
+    )
+
+    os.makedirs(eigval_path, exist_ok=True)
+    save_file(
+        covariance_eigenvalues,
+        os.path.join(eigval_path, f"shard_{rank}.safetensors"),
     )
 
     gc.collect()
 
-    get_logger().info(f"Saved eigenvectors to {output_path}")
+    get_logger().info(f"Saved eigenvectors to {eigvec_path}")
+    get_logger().info(f"Saved eigenvalues to {eigval_path}")
 
     return covariance_eigenvalues
 
