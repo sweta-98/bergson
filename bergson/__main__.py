@@ -83,14 +83,6 @@ class Hessian(Serializable):
             hessian_config.yaml
             index_config.yaml
             ...method-specific artifacts...
-
-    K-FAC family methods write sharded safetensors of the Kronecker factors
-    and (when ``ev_correction``) the eigenvalue correction. Autocorrelation
-    writes the per-module Hessians plus their eigendecomposition through
-    ``GradientProcessor.save``. In both cases the saved
-    ``hessian_config.yaml`` is the canonical way to identify which method
-    produced a given directory; load it with
-    ``HessianConfig.load_yaml(str(path / "hessian_config.yaml"))``.
     """
 
     hessian_cfg: HessianConfig
@@ -102,9 +94,6 @@ class Hessian(Serializable):
         validate_run_path(self.index_cfg)
 
         if self.hessian_cfg.method == "autocorrelation":
-            # Mirror the run_path/<method>/ layout that approximate_hessians uses
-            # for K-FAC family methods, so consumers can dispatch on method
-            # without having to know which subdirectory holds the artifacts.
             self.index_cfg.run_path = (
                 self.index_cfg.run_path + f"/{self.hessian_cfg.method}"
             )
