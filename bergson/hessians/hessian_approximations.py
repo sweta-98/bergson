@@ -17,6 +17,7 @@ from bergson.distributed import launch_distributed_run
 from bergson.hessians.eigenvectors import (
     LambdaCollector,
     compute_eigendecomposition,
+    compute_whitening_projection_matrices,
     save_uncorrected_eigenvalues,
 )
 from bergson.hessians.kfac import CovarianceCollector
@@ -209,6 +210,39 @@ def hessian_worker(
         rank=rank,
         world_size=world_size,
     )
+
+    if hessian_cfg.projection_dim > 0:
+        compute_whitening_projection_matrices(
+            eigvec_path=os.path.join(
+                index_cfg.partial_run_path, "eigen_activation_sharded"
+            ),
+            eigval_path=os.path.join(
+                index_cfg.partial_run_path, "eigenvalue_activation_sharded"
+            ),
+            output_path=os.path.join(
+                index_cfg.partial_run_path, "whitening_projection_activation_sharded"
+            ),
+            projection_dim=hessian_cfg.projection_dim,
+            projection_type=hessian_cfg.projection_type,
+            side="right",
+            lambda_damp_factor=hessian_cfg.lambda_damp_factor,
+        )
+        compute_whitening_projection_matrices(
+            eigvec_path=os.path.join(
+                index_cfg.partial_run_path, "eigen_gradient_sharded"
+            ),
+            eigval_path=os.path.join(
+                index_cfg.partial_run_path, "eigenvalue_gradient_sharded"
+            ),
+            output_path=os.path.join(
+                index_cfg.partial_run_path, "whitening_projection_gradient_sharded"
+            ),
+            projection_dim=hessian_cfg.projection_dim,
+            projection_type=hessian_cfg.projection_type,
+            side="left",
+            lambda_damp_factor=hessian_cfg.lambda_damp_factor,
+        )
+        dist.barrier() if dist.is_initialized() else None
 
     if hessian_cfg.ev_correction:
         collect_hessians(**kwargs, ev_correction=True)

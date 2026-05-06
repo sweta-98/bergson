@@ -561,6 +561,12 @@ class HessianConfig(Serializable):
     """Type of random projection used when ``projection_dim > 0``. Must match the
     value used in ``bergson build``."""
 
+    lambda_damp_factor: float = 0.1
+    """Damping factor baked into the precomputed whitening-projection matrices
+    when ``projection_dim > 0``. The damped inverse uses
+    ``α = lambda_damp_factor * mean(E)`` per side. Has no effect when
+    ``projection_dim == 0``."""
+
 
 @dataclass
 class FaissConfig:
