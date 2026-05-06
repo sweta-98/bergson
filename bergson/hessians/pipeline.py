@@ -98,8 +98,18 @@ def hessian_pipeline(
     if not _step_complete(scores_path, resume):
         score_index_cfg = deepcopy(index_cfg)
         score_index_cfg.run_path = scores_path
-        score_index_cfg.projection_dim = 0
         score_index_cfg.skip_hessians = True
+        if hessian_cfg.projection_dim > 0:
+            # Hessian-factor compression is on, so apply_hessian writes the
+            # transformed query at [p, p] per layer. Training gradients must
+            # match that shape, which means projecting them with the same
+            # per-module random matrix used to build M (same projection_dim,
+            # projection_type, and projection_target).
+            score_index_cfg.projection_dim = hessian_cfg.projection_dim
+            score_index_cfg.projection_type = hessian_cfg.projection_type
+            score_index_cfg.projection_target = "per_module"
+        else:
+            score_index_cfg.projection_dim = 0
         score_cfg.query_path = transformed_query_path
         _validate(score_index_cfg)
 
