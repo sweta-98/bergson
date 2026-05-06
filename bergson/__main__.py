@@ -89,8 +89,8 @@ class Hessian(Serializable):
     writes the per-module Hessians plus their eigendecomposition through
     ``GradientProcessor.save``. In both cases the saved
     ``hessian_config.yaml`` is the canonical way to identify which method
-    produced a given directory; use ``bergson.hessians.io.load_hessian_config``
-    to read it back.
+    produced a given directory; load it with
+    ``HessianConfig.load_yaml(str(path / "hessian_config.yaml"))``.
     """
 
     hessian_cfg: HessianConfig

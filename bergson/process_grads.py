@@ -5,14 +5,14 @@ from typing import Literal
 
 import torch
 
+from bergson.config import HessianConfig
 from bergson.gradients import GradientProcessor
-from bergson.hessians.io import hessian_method
 from bergson.utils.math import compute_lambda, damped_psd_power
 
 
 def assert_autocorrelation_hessian(path: Path) -> None:
     """Verify that ``path`` contains an autocorrelation hessian."""
-    method = hessian_method(path)
+    method = HessianConfig.load_yaml(str(path / "hessian_config.yaml")).method
     assert method == "autocorrelation", (
         f"Hessian at '{path}' was computed with method '{method}'; "
         f"mix_autocorrelation_matrices only supports autocorrelation."
