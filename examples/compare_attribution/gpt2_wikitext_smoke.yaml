@@ -15,13 +15,11 @@ query:
   chunk_length: 512
 
 distributed:
-  nproc_per_node: 8
+  nproc_per_node: 4
+  nnode: 4
 
-# Smoke: same model + bs as full gpt2_wikitext.yaml, but small train slice.
-# Used to expose per-phase fixed overhead via timestamped log without paying
-# for a 90-min run.
-batch_size: 80
-num_epochs: 1
+batch_size: 256
+num_epochs: 2
 seed: 42
 
 num_subsets: 4
