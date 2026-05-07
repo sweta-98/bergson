@@ -76,13 +76,10 @@ class EkfacApplicator:
             lambda_factor[k] = v.to(dtype=torch.float32)
 
         p = self.cfg.projection_dim
-        if p > 0:
-            grad_sizes = {name: p * p for name in eigen_a}
-        else:
-            grad_sizes = {
-                name: eigen_g[name].shape[1] * eigen_a[name].shape[1]
-                for name in eigen_a
-            }
+        grad_sizes = {
+            name: p * p if p > 0 else eigen_g[name].shape[1] * eigen_a[name].shape[1]
+            for name in eigen_a
+        }
 
         mmap = load_gradients(self.gradient_path)
         with open(os.path.join(self.gradient_path, "info.json")) as f:
@@ -153,29 +150,16 @@ class EkfacApplicator:
         gc.collect()
 
         if p > 0:
+            pt = self.cfg.projection_type
             for k, v in transformed_gradients.items():
-                d_S = v.shape[-2]
-                d_A = v.shape[-1]
-                P_left = create_projection_matrix(
-                    identifier=f"{k}/left",
-                    m=p,
-                    n=d_S,
-                    dtype=v.dtype,
-                    device=v.device,
-                    projection_type=self.cfg.projection_type,
+                d_S, d_A = v.shape[-2:]
+                P_l = create_projection_matrix(
+                    f"{k}/left", p, d_S, v.dtype, v.device, pt
                 )
-                P_right = create_projection_matrix(
-                    identifier=f"{k}/right",
-                    m=p,
-                    n=d_A,
-                    dtype=v.dtype,
-                    device=v.device,
-                    projection_type=self.cfg.projection_type,
+                P_r = create_projection_matrix(
+                    f"{k}/right", p, d_A, v.dtype, v.device, pt
                 )
-                transformed_gradients[k] = torch.einsum(
-                    "ps,nsa,ra->npr", P_left, v, P_right
-                )
-            self.logger.debug(f"Finished P_S · (H^{{-1}} G) · P_Aᵀ at p={p}")
+                transformed_gradients[k] = torch.einsum("ps,nsa,ra->npr", P_l, v, P_r)
 
         torch.cuda.synchronize()
         for k, v in transformed_gradients.items():
