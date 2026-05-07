@@ -6,7 +6,9 @@ from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from shutil import rmtree
+from typing import cast
 
+import psutil
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
@@ -104,6 +106,15 @@ class TrainerState:
     cuda_rng_state: torch.Tensor = field(default_factory=_maybe_get_cuda_rng_state)
     cpu_rng_state: torch.Tensor = field(default_factory=torch.random.get_rng_state)
 
+    def copy_(self, other: "TrainerState"):
+        for k in self.params.keys():
+            self.params[k].copy_(other.params[k])
+        for k in self.buffers.keys():
+            self.buffers[k].copy_(other.buffers[k])
+        self.batch_index = other.batch_index
+        self.cuda_rng_state.copy_(other.cuda_rng_state)
+        self.cpu_rng_state.copy_(other.cpu_rng_state)
+
     def to(self, device: torch.device | str) -> "TrainerState":
         params = {k: p.to(device) for k, p in self.params.items()}
         buffers = {k: b.to(device) for k, b in self.buffers.items()}
@@ -145,7 +156,7 @@ class TrainerState:
             debug_pbar=debug_pbar,
         )
 
-    def detach_(self):
+    def detach_(self) -> "TrainerState":
         for k, p in self.params.items():
             self.params[k] = p.detach()
 
@@ -155,6 +166,7 @@ class TrainerState:
             return t
 
         self.opt_state = tree_map(_detach_leaf, self.opt_state)
+        return self
 
     @property
     def requires_grad(self) -> bool:
@@ -211,6 +223,14 @@ class TrainerState:
         state.update(opt_state)
 
         return state
+
+    def size_in_bytes(self) -> int:
+        """Roughly, the amount of space needed to save the state dict."""
+        state = self.state_dict()
+        return sum(
+            t.numel() * t.element_size() if isinstance(t, torch.Tensor) else 0
+            for t in state.values()
+        )
 
 
 class Trainer:
@@ -308,11 +328,7 @@ class Trainer:
         )
         return state
 
-    def resume(
-        self,
-        state: TrainerState,
-        save_dir: str,
-    ):
+    def resume(self, state: TrainerState, save_dir: str):
         ckpt_list = sorted_checkpoints(save_dir)
 
         # Filter out incomplete checkpoints (missing .metadata) and clean them up
@@ -470,10 +486,15 @@ class Trainer:
         save_every: int = 0,
         save_mode: MagicSaveMode = "sqrt",
     ) -> BackwardState:
-        ckpt_list = sorted_checkpoints(ckpt_dir)
+        ckpt_list = cast(
+            list[tuple[int, str | TrainerState]],
+            sorted_checkpoints(ckpt_dir),
+        )
+        state_size = fwd_state.size_in_bytes()
 
         main = not dist.is_initialized() or dist.get_rank() == 0
         rank = dist.get_rank() if dist.is_initialized() else 0
+
         bwd_ckpt_path = os.path.join(ckpt_dir, f"backward_rank{rank}.pt")
 
         if resume and os.path.exists(bwd_ckpt_path):
@@ -502,19 +523,17 @@ class Trainer:
                 fut.result()
             save_futures.clear()
 
-            idx, path = ckpt_list[-1]
+            idx, ckpt = ckpt_list[-1]
             fwd_state.batch_index = idx
+            fwd_state.detach_()  # Detach so that replay steps can use in-place ops
 
             start = time.monotonic()
-            fwd_state.load(path)
+            fwd_state.load(ckpt) if isinstance(ckpt, str) else fwd_state.copy_(ckpt)
             elapsed = time.monotonic() - start
 
             if debug and main:
-                main_pbar.write(f"Loaded checkpoint {path} in {elapsed:.2f} seconds")
-
-            # Detach after loading so that replay steps can use in-place ops
-            # (loaded tensors may retain requires_grad from the previous traced step)
-            fwd_state.detach_()
+                name = ckpt if isinstance(ckpt, str) else f"in-memory checkpoint {idx}"
+                main_pbar.write(f"Loaded checkpoint {name} in {elapsed:.2f} seconds")
 
             # Only delete this checkpoint if it's the one we expected to load. If it's
             # not, we need to keep it around, and step forward through training
@@ -522,8 +541,8 @@ class Trainer:
                 del ckpt_list[-1]
 
                 # Only delete on the main rank
-                if cleanup and main and idx != last_idx:
-                    rmtree(path) if os.path.isdir(path) else os.remove(path)
+                if cleanup and isinstance(ckpt, str) and main and idx != last_idx:
+                    rmtree(ckpt) if os.path.isdir(ckpt) else os.remove(ckpt)
 
             # Step forward in training if needed
             next_save = (
@@ -554,12 +573,18 @@ class Trainer:
 
                 # Save checkpoints for states we will need later
                 if idx == next_save and idx < expected_idx:
-                    path = os.path.join(ckpt_dir, f"step_{idx}.ckpt")
-                    ckpt_list.append((idx, path))
+                    # Switch from RAM disk to checkpoint dir if needed
+                    if psutil.virtual_memory().available > 2 * state_size:
+                        ckpt_list.append((idx, fwd_state.to("cpu").detach_()))
+                    else:
+                        ckpt = os.path.join(ckpt_dir, f"step_{idx}.ckpt")
+                        ckpt_list.append((idx, ckpt))
 
-                    save_futures.append(
-                        fwd_state.save(path, debug_pbar=main_pbar if debug else None)
-                    )
+                        save_futures.append(
+                            fwd_state.save(
+                                ckpt, debug_pbar=main_pbar if debug else None
+                            )
+                        )
 
                     # Advance next_save according to the save mode
                     next_save = (
