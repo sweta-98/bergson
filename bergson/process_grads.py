@@ -10,15 +10,6 @@ from bergson.gradients import GradientProcessor
 from bergson.utils.math import compute_lambda, damped_psd_power
 
 
-def assert_autocorrelation_hessian(path: Path) -> None:
-    """Verify that ``path`` contains an autocorrelation hessian."""
-    method = HessianConfig.load_yaml(str(path / "hessian_config.yaml")).method
-    assert method == "autocorrelation", (
-        f"Hessian at '{path}' was computed with method '{method}'; "
-        f"mix_autocorrelation_matrices only supports autocorrelation."
-    )
-
-
 def normalize_grad(
     grad_dict: dict[str, torch.Tensor],
     unit_normalize: bool,
@@ -91,8 +82,12 @@ def mix_autocorrelation_matrices(
     index_path = Path(index_path)
     output_path = Path(output_path)
 
-    assert_autocorrelation_hessian(query_path)
-    assert_autocorrelation_hessian(index_path)
+    for path in (query_path, index_path):
+        method = HessianConfig.load_yaml(str(path / "hessian_config.yaml")).method
+        assert method == "autocorrelation", (
+            f"Hessian at '{path}' was computed with method '{method}'; "
+            f"mix_autocorrelation_matrices only supports autocorrelation."
+        )
 
     q_proc = GradientProcessor.load(query_path)
     i_proc = GradientProcessor.load(index_path)

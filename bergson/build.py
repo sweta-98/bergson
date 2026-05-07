@@ -125,6 +125,7 @@ def build_worker(
 def build(
     index_cfg: IndexConfig,
     preprocess_cfg: PreprocessConfig,
+    hessian_cfg: HessianConfig | None = None,
 ):
     """
     Convert a dataset to an on-disk index.
@@ -137,15 +138,22 @@ def build(
     preprocess_cfg : PreprocessConfig
         Preprocessing configuration for gradient normalization, preconditioning,
         and aggregation.
+    hessian_cfg : HessianConfig | None
+        When provided and ``index_cfg.skip_index`` is True, the run path is
+        nested under ``<run_path>/<method>/`` so the autocorrelation hessian
+        sits alongside an existing index without clobbering it.
     """
     if index_cfg.debug:
         setup_reproducibility()
+
+    if hessian_cfg is not None and index_cfg.skip_index:
+        index_cfg.run_path = index_cfg.run_path + f"/{hessian_cfg.method}"
 
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
     preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
     if not index_cfg.skip_hessians:
-        HessianConfig(method="autocorrelation").save_yaml(
+        (hessian_cfg or HessianConfig(method="autocorrelation")).save_yaml(
             index_cfg.partial_run_path / "hessian_config.yaml"
         )
 

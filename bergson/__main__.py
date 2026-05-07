@@ -86,12 +86,9 @@ class Hessian(Serializable):
         validate_run_path(self.index_cfg)
 
         if self.hessian_cfg.method == "autocorrelation":
-            self.index_cfg.run_path = (
-                self.index_cfg.run_path + f"/{self.hessian_cfg.method}"
-            )
             self.index_cfg.skip_index = True
             self.index_cfg.skip_hessians = False
-            build(self.index_cfg, PreprocessConfig())
+            build(self.index_cfg, PreprocessConfig(), self.hessian_cfg)
         else:
             approximate_hessians(self.index_cfg, self.hessian_cfg)
 
