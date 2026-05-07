@@ -1,9 +1,11 @@
 import torch
 import torch.distributed as dist
+import torch.nn as nn
 from jaxtyping import Float
 from torch import Tensor
 
 from bergson.utils.utils import get_device
+from bergson.gradients import LayerAdapter
 
 
 class ShardedMul:
@@ -22,19 +24,34 @@ class ShardedMul:
         gradient_covariance_dict: dict,
         dtype: torch.dtype,
         target_info: dict[str, tuple[torch.device, torch.Size, bool]],
+        model: nn.Module | None = None,
     ):
-        """Initialize the covariance matrices for activations and gradients."""
+        """Initialize the covariance matrices for activations and gradients.
+
+        If ``model`` is provided, dimensions are read via ``LayerAdapter``
+        (which knows that HFConv1D weights are ``(in, out)`` while nn.Linear
+        weights are ``(out, in)``). Without ``model``, the legacy
+        nn.Linear convention is assumed — incorrect for HFConv1D, used by
+        gpt2's ``c_attn`` / ``c_proj`` / ``c_fc``.
+        """
 
         for name, (device, weight_shape, collect_bias) in target_info.items():
+            if model is not None:
+                mod = model.get_submodule(name)
+                in_dim = int(getattr(mod, LayerAdapter.in_attr(mod)))
+                out_dim = int(getattr(mod, LayerAdapter.out_attr(mod)))
+            else:
+                # Legacy fallback: nn.Linear convention.
+                in_dim = weight_shape[1]
+                out_dim = weight_shape[0]
+
             # Activation covariance A^T A has shape [in_dim, in_dim]
-            in_dim = weight_shape[1]
             shard_in_dim = in_dim if not self.dist else in_dim // self.world_size
             activation_covariance_dict[name] = torch.zeros(
                 (shard_in_dim, in_dim), device=self.device, dtype=dtype
             )
 
             # Gradient covariance G^T G has shape [out_dim, out_dim]
-            out_dim = weight_shape[0]
             shard_out_dim = out_dim if not self.dist else out_dim // self.world_size
             gradient_covariance_dict[name] = torch.zeros(
                 (shard_out_dim, out_dim), device=self.device, dtype=dtype

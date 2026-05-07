@@ -358,6 +358,13 @@ def setup_data_pipeline(
             tokenizer,
             chunk_size=data_cfg.chunk_length,
         )
+        # build.py / score paths read ds["length"] for token batching;
+        # tokenize_and_chunk emits only input_ids+doc_ids, so synthesize
+        # a constant-length column.
+        if "length" not in tokenized.column_names:
+            tokenized = tokenized.add_column(
+                "length", [data_cfg.chunk_length] * len(tokenized)
+            )
         return tokenized, len(ds)
 
     max_token_bz = getattr(cfg, "token_batch_size", BIG_NUM)

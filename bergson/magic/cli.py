@@ -17,6 +17,7 @@ from torch.distributed.nn.functional import all_reduce as differentiable_all_red
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from ..config import TrainingConfig, ValidationConfig
 from ..data import load_scores
@@ -352,6 +353,18 @@ def worker(
 
     if save_fut is not None:
         save_fut.result()  # ensure state0 is saved before validation loads it
+
+    # Export the final trained params as a HuggingFace directory so downstream
+    # attribution methods (ekfac, trackstar) can load it via --model. FSDP
+    # would need a parameter-gather step first; deferred to a follow-up.
+    if global_rank == 0 and not run_cfg.fsdp:
+        final_model_dir = os.path.join(run_cfg.run_path, "final_model")
+        with fwd_state.activate(model):
+            model.save_pretrained(final_model_dir)
+        AutoTokenizer.from_pretrained(
+            run_cfg.tokenizer or run_cfg.model
+        ).save_pretrained(final_model_dir)
+        print(f"Saved final HF model to {final_model_dir}")
 
     # If no query dataset is provided, skip backward and validation entirely
     if query_dataset is None:

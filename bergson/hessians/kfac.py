@@ -38,6 +38,7 @@ class CovarianceCollector(HookCollectorBase):
             gradient_covariance_dict=self.S_cov_dict,
             dtype=self.dtype,
             target_info=self.target_info,
+            model=self.model,
         )
 
     def forward_hook(self, module: nn.Module, a: Tensor) -> None:

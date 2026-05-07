@@ -1,0 +1,34 @@
+# Bisection: full data (4608 × 512) but num_epochs=1 to test if dataset.repeat
+# is what hangs at scale.
+run_path: runs/_diag_8gpu_full_1ep
+model: gpt2
+overwrite: true
+
+data:
+  dataset: Salesforce/wikitext
+  subset: wikitext-2-raw-v1
+  split: "train[:4608]"
+  chunk_length: 512
+
+query:
+  dataset: Salesforce/wikitext
+  subset: wikitext-2-raw-v1
+  split: "train[-4608:]"
+  chunk_length: 512
+
+distributed:
+  nproc_per_node: 8
+
+batch_size: 160
+num_epochs: 1
+seed: 42
+
+num_subsets: 4
+subset_strategy: random
+
+lr_schedule:
+  lr_scheduler_type: polynomial
+  lr: 0.0008
+  lr_start: 1.0e-6
+  lr_end: 8.0e-5
+  warmup_steps: 0.25

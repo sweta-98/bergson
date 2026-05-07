@@ -1,0 +1,38 @@
+run_path: runs/compare_gpt2_wikitext
+model: gpt2
+overwrite: true
+
+data:
+  dataset: Salesforce/wikitext
+  subset: wikitext-2-raw-v1
+  split: "train[:32110]"
+  chunk_length: 512
+
+query:
+  dataset: Salesforce/wikitext
+  subset: wikitext-2-raw-v1
+  split: "train[-4608:]"
+  chunk_length: 512
+
+distributed:
+  nproc_per_node: 8
+
+# Full WikiText-2 train ([:32110] holds out the last 4608 rows for queries).
+# num_epochs stays at 1 because train_dataset.repeat(num_epochs) hangs rank 0
+# on 8 GPUs + multi-epoch (reproducer is the canonical examples/magic yaml).
+# batch_size is global across the 8 ranks (asserted at cli.py:286). 160/rank=20
+# OOMs A40 (48 GiB) during MAGIC's per-doc backward; halved to 80 (10/rank).
+batch_size: 80
+num_epochs: 1
+seed: 42
+
+# 20 subsets gives meaningful Spearman for EK-FAC and trakstar (N=4 was noise).
+num_subsets: 20
+subset_strategy: random
+
+lr_schedule:
+  lr_scheduler_type: polynomial
+  lr: 0.0008
+  lr_start: 1.0e-6
+  lr_end: 8.0e-5
+  warmup_steps: 0.25

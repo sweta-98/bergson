@@ -6,8 +6,31 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import parse_hf_uri
 from peft import PeftModel, get_peft_model_state_dict
 from transformers import PreTrainedModel
+from transformers.pytorch_utils import Conv1D as HFConv1D
 
 from bergson.gradients import AdafactorNormalizer, AdamNormalizer, Normalizer
+
+def match_target(module_name: str, target_modules, base_model_names) -> str | None:
+        """Resolve ``module_name`` against the names bergson's collector will
+        actually look up. Allows leading prefixes to be stripped (e.g. HF wraps
+        gpt2 modules under ``transformer.h.0.attn.c_attn`` but bergson's
+        collector tracks them as ``h.0.attn.c_attn`` because it iterates
+        ``model.base_model``). Returns the matched key, or ``None`` if no
+        prefix-stripping suffix matches.
+        """
+        candidates = target_modules
+        if candidates is None:
+            candidates = base_model_names
+        if candidates is None:
+            return module_name
+        if module_name in candidates:
+            return module_name
+        parts = module_name.split(".")
+        for i in range(1, len(parts)):
+            stripped = ".".join(parts[i:])
+            if stripped in candidates:
+                return stripped
+        return None
 
 
 def load_optimizer(optimizer_state: str) -> dict:
@@ -104,6 +127,11 @@ def get_normalizers(
             continue
 
         param_name = target_param_index_to_name[param_idx]
+
+        # matched = match_target(param_name, target_modules)
+        # if matched is None:
+        #     continue
+        
         if not param_name.endswith(".weight"):
             continue
 
@@ -125,11 +153,28 @@ def get_normalizers(
         bias_on_device = (
             bias_exp_avg_sq.to(device) if bias_exp_avg_sq is not None else None
         )
-
+        
         if optimizer_format == OptimizerStateFormat.UNFACTORED:
             exp_avg_sq = get_unfactored_second_moment(state)
+
             if exp_avg_sq.ndim != 2:
                 continue
+
+            # Bergson's collector emits per-sample weight grads in [N, O, I]
+            # (nn.Linear convention). HFConv1D stores its weight as (I, O), so
+            # exp_avg_sq comes through as (I, O) and won't broadcast over the
+            # collector's (O, I) grad tensor — yields a shape-mismatch broadcast
+            # error inside AdamNormalizer.normalize_weight. Transpose here so
+            # downstream broadcasting matches.
+            mod = base_modules.get(module_name)
+            if mod is not None and isinstance(mod, HFConv1D):
+                exp_avg_sq = exp_avg_sq.t().contiguous()
+
+            normalizers[module_name] = AdamNormalizer(
+                weight_avg_sq=exp_avg_sq,
+                bias_avg_sq=bias_exp_avg_sq,
+            )
+
             normalizers[module_name] = AdamNormalizer(
                 weight_avg_sq=exp_avg_sq.to(device),
                 bias_avg_sq=bias_on_device,
@@ -179,9 +224,21 @@ def load_from_optimizer(
     """
     optimizer_state_dict = load_optimizer(optimizer_state)
 
+    
+
     # The optimizer state is keyed by position in the trainable parameter list.
     # For PEFT checkpoints, only include PEFT params.
     adapter_suffix = ""
+    # #
+    # # For non-PEFT HF causal-LM wrappers (e.g. GPT2LMHeadModel) the optimizer
+    # # was trained on the FULL model so its flat indexing is over
+    # # ``model.named_parameters()`` — which includes the wrapper's prefix
+    # # (``transformer.h.0.attn.c_attn.weight``). But bergson's collector iterates
+    # # ``model.base_model`` (see ``bergson/collection.py``) so it tracks modules
+    # # by the de-prefixed name (``h.0.attn.c_attn``). Build a set of valid
+    # # collector-side names from base_model so we can match by suffix below.
+    # base_model_names: set[str] | None = None
+    # base_modules: dict[str, torch.nn.Module] = {}
     if isinstance(model, PeftModel):
         st = get_peft_model_state_dict(model)
         params_for_index = list(st.items())
@@ -194,12 +251,83 @@ def load_from_optimizer(
             adapter_suffix = "." + adapters[0]
     else:
         params_for_index = list(model.named_parameters())
+        base = getattr(model, "base_model", None)
+        if base is not None and base is not model:
+            # Names of every leaf as bergson's collector sees them (relative
+            # to base_model, no wrapper prefix).
+            base_model_names = {n for n, _ in base.named_modules()}
+            base_modules = dict(base.named_modules())
 
     target_param_index_to_name: dict[int, str] = {}
     for idx, (name, _param) in enumerate(params_for_index):
         target_param_index_to_name[idx] = name
 
     device = next(model.parameters()).device
+    # # Extract second moments per layer
+    # normalizers: dict[str, Normalizer] = {}
+    # for param_idx, state in optimizer_state["state"].items():
+    #     param_idx = int(param_idx)
+    #     if param_idx not in target_param_index_to_name:
+    #         continue
+
+    #     param_name = target_param_index_to_name[param_idx]
+
+    #     if not param_name.endswith(".weight"):
+    #         continue
+
+    #     exp_avg_sq, row, col = _extract_second_moments(state)
+
+    #     if row is not None and col is not None:
+    #         # Native Adafactor checkpoint
+    #         if row.ndim != 1:
+    #             continue
+
+    #         layer_name = param_name.removesuffix(".weight")
+    #         module_name = layer_name.removeprefix("base_model.")
+    #         matched = match_target(module_name, target_modules)
+    #         if matched is None:
+    #             continue
+    #         module_name = matched
+
+    #         bias_exp_avg_sq = _get_bias_second_moment(
+    #             layer_name, target_param_index_to_name, optimizer_state, include_bias
+    #         )
+
+    #         normalizers[module_name] = AdafactorNormalizer(
+    #             row=row,
+    #             col=col,
+    #             bias_avg_sq=bias_exp_avg_sq,
+    #         )
+    #     elif exp_avg_sq is not None:
+    #         # Adam or 8-bit Adam checkpoint
+    #         if exp_avg_sq.ndim != 2:
+    #             continue
+
+    #         layer_name = param_name.removesuffix(".weight")
+    #         module_name = layer_name.removeprefix("base_model.")
+    #         matched = match_target(module_name, target_modules)
+    #         if matched is None:
+    #             continue
+    #         module_name = matched
+
+    #         bias_exp_avg_sq = _get_bias_second_moment(
+    #             layer_name, target_param_index_to_name, optimizer_state, include_bias
+    #         )
+
+    #         # Bergson's collector emits per-sample weight grads in [N, O, I]
+    #         # (nn.Linear convention). HFConv1D stores its weight as (I, O), so
+    #         # exp_avg_sq comes through as (I, O) and won't broadcast over the
+    #         # collector's (O, I) grad tensor — yields a shape-mismatch broadcast
+    #         # error inside AdamNormalizer.normalize_weight. Transpose here so
+    #         # downstream broadcasting matches.
+    #         mod = base_modules.get(module_name)
+    #         if mod is not None and isinstance(mod, HFConv1D):
+    #             exp_avg_sq = exp_avg_sq.t().contiguous()
+
+    #         normalizers[module_name] = AdamNormalizer(
+    #             weight_avg_sq=exp_avg_sq,
+    #             bias_avg_sq=bias_exp_avg_sq,
+    #         )
 
     normalizers = get_normalizers(
         optimizer_state_dict,
