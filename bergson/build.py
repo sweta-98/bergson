@@ -140,8 +140,7 @@ def build(
         and aggregation.
     hessian_cfg : HessianConfig | None
         When provided and ``index_cfg.skip_index`` is True, the run path is
-        nested under ``<run_path>/<method>/`` so the autocorrelation hessian
-        sits alongside an existing index without clobbering it.
+        nested under ``<run_path>/<method>/``.
     """
     if index_cfg.debug:
         setup_reproducibility()
