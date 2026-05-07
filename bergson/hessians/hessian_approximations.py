@@ -174,11 +174,11 @@ def hessian_worker(
         weights_only=False,
     )
 
-    eva_a = compute_eigendecomposition(
+    eigenvalues_a = compute_eigendecomposition(
         os.path.join(index_cfg.partial_run_path, "activation_sharded"),
         total_processed=total_processed,
     )
-    eva_g = compute_eigendecomposition(
+    eigenvalues_g = compute_eigendecomposition(
         os.path.join(index_cfg.partial_run_path, "gradient_sharded"),
         total_processed=total_processed,
     )
@@ -187,8 +187,8 @@ def hessian_worker(
 
     save_uncorrected_eigenvalues(
         partial_run_path=index_cfg.partial_run_path,
-        eva_a_local=eva_a,
-        eva_g_local=eva_g,
+        eigenvalues_a=eigenvalues_a,
+        eigenvalues_g=eigenvalues_g,
         total_processed=total_processed,
         rank=rank,
         world_size=world_size,
