@@ -75,15 +75,7 @@ class Ekfac(Serializable):
 
 @dataclass
 class Hessian(Serializable):
-    """Approximate Hessian matrices using KFAC or EKFAC.
-
-    Output layout:
-
-        <run_path>/<method>/
-            hessian_config.yaml
-            index_config.yaml
-            ...method-specific artifacts...
-    """
+    """Approximate Hessian matrices using KFAC or EKFAC."""
 
     hessian_cfg: HessianConfig
     index_cfg: IndexConfig
