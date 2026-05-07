@@ -4,8 +4,9 @@ set -e
 
 source .venv/bin/activate
 
-TOKEN_SCALES=("10K" "100K" "1M" "10M" "100M") # "1B" commented out - too slow
-MODELS=("pythia-160m" 'pythia-430m' "pythia-1b")
+TOKEN_SCALES=("10K" ) # "1B" commented out - too slow
+#"100K" "1M" "10M" "100M"
+MODELS=("pythia-70m" "pythia-160m" "pythia-1b") #)
 DATASET="EleutherAI/SmolLM2-135M-10B"
 NUM_GPUS=8
 

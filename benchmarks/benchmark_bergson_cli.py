@@ -106,6 +106,9 @@ class RunConfig:
     projection_dim: int = 16
     """Dimension to project gradients to. Matches bergson default."""
 
+    num_queries: int = 1
+    """Number of query examples to score against the index."""
+
 
 class VramMonitor:
     """Poll nvidia-smi in a background thread to track peak VRAM.
@@ -266,6 +269,7 @@ def find_existing_successful_run(
     train_tokens: int,
     dataset: str,
     num_gpus: int,
+    num_queries: int = 1,
 ) -> CLIRunRecord | None:
     """
     Check if a successful benchmark run already exists for the given configuration.
@@ -281,6 +285,7 @@ def find_existing_successful_run(
             and record.train_tokens == train_tokens
             and record.dataset == dataset
             and record.num_gpus == num_gpus
+            and record.eval_tokens == num_queries
         ):
             return record
 
@@ -301,7 +306,7 @@ class Run:
         if self.run_cfg.model not in MODEL_SPECS:
             raise ValueError(f"Unknown model '{self.run_cfg.model}'")
 
-        eval_seqs = 1
+        eval_seqs = self.run_cfg.num_queries
         eval_tokens = 1024
 
         spec = MODEL_SPECS[self.run_cfg.model]
@@ -323,6 +328,7 @@ class Run:
                 train_tokens=train_tokens,
                 dataset=self.run_cfg.dataset,
                 num_gpus=self.run_cfg.num_gpus,
+                num_queries=eval_seqs,
             )
 
             if existing_run is not None:
@@ -358,11 +364,11 @@ class Run:
         query_index_path = benchmark_path / "query_index"
         query_dataset_path = benchmark_path / "query_dataset"
 
-        # Create a 1-example dataset
-        print("Creating 1-example query dataset (untimed)...")
+        # Create an n-example query dataset
+        print(f"Creating {eval_seqs}-example query dataset (untimed)...")
         from datasets import Dataset
 
-        query_dataset = Dataset.from_dict({"text": ["Hello, world!"]})
+        query_dataset = Dataset.from_dict({"text": [f"Query example {i}." for i in range(eval_seqs)]})
         query_dataset.save_to_disk(str(query_dataset_path))
 
         # Build query index from the 1-example dataset
@@ -393,7 +399,7 @@ class Run:
         # Read the determined batch size from the query index
         with open(query_index_path / "index_config.yaml", "r") as f:
             query_cfg = IndexConfig(**yaml.safe_load(f))
-            determined_batch_size = 2048 #query_cfg.token_batch_size
+            determined_batch_size = 512 #query_cfg.token_batch_size
         print(
             f"Using token_batch_size: {determined_batch_size}"
             " (determined before timing)"
@@ -406,7 +412,7 @@ class Run:
             "--dataset",
             self.run_cfg.dataset,
             "--split",
-            "train",
+            "train[:1%]",
             "--skip_preconditioners",
             "--overwrite",
             "--truncation",
@@ -432,49 +438,49 @@ class Run:
 
         try:
             # Step 1: Build the gradient index (timed)
-            build_cmd = [
-                "bergson",
-                "build",
-                str(index_path),
-                *common_args,
-            ]
+            # build_cmd = [
+            #     "bergson",
+            #     "build",
+            #     str(index_path),
+            #     *common_args,
+            # ]
 
-            success, build_time, err, build_peak_vram_mb = (
-                run_cli_command(
-                    build_cmd,
-                    "Build",
-                    monitor_vram=True,
-                    num_gpus=self.run_cfg.num_gpus,
-                )
-            )
-            if not success:
-                print(f"Warning: Build step failed: {err}")
-                raise RuntimeError(err)
+            # success, build_time, err, build_peak_vram_mb = (
+            #     run_cli_command(
+            #         build_cmd,
+            #         "Build",
+            #         monitor_vram=True,
+            #         num_gpus=self.run_cfg.num_gpus,
+            #     )
+            # )
+            # if not success:
+            #     print(f"Warning: Build step failed: {err}")
+            #     raise RuntimeError(err)
 
-            # Step 2: Score using 1-sequence query index (timed)
-            score_cmd = [
-                "bergson",
-                "score",
-                str(score_path),
-                "--query_path",
-                str(query_index_path),
-                "--score",
-                "nearest",
-                *common_args,
-            ]
+            # # Step 2: Score using 1-sequence query index (timed)
+            # score_cmd = [
+            #     "bergson",
+            #     "score",
+            #     str(score_path),
+            #     "--query_path",
+            #     str(query_index_path),
+            #     "--score",
+            #     "individual",
+            #     *common_args,
+            # ]
 
-            success, score_time, err, score_peak_vram_mb = (
-                run_cli_command(
-                    score_cmd,
-                    "Score",
-                    monitor_vram=True,
-                    num_gpus=self.run_cfg.num_gpus,
-                )
-            )
-            if not success:
-                print(f"Warning: Score step failed: {err}")
-                print(score_cmd)
-                score_time = None
+            # success, score_time, err, score_peak_vram_mb = (
+            #     run_cli_command(
+            #         score_cmd,
+            #         "Score",
+            #         monitor_vram=True,
+            #         num_gpus=self.run_cfg.num_gpus,
+            #     )
+            # )
+            # if not success:
+            #     print(f"Warning: Score step failed: {err}")
+            #     print(score_cmd)
+            #     score_time = None
 
             # Step 3: EKFAC build and score (timed)
             new_common_args = common_args

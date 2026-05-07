@@ -2,7 +2,7 @@
 
 set -e
 
-TOKEN_SCALES=("10M")
+TOKEN_SCALES=("100M")
 #"pythia-14m" "pythia-70m" "pythia-1b""pythia-160m"
 
 MODELS=( "pythia-160m" )
@@ -33,7 +33,7 @@ for model in "${MODELS[@]}"; do
 
         START_TIME=$(date +%s)
 
-        CUDA_VISIBLE_DEVICES=1 python -m benchmarks.benchmark_magic \
+        CUDA_VISIBLE_DEVICES=3 python -m benchmarks.benchmark_magic \
             "$model" \
             "$tokens" \
             "runs/bergson_magic" \

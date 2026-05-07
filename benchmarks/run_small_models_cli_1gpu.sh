@@ -2,9 +2,9 @@
 
 set -e
 
-TOKEN_SCALES=("10K" "100K" "1M" "10M" "100M")
+TOKEN_SCALES=("10M")
 # "pythia-14m" "pythia-70m" "pythia-160m"  "pythia-1b"
-MODELS=("pythia-410m")
+MODELS=( "pythia-160m" )
 DATASET="EleutherAI/SmolLM2-135M-10B"
 
 # Create runs/benchmarks directory if it doesn't exist
@@ -32,11 +32,13 @@ for model in "${MODELS[@]}"; do
 
         START_TIME=$(date +%s)
 
-        CUDA_VISIBLE_DEVICES=3 python -m benchmarks.benchmark_bergson_cli \
+        CUDA_VISIBLE_DEVICES=0 python -m benchmarks.benchmark_bergson_cli \
             "$model" \
             "$tokens" \
             "runs/bergson_cli_benchmark" \
             --dataset "$DATASET" \
+            --skip_existing=False \
+             2>&1 | tee "runs/benchmarks/cli_benchmark_1gpu_${model}_${tokens}.log"
             2>&1 | tee "runs/benchmarks/cli_benchmark_1gpu_${model}_${tokens}.log"
 
         EXIT_CODE=$?

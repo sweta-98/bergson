@@ -2,7 +2,7 @@
 
 set -e
 
-TOKEN_SCALES=("10M")
+TOKEN_SCALES=("100K" "100K" "100K" "100K" "100K" "100K")
 #"pythia-14m" "pythia-70m" "pythia-1b""pythia-160m"
 
 MODELS=( "pythia-160m" )
@@ -33,11 +33,12 @@ for model in "${MODELS[@]}"; do
 
         START_TIME=$(date +%s)
 
-        CUDA_VISIBLE_DEVICES=1 python -m benchmarks.benchmark_magic \
+        CUDA_VISIBLE_DEVICES=4 python -m benchmarks.benchmark_magic \
             "$model" \
             "$tokens" \
             "runs/bergson_magic" \
             --dataset "$DATASET" \
+            --skip_existing=False \
             2>&1 | tee "runs/benchmarks/magic_1gpu_${model}_${tokens}.log"
 
         EXIT_CODE=$?

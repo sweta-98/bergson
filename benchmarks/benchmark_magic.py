@@ -67,6 +67,7 @@ class MagicRunRecord:
     error: str | None
     num_gpus: int = 1
     hardware: str | None = None
+    num_queries: int = 1
     # Peak VRAM (MB) per phase, measured via nvidia-smi polling
     train_peak_vram_mb: float | None = None
     gradient_peak_vram_mb: float | None = None
@@ -109,6 +110,9 @@ class RunConfig:
     skip_existing: bool = True
     """Skip benchmark if a successful run exists for this model/token combo."""
 
+    num_queries: int = 1
+    """Number of query examples to score against the training set."""
+
     precision: str = "fp32"
     """Precision for the model (fp32, bf16, fp16)."""
 
@@ -135,6 +139,7 @@ def find_existing_successful_run(
     train_tokens: int,
     dataset: str,
     num_gpus: int,
+    num_queries: int = 1,
 ) -> MagicRunRecord | None:
     """Return a successful benchmark record if one exists, else None."""
     for record in load_records(run_root):
@@ -144,6 +149,7 @@ def find_existing_successful_run(
             and record.train_tokens == train_tokens
             and record.dataset == dataset
             and record.num_gpus == num_gpus
+            and record.num_queries == num_queries
         ):
             return record
     return None
@@ -357,6 +363,7 @@ class Run:
                 train_tokens=train_tokens,
                 dataset=self.run_cfg.dataset,
                 num_gpus=self.run_cfg.num_gpus,
+                num_queries=self.run_cfg.num_queries,
             )
             if existing is not None:
                 print(
@@ -364,6 +371,8 @@ class Run:
                     f"Use --skip_existing=False to force re-run."
                 )
                 return
+
+        num_queries = self.run_cfg.num_queries
 
         benchmark_path = (
             Path(self.run_cfg.run_path).resolve()
@@ -373,20 +382,20 @@ class Run:
                 spec,
                 train_tokens,
                 eval_tokens=0,
-                eval_sequences=1,
+                eval_sequences=num_queries,
                 tag=self.run_cfg.tag,
                 num_gpus=self.run_cfg.num_gpus,
             )
         )
 
-        # Build a 1-example query dataset if not provided
+        # Build an n-example query dataset if not provided
         if self.run_cfg.query_dataset:
             query_dataset_path = Path(self.run_cfg.query_dataset).resolve()
         else:
             query_dataset_path = benchmark_path / "query_dataset"
             if not query_dataset_path.exists():
-                print("Creating 1-example query dataset...")
-                qds = Dataset.from_dict({"text": ["Hello, world!"]})
+                print(f"Creating {num_queries}-example query dataset...")
+                qds = Dataset.from_dict({"text": [f"Query example {i}." for i in range(num_queries)]})
                 qds.save_to_disk(str(query_dataset_path))
 
         # Build MagicConfig
@@ -396,11 +405,12 @@ class Run:
             precision=self.run_cfg.precision,
             overwrite=True,
             batch_size=self.run_cfg.batch_size,
+            token_batch_size=1024, 
             save_mode=self.run_cfg.save_mode,
             num_subsets=0,  # skip validation
             data=DataConfig(
                 dataset=self.run_cfg.dataset,
-                split="train",
+                split="train[:1%]",
                 truncation=True,
             ),
             query=DataConfig(
@@ -413,6 +423,7 @@ class Run:
         # Limit to train_tokens using the built-in filter
         magic_cfg.max_tokens = train_tokens
         train_ds = filter_by_max_tokens(train_ds, magic_cfg)
+
         train_n = len(train_ds)
         print(f"Train dataset: {train_n} sequences after max_tokens={train_tokens} filter")
         previous_max = magic_cfg.max_tokens
@@ -463,6 +474,7 @@ class Run:
             error=error_message,
             num_gpus=self.run_cfg.num_gpus,
             hardware=get_hardware_info(),
+            num_queries=num_queries,
             train_peak_vram_mb=_BENCHMARK_RESULTS.get("train_peak_vram_mb"),
             gradient_peak_vram_mb=_BENCHMARK_RESULTS.get("gradient_peak_vram_mb"),
         )

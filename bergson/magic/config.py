@@ -17,6 +17,8 @@ class MagicConfig(AttributionConfig, TrainingConfig):
     """Query/eval dataset for computing attribution target gradients.
     If not specified, defaults to the training dataset."""
 
+    token_batch_size: int = 1024
+    
     query_method: MagicQueryMethod = "mean"
     """Method for reducing query gradients across batches."""
 
