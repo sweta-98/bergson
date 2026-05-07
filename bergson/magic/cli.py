@@ -275,7 +275,7 @@ def worker(
             "cpu:gloo,cuda:nccl",
             init_method=f"tcp://{addr}:{port}",
             device_id=torch.device(get_device(rank)),
-            rank=rank,
+            rank=global_rank,
             world_size=world_size,
         )
 
