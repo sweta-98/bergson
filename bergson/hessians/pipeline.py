@@ -96,10 +96,6 @@ def hessian_pipeline(
         )
 
     # ── Step 4: Score training examples ───────────────────────────────────
-    # The deepcopy carries projection_dim / projection_type / projection_target
-    # from index_cfg, so training-side gradients are stored at the same shape
-    # as the IVHP output (apply_hessian compresses iff index_cfg.projection_dim
-    # > 0). No override needed on either branch.
     print("Step 4/4: Scoring training data against transformed query...")
     if not _step_complete(scores_path, resume):
         score_index_cfg = deepcopy(index_cfg)

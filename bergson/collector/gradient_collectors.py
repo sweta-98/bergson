@@ -126,13 +126,6 @@ class GradientCollector(HookCollectorBase):
     def global_project(self) -> None:
         """Concatenate per-module per-example gradients and project.
         Sets ``self.mod_grads`` to ``{"gradients": projected}``.
-
-        Projects in row-chunks. A naive ``flat = torch.cat(..., dim=1)`` of
-        all module gradients can need tens of GiB contiguous on rank 0 when
-        the bin-packer assigns many short examples to a single batch (e.g.
-        flan_v2 with token_batch_size=2048 packs ~80 rows of ~525 MB each).
-        The projector is per-row, so chunking is exact; chunk size is sized
-        to a fixed GPU-byte budget.
         """
         # backward_hook fires in reverse forward order, so insertion order in
         # mod_grads is deterministic for a given model.
@@ -150,9 +143,6 @@ class GradientCollector(HookCollectorBase):
                 projection_type=self.processor.projection_type,
             )
 
-        # Cap chunk_flat at ~4 GiB per chunk to leave headroom for fast_jl's
-        # internal scratch buffers alongside the per-module tensors that stay
-        # alive until the loop exits.
         bytes_per_row = total_grad_dim * parts[0].element_size()
         chunk_rows = max(1, (4 * 1024**3) // max(bytes_per_row, 1))
         chunk_rows = min(chunk_rows, n_rows)
@@ -171,7 +161,6 @@ class GradientCollector(HookCollectorBase):
             )
             del chunk_flat, chunk_projected
 
-        # Free per-module GPU tensors now that all chunks are projected.
         self.mod_grads = {}
 
         self.mod_grads = {"gradients": torch.cat(chunks_cpu, dim=0)}

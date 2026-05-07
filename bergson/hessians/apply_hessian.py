@@ -32,14 +32,7 @@ class EkfacConfig:
     debug: bool = False
     lambda_damp_factor: float = 0.1
     projection_dim: int = 0
-    """If > 0, compress the IVHP output per layer by ``P_S · (H⁻¹G) · P_Aᵀ``
-    using the same per-layer ``f"{name}/{side}"`` random projections that
-    ``bergson build`` uses on training gradients. The result is ``[p, p]``
-    per layer, suitable for inner-product scoring against a compressed
-    gradient store."""
     projection_type: Literal["normal", "rademacher"] = "rademacher"
-    """Random projection family for compression. Must match the value used
-    in the matching ``bergson build``."""
 
 
 class EkfacApplicator:
@@ -159,10 +152,6 @@ class EkfacApplicator:
         del eigen_a
         gc.collect()
 
-        # Compress the IVHP output per layer by ``P_S · (H⁻¹G) · P_Aᵀ`` so
-        # the saved gradients are ``[N, p, p]`` and can be directly inner-
-        # producted against a `bergson build` store that used the same
-        # per-layer projections.
         if p > 0:
             for k, v in transformed_gradients.items():
                 d_S = v.shape[-2]
