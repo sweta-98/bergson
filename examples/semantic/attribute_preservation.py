@@ -1,6 +1,6 @@
 """Attribute Preservation Under Style Suppression Experiment.
 
-This module tests whether style suppression preconditioners preserve the ability
+This module tests whether style suppression hessians preserve the ability
 to match on content attributes (not just exact facts). This is a harder test -
 we want to surgically remove style signal without damaging attribute signal.
 
@@ -701,7 +701,7 @@ class AttributePreservationMetrics:
 def score_attribute_eval(
     config: AttributePreservationConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     eval_prompt_column: str = "fact",
     eval_completion_column: str = "reworded",
     damping_factor: float = 0.1,
@@ -711,7 +711,7 @@ def score_attribute_eval(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner (None for no precond).
+        hessian_name: Name of hessian (None for no hess).
         eval_prompt_column: Column to use as prompt for eval gradients.
             Set to "question" for semantic-only attribution.
         eval_completion_column: Column to use as completion for eval gradients.
@@ -742,12 +742,12 @@ def score_attribute_eval(
     )
     col_suffix = "_question_answer" if is_semantic else ""
 
-    if preconditioner_name:
-        scores_path = base_path / f"scores_{preconditioner_name}{col_suffix}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_{hessian_name}{col_suffix}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / f"scores_no_precond{col_suffix}"
-        precond_path = None
+        scores_path = base_path / f"scores_no_hess{col_suffix}"
+        hess_path = None
 
     # Return cached
     if (scores_path / "scores.npy").exists():
@@ -785,14 +785,14 @@ def score_attribute_eval(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1, damping_factor=damping_factor)
 
     def load_grad_as_float(grads: np.memmap, name: str) -> np.ndarray:
@@ -855,7 +855,7 @@ def score_attribute_eval(
             str(index_cfg.projection_dim or 16),
             "--token_batch_size",
             token_batch_size,
-            "--skip_preconditioners",
+            "--skip_hessians",
         ]
         print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -893,7 +893,7 @@ def score_attribute_eval(
 def compute_attribute_metrics(
     config: AttributePreservationConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     eval_prompt_column: str = "fact",
     eval_completion_column: str = "reworded",
     damping_factor: float = 0.1,
@@ -903,7 +903,7 @@ def compute_attribute_metrics(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner.
+        hessian_name: Name of hessian.
         eval_prompt_column: Column to use as prompt for eval gradients.
             Set to "question" for semantic-only attribution.
         eval_completion_column: Column to use as completion for eval gradients.
@@ -929,7 +929,7 @@ def compute_attribute_metrics(
     scores = score_attribute_eval(
         config,
         base_path,
-        preconditioner_name,
+        hessian_name,
         eval_prompt_column=eval_prompt_column,
         eval_completion_column=eval_completion_column,
         damping_factor=damping_factor,
@@ -1122,7 +1122,7 @@ def score_attribute_eval_with_pca(
     base_path: Path | str,
     style_subspace: dict[str, tuple],
     top_k: int = 100,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     eval_prompt_column: str = "fact",
     eval_completion_column: str = "reworded",
     damping_factor: float = 0.1,
@@ -1134,7 +1134,7 @@ def score_attribute_eval_with_pca(
         base_path: Base path for experiment outputs.
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components used (for cache naming).
-        preconditioner_name: Optional preconditioner to apply after projection.
+        hessian_name: Optional hessian to apply after projection.
         eval_prompt_column: Column for eval prompt (use "question" for semantic).
         eval_completion_column: Column for eval completion (use "answer" for semantic).
         damping_factor: Damping factor for matrix inversion.
@@ -1153,7 +1153,7 @@ def score_attribute_eval_with_pca(
     from bergson.gradients import GradientProcessor
     from bergson.utils.math import damped_psd_power
 
-    from .preconditioners import project_orthogonal_to_style_subspace
+    from .hessians import project_orthogonal_to_style_subspace
 
     base_path = Path(base_path)
     index_path = base_path / "index"
@@ -1165,14 +1165,12 @@ def score_attribute_eval_with_pca(
     )
     col_suffix = "_question_answer" if is_semantic else ""
 
-    if preconditioner_name:
-        scores_path = (
-            base_path / f"scores_pca_k{top_k}_{preconditioner_name}{col_suffix}"
-        )
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_pca_k{top_k}_{hessian_name}{col_suffix}"
+        hess_path = base_path / hessian_name
     else:
         scores_path = base_path / f"scores_pca_k{top_k}{col_suffix}"
-        precond_path = None
+        hess_path = None
 
     # Return cached
     if (scores_path / "scores.npy").exists():
@@ -1211,14 +1209,14 @@ def score_attribute_eval_with_pca(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, -1.0, damping_factor=damping_factor)
 
     def load_grad_as_float(grads: np.memmap, name: str) -> np.ndarray:
@@ -1276,7 +1274,7 @@ def score_attribute_eval_with_pca(
             str(index_cfg.projection_dim or 16),
             "--token_batch_size",
             token_batch_size,
-            "--skip_preconditioners",
+            "--skip_hessians",
         ]
         print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -1330,7 +1328,7 @@ def compute_attribute_metrics_with_pca(
     base_path: Path | str,
     style_subspace: dict[str, tuple],
     top_k: int = 100,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     eval_prompt_column: str = "fact",
     eval_completion_column: str = "reworded",
     damping_factor: float = 0.1,
@@ -1342,7 +1340,7 @@ def compute_attribute_metrics_with_pca(
         base_path: Base path for experiment outputs.
         style_subspace: Dictionary from compute_pca_style_subspace().
         top_k: Number of principal components.
-        preconditioner_name: Optional preconditioner to combine with PCA.
+        hessian_name: Optional hessian to combine with PCA.
         eval_prompt_column: Column for eval prompt.
         eval_completion_column: Column for eval completion.
         damping_factor: Damping factor for matrix inversion.
@@ -1368,7 +1366,7 @@ def compute_attribute_metrics_with_pca(
         base_path,
         style_subspace,
         top_k=top_k,
-        preconditioner_name=preconditioner_name,
+        hessian_name=hessian_name,
         eval_prompt_column=eval_prompt_column,
         eval_completion_column=eval_completion_column,
         damping_factor=damping_factor,
@@ -1495,18 +1493,18 @@ def compute_attribute_metrics_with_pca(
     )
 
 
-def compute_style_preconditioner_from_data(
+def compute_style_hessian_from_data(
     base_path: Path | str,
     config: AttributePreservationConfig,
 ) -> Path:
-    """Compute R_between preconditioner from training data style means.
+    """Compute R_between hessian from training data style means.
 
     Args:
         base_path: Base path for experiment.
         config: Experiment configuration.
 
     Returns:
-        Path to preconditioner.
+        Path to hessian.
     """
     import json
 
@@ -1522,7 +1520,7 @@ def compute_style_preconditioner_from_data(
     data_path = base_path / "data"
     output_path = base_path / "r_between"
 
-    if (output_path / "preconditioners.pth").exists():
+    if (output_path / "hessians.pth").exists():
         print(f"Loading cached R_between from {output_path}")
         return output_path
 
@@ -1592,8 +1590,8 @@ def compute_style_preconditioner_from_data(
     output_path.mkdir(parents=True, exist_ok=True)
     between_proc = GradientProcessor(
         normalizers=base_proc.normalizers,
-        preconditioners=between_precs,
-        preconditioners_eigen={},
+        hessians=between_precs,
+        hessians_eigen={},
         projection_dim=base_proc.projection_dim,
         projection_type=base_proc.projection_type,
         include_bias=base_proc.include_bias,
@@ -1608,7 +1606,7 @@ def compute_eval_second_moment(
     base_path: Path | str,
     config: AttributePreservationConfig,
 ) -> Path:
-    """Compute second moment matrix of eval gradients as preconditioner.
+    """Compute second moment matrix of eval gradients as hessian.
 
     H_eval = (1/n) * G_eval^T @ G_eval
 
@@ -1617,7 +1615,7 @@ def compute_eval_second_moment(
         config: Experiment configuration.
 
     Returns:
-        Path to preconditioner.
+        Path to hessian.
     """
     import json
 
@@ -1633,7 +1631,7 @@ def compute_eval_second_moment(
     eval_grads_path = base_path / "eval_grads"
     output_path = base_path / "h_eval"
 
-    if (output_path / "preconditioners.pth").exists():
+    if (output_path / "hessians.pth").exists():
         print(f"Loading cached H_eval from {output_path}")
         return output_path
 
@@ -1669,8 +1667,8 @@ def compute_eval_second_moment(
     output_path.mkdir(parents=True, exist_ok=True)
     eval_proc = GradientProcessor(
         normalizers=base_proc.normalizers,
-        preconditioners=eval_precs,
-        preconditioners_eigen={},
+        hessians=eval_precs,
+        hessians_eigen={},
         projection_dim=base_proc.projection_dim,
         projection_type=base_proc.projection_type,
         include_bias=base_proc.include_bias,
@@ -1740,7 +1738,7 @@ def create_majority_style_eval(
 def score_majority_style_eval(
     config: AttributePreservationConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
     damping_factor: float = 0.1,
 ) -> "np.ndarray":
     """Score majority style eval queries against training index.
@@ -1748,7 +1746,7 @@ def score_majority_style_eval(
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner (None for no precond).
+        hessian_name: Name of hessian (None for no hess).
         damping_factor: Damping factor for matrix inversion.
 
     Returns:
@@ -1770,12 +1768,12 @@ def score_majority_style_eval(
     data_path = base_path / "data"
 
     # Determine output path
-    if preconditioner_name:
-        scores_path = base_path / f"scores_majority_{preconditioner_name}"
-        precond_path = base_path / preconditioner_name
+    if hessian_name:
+        scores_path = base_path / f"scores_majority_{hessian_name}"
+        hess_path = base_path / hessian_name
     else:
-        scores_path = base_path / "scores_majority_no_precond"
-        precond_path = None
+        scores_path = base_path / "scores_majority_no_hess"
+        hess_path = None
 
     # Return cached
     if (scores_path / "scores.npy").exists():
@@ -1808,14 +1806,14 @@ def score_majority_style_eval(
         info = json.load(f)
     module_names = info["dtype"]["names"]
 
-    # Load preconditioner if specified
+    # Load hessian if specified
     h_inv = {}
-    if precond_path and (precond_path / "preconditioners.pth").exists():
-        print(f"Loading preconditioner from {precond_path}")
-        proc = GradientProcessor.load(precond_path)
+    if hess_path and (hess_path / "hessians.pth").exists():
+        print(f"Loading hessian from {hess_path}")
+        proc = GradientProcessor.load(hess_path)
         device = torch.device("cuda:0")
         for name in tqdm(module_names, desc="Computing H^(-1)"):
-            H = proc.preconditioners[name].to(device=device)
+            H = proc.hessians[name].to(device=device)
             h_inv[name] = damped_psd_power(H, power=-1, damping_factor=damping_factor)
 
     def load_grad_as_float(grads: np.memmap, name: str) -> np.ndarray:
@@ -1862,7 +1860,7 @@ def score_majority_style_eval(
             str(index_cfg.projection_dim or 16),
             "--token_batch_size",
             "6000",
-            "--skip_preconditioners",
+            "--skip_hessians",
         ]
         print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -1900,14 +1898,14 @@ def score_majority_style_eval(
 def compute_majority_style_metrics(
     config: AttributePreservationConfig,
     base_path: Path | str,
-    preconditioner_name: str | None = None,
+    hessian_name: str | None = None,
 ) -> AttributePreservationMetrics:
     """Compute metrics for majority style eval (control).
 
     Args:
         config: Experiment configuration.
         base_path: Base path for experiment outputs.
-        preconditioner_name: Name of preconditioner.
+        hessian_name: Name of hessian.
 
     Returns:
         AttributePreservationMetrics dataclass.
@@ -1925,7 +1923,7 @@ def compute_majority_style_metrics(
         eval_ds = eval_ds["train"]
 
     # Load scores
-    scores = score_majority_style_eval(config, base_path, preconditioner_name)
+    scores = score_majority_style_eval(config, base_path, hessian_name)
 
     n_eval = len(eval_ds)
     top_k = 10
@@ -2098,7 +2096,7 @@ def run_attribute_preservation_experiment(
         base_path: Base path for outputs.
         analysis_model: Model for gradient collection. Defaults to HF_ANALYSIS_MODEL.
         reword_model: Model for style rewording (only used if not using HF dataset).
-        include_h_eval: Whether to include H_eval preconditioner.
+        include_h_eval: Whether to include H_eval hessian.
         include_majority_control: Whether to include majority style control.
         include_semantic_eval: Whether to include semantic-only eval (Q&A format).
         include_pca: Whether to include PCA style projection strategies.
@@ -2108,7 +2106,7 @@ def run_attribute_preservation_experiment(
         damping_factor: Damping factor for matrix inversion.
 
     Returns:
-        Dictionary mapping preconditioner names to metrics.
+        Dictionary mapping hessian names to metrics.
     """
     if config is None:
         config = AttributePreservationConfig()
@@ -2135,31 +2133,31 @@ def run_attribute_preservation_experiment(
     create_styled_datasets(config, base_path / "data", reword_model)
     create_attribute_index(config, base_path, analysis_model)
 
-    # Step 2: Compute style suppression preconditioner
+    # Step 2: Compute style suppression hessian
     print("\n" + "-" * 60)
-    print("STEP 2: Computing style suppression preconditioner (R_between)")
+    print("STEP 2: Computing style suppression hessian (R_between)")
     print("-" * 60)
-    compute_style_preconditioner_from_data(base_path, config)
+    compute_style_hessian_from_data(base_path, config)
 
-    # Step 3: Evaluate minority style (style mismatch) with different preconditioners
+    # Step 3: Evaluate minority style (style mismatch) with different hessians
     print("\n" + "-" * 60)
-    print("STEP 3: Evaluating preconditioner strategies (minority style eval)")
+    print("STEP 3: Evaluating hessian strategies (minority style eval)")
     print("-" * 60)
 
     strategies = [
-        (None, "no_precond"),
+        (None, "no_hess"),
         ("r_between", "r_between"),
     ]
 
     all_metrics: dict[str, AttributePreservationMetrics] = {}
 
-    for precond_name, display_name in strategies:
+    for hess_name, display_name in strategies:
         print(f"\n--- Strategy: {display_name} ---")
-        metrics = compute_attribute_metrics(config, base_path, precond_name)
+        metrics = compute_attribute_metrics(config, base_path, hess_name)
         print_attribute_metrics(metrics, display_name)
         all_metrics[display_name] = metrics
 
-    # Step 3b: Compute and evaluate H_eval preconditioner
+    # Step 3b: Compute and evaluate H_eval hessian
     if include_h_eval:
         print("\n" + "-" * 60)
         print("STEP 3b: Computing H_eval (second moment of eval gradients)")
@@ -2178,10 +2176,10 @@ def run_attribute_preservation_experiment(
         print("-" * 60)
         create_majority_style_eval(config, base_path, reword_model)
 
-        print("\n--- Control: majority_style_no_precond ---")
+        print("\n--- Control: majority_style_no_hess ---")
         metrics = compute_majority_style_metrics(config, base_path, None)
-        print_attribute_metrics(metrics, "majority_no_precond")
-        all_metrics["majority_no_precond"] = metrics
+        print_attribute_metrics(metrics, "majority_no_hess")
+        all_metrics["majority_no_hess"] = metrics
 
     # Step 5: Semantic-only eval (gradients only from answer tokens)
     if include_semantic_eval:
@@ -2192,19 +2190,19 @@ def run_attribute_preservation_experiment(
         # Semantic strategies to test
         semantic_strategies = [
             ("index", "semantic_index"),  # Standard IF with H_train
-            (None, "semantic_no_precond"),
+            (None, "semantic_no_hess"),
             ("r_between", "semantic_r_between"),
         ]
 
         if include_h_eval:
             semantic_strategies.append(("h_eval", "semantic_h_eval"))
 
-        for precond_name, display_name in semantic_strategies:
+        for hess_name, display_name in semantic_strategies:
             print(f"\n--- Strategy: {display_name} ---")
             metrics = compute_attribute_metrics(
                 config,
                 base_path,
-                precond_name,
+                hess_name,
                 eval_prompt_column="question",
                 eval_completion_column="answer",
                 damping_factor=damping_factor,
@@ -2215,7 +2213,7 @@ def run_attribute_preservation_experiment(
     # Step 6: PCA style projection (using external style subspace)
     style_subspace = None
     if include_pca:
-        from .preconditioners import compute_pca_style_subspace
+        from .hessians import compute_pca_style_subspace
 
         print("\n" + "-" * 60)
         print(f"STEP 6: PCA style projection (k={pca_top_k})")
@@ -2226,8 +2224,8 @@ def run_attribute_preservation_experiment(
             pca_subspace_path = Path("runs/asymmetric_style/pca_subspace")
 
         pca_subspace_path = Path(pca_subspace_path)
-        pirate_idx = Path("runs/precond_comparison/pirate")
-        shakespeare_idx = Path("runs/precond_comparison/shakespeare")
+        pirate_idx = Path("runs/hess_comparison/pirate")
+        shakespeare_idx = Path("runs/hess_comparison/shakespeare")
 
         if pirate_idx.exists() and shakespeare_idx.exists():
             print(f"Loading PCA style subspace from {pca_subspace_path}")
@@ -2238,7 +2236,7 @@ def run_attribute_preservation_experiment(
                 top_k=pca_top_k,
             )
 
-            # PCA without preconditioner
+            # PCA without hessian
             print(f"\n--- Strategy: pca_k{pca_top_k} ---")
             metrics = compute_attribute_metrics_with_pca(
                 config,
@@ -2257,7 +2255,7 @@ def run_attribute_preservation_experiment(
                 base_path,
                 style_subspace,
                 top_k=pca_top_k,
-                preconditioner_name="index",
+                hessian_name="index",
                 damping_factor=damping_factor,
             )
             print_attribute_metrics(metrics, f"pca_k{pca_top_k}_index")
@@ -2285,7 +2283,7 @@ def run_attribute_preservation_experiment(
                     base_path,
                     style_subspace,
                     top_k=pca_top_k,
-                    preconditioner_name="index",
+                    hessian_name="index",
                     eval_prompt_column="question",
                     eval_completion_column="answer",
                     damping_factor=damping_factor,
@@ -2319,7 +2317,7 @@ def run_attribute_preservation_experiment(
                 base_path,
                 style_subspace_k500,
                 top_k=pca_k500,
-                preconditioner_name="index",
+                hessian_name="index",
                 damping_factor=damping_factor,
             )
             print_attribute_metrics(metrics, f"pca_k{pca_k500}_index")
@@ -2345,7 +2343,7 @@ def run_attribute_preservation_experiment(
                     base_path,
                     style_subspace_k500,
                     top_k=pca_k500,
-                    preconditioner_name="index",
+                    hessian_name="index",
                     eval_prompt_column="question",
                     eval_completion_column="answer",
                     damping_factor=damping_factor,
@@ -2353,7 +2351,7 @@ def run_attribute_preservation_experiment(
                 print_attribute_metrics(metrics, f"semantic_pca_k{pca_k500}_index")
                 all_metrics[f"semantic_pca_k{pca_k500}_index"] = metrics
         else:
-            print("WARNING: PCA indices not found at runs/precond_comparison/")
+            print("WARNING: PCA indices not found at runs/hess_comparison/")
             print(
                 "  Run the asymmetric style experiment first to generate PCA subspace."
             )
@@ -2391,16 +2389,16 @@ def run_attribute_preservation_experiment(
     )
     print("  - Trade-off: Occ Acc - Style Only (higher is better)")
     print(
-        "  - majority_no_precond: Control showing baseline when eval "
+        "  - majority_no_hess: Control showing baseline when eval "
         "style matches training"
     )
     if include_semantic_eval:
         print("  - semantic_*: Eval gradients only from answer tokens (Q&A format)")
 
-    baseline = all_metrics.get("no_precond")
+    baseline = all_metrics.get("no_hess")
     r_between = all_metrics.get("r_between")
     h_eval = all_metrics.get("h_eval")
-    majority = all_metrics.get("majority_no_precond")
+    majority = all_metrics.get("majority_no_hess")
 
     print("\n" + "-" * 60)
     print("KEY FINDINGS")

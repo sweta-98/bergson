@@ -27,6 +27,45 @@ Usage
        --query.split "train[:8]" \
        --model EleutherAI/pythia-14m
 
+Output files
+------------
+
+After a run completes, ``run_cfg.run_path`` contains:
+
+* ``scores.pt`` — attribution scores tensor. Shape depends on the weight
+  parameterization:
+
+  * Per-example (1D weights): ``(num_train_docs,)``, indexed directly by
+    ``doc_id``.
+  * Per-token (2D weights): ``(num_chunks, seq_len)``, indexed by
+    ``(chunk_idx, token_idx)`` in the *post-shuffle* order used during
+    training. Pad rows appended to make the dataset divisible by
+    ``batch_size`` are trimmed before saving.
+
+* ``doc_ids.pt`` — written alongside ``scores.pt`` for every per-token
+  run, shape ``(num_chunks, seq_len)`` matching ``scores.pt`` row-for-row.
+  Each entry is the original (pre-shuffle) document id for that token
+  position. Downstream aggregation is one line:
+
+  .. code-block:: python
+
+     scores = torch.load("scores.pt")      # (num_chunks, seq_len)
+     doc_ids = torch.load("doc_ids.pt")    # (num_chunks, seq_len)
+     num_docs = int(doc_ids.max()) + 1
+     per_doc = torch.zeros(num_docs, dtype=scores.dtype)
+     per_doc.scatter_add_(0, doc_ids.flatten(), scores.flatten())
+
+  When ``data.chunk_length > 0`` the ``doc_ids`` column comes from
+  ``tokenize_and_chunk`` and chunks may pack multiple docs or split one
+  across chunks. When ``chunk_length`` is 0, each row is one document
+  and ``doc_ids`` is broadcast from the row's pre-shuffle index; tokens
+  past the row's actual length carry zero MAGIC score and contribute
+  nothing to the scatter-add.
+
+* ``run_config.yaml`` — serialized ``MagicConfig`` used for the run.
+* ``validation.csv`` — leave-subset-out validation results (if validation
+  was run).
+
 Meta Smoothness
 ---------------
 

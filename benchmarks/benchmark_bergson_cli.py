@@ -381,7 +381,7 @@ class Run:
             spec.hf_id,
             "--dataset",
             str(query_dataset_path),
-            "--skip_preconditioners",
+            "--skip_hessians",
             "--overwrite",
             "--nproc_per_node",
             "1",

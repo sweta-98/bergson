@@ -68,9 +68,9 @@ class Attributor:
         # Load the gradient processor
         self.processor = GradientProcessor.load(index_path, map_location=device)
 
-        # Precompute preconditioners
+        # Precompute hessians
         self.h_inv: dict[str, Tensor] = {}
-        for name, H in self.processor.preconditioners.items():
+        for name, H in self.processor.hessians.items():
             if self.precondition == "two-sided":
                 # Two-sided: precompute H^(-1) for two-sided application
                 self.h_inv[name] = damped_psd_power(H, power=-0.5).to(device)
@@ -121,9 +121,9 @@ class Attributor:
                 # Split: apply H^(-1/2) to index grads before normalization,
                 # for TrackStar
                 for name in self.grads:
-                    if name in self.processor.preconditioners:
+                    if name in self.processor.hessians:
                         h_inv = damped_psd_power(
-                            self.processor.preconditioners[name], power=-0.5
+                            self.processor.hessians[name], power=-0.5
                         )
                         self.grads[name] = self.grads[name].float() @ h_inv.to(device)
                         self.grads[name] = self.grads[name].to(dtype=dtype)

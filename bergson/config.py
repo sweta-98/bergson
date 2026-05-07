@@ -121,6 +121,9 @@ class ModelConfig(ABC):
     run_path: str = field(positional=True)
     """Directory to save results."""
 
+    overwrite: bool = False
+    """Whether to overwrite any existing index in the run path."""
+
     model: str = "EleutherAI/pythia-160m"
     """Name of the model to load."""
 
@@ -250,7 +253,36 @@ class LRScheduleConfig(Serializable):
 
 
 @dataclass
-class TrainingConfig(ModelConfig, Serializable):
+class AttributionConfig(ModelConfig, ABC):
+    """Base config for attribution methods."""
+
+    data: DataConfig = field(default_factory=DataConfig)
+    """Specification of the data on which to build the index."""
+
+    tokenizer: str = ""
+    """Name of the tokenizer to use. If not set the model tokenizer is used."""
+
+    drop_columns: bool = True
+    """Only save the new dataset columns. If false, the original dataset
+    columns will be saved as well."""
+
+    max_tokens: int | None = None
+    """Max tokens to process. If None, all tokens processed. Dataset only.
+    This experimental feature may be removed in the future."""
+
+    use_tf32_matmuls: bool = False
+    """Set matmul precision to 'high'."""
+
+    debug: bool = False
+    """Whether to enable debug mode with additional logging."""
+
+    def __post_init__(self):
+        if self.use_tf32_matmuls:
+            torch.set_float32_matmul_precision("high")
+
+
+@dataclass
+class TrainingConfig(AttributionConfig, Serializable):
     """Configuration for the MAGIC trainer."""
 
     lr_schedule: LRScheduleConfig = field(default_factory=LRScheduleConfig)
@@ -262,6 +294,9 @@ class TrainingConfig(ModelConfig, Serializable):
 
     num_epochs: int = 1
     """Number of full passes over the training data."""
+
+    seed: int = 42
+    """Random seed for dataset shuffling."""
 
     adam_beta1: float = 0.95
     """Beta1 for AdamW optimizer."""
@@ -282,37 +317,31 @@ class TrainingConfig(ModelConfig, Serializable):
     grad_checkpointing: bool = False
     """Whether to use gradient checkpointing during the forward pass."""
 
+    resume: bool = False
+    """Resume a previously interrupted run from the last checkpoint."""
+
+    wandb_project: str = ""
+    """Weights & Biases project name. If set, logs training loss to W&B."""
+
 
 @dataclass
-class AttributionConfig(ModelConfig, ABC):
-    """Base config for attribution methods."""
+class ValidationConfig(TrainingConfig, ABC):
+    """Config for leave-k-out validation of attribution scores."""
 
-    data: DataConfig = field(default_factory=DataConfig)
-    """Specification of the data on which to build the index."""
+    query: DataConfig = field(
+        default_factory=lambda: DataConfig(split="train"),
+    )
+    """Query/eval dataset for computing attribution target gradients.
+    If not specified, defaults to the training dataset."""
 
-    tokenizer: str = ""
-    """Name of the tokenizer to use. If not set the model tokenizer is used."""
+    query_method: Literal["mean", "sum"] = "mean"
+    """Method for reducing query gradients across batches."""
 
-    drop_columns: bool = True
-    """Only save the new dataset columns. If false, the original dataset
-    columns will be saved as well."""
+    num_subsets: int = 100
+    """Number of leave-k-out subsets for Spearman correlation."""
 
-    max_tokens: int | None = None
-    """Max tokens to process. If None, all tokens processed. Dataset only.
-    This experimental feature may be removed in the future."""
-
-    overwrite: bool = False
-    """Whether to overwrite any existing index in the run path."""
-
-    use_tf32_matmuls: bool = False
-    """Set matmul precision to 'high'."""
-
-    debug: bool = False
-    """Whether to enable debug mode with additional logging."""
-
-    def __post_init__(self):
-        if self.use_tf32_matmuls:
-            torch.set_float32_matmul_precision("high")
+    subset_strategy: Literal["random", "sorted"] = "sorted"
+    """Strategy for selecting leave-k-out subsets for validation."""
 
 
 @dataclass
@@ -345,6 +374,11 @@ class IndexConfig(AttributionConfig, Serializable):
     projection_type: Literal["normal", "rademacher"] = "rademacher"
     """Type of random projections to use for the gradients."""
 
+    projection_target: Literal["per_module", "global"] = "per_module"
+    """Projection target. ``per_module`` does a double-sided random projection of
+    each module gradient. ``global`` flattens the per-example gradient across
+    all tracked modules and projects that to ``projection_dim``."""
+
     token_batch_size: int = 2048
     """Batch size in tokens for building the index."""
 
@@ -355,19 +389,21 @@ class IndexConfig(AttributionConfig, Serializable):
     processor_path: str = ""
     """Path to a precomputed processor."""
 
-    optimizer_state_path: str = ""
-    """Path to a training checkpoint directory containing an optimizer.pt
-    or directly to an optimizer state file. Loads exp_avg_sq second
-    moments to normalize gradients."""
+    optimizer_state: str = ""
+    """Source for optimizer second moments used to normalize gradients.
+    Either a local path (a checkpoint directory containing ``optimizer.pt``,
+    or a path to an optimizer state file directly) or a Hugging Face URI
+    ``hf://<repo>[@<revision>][/<path>]``."""
 
-    skip_preconditioners: bool = False
-    """Whether to skip estimating preconditioner statistics"""
+    skip_hessians: bool = False
+    """Whether to skip estimating hessian statistics"""
 
     skip_index: bool = False
     """Whether to skip building the gradient index."""
 
     stats_sample_size: int | None = 10_000
-    """Number of examples to use for estimating normalizer statistics."""
+    """Number of examples to use for estimating the autocorrelation Hessian.
+    This feature is experimental and may be removed."""
 
     loss_fn: Literal["ce", "kl"] = "ce"
     """Loss function to use."""
@@ -458,8 +494,8 @@ class PreprocessConfig(Serializable):
     unit_normalize: bool = False
     """Whether to unit normalize the gradients."""
 
-    preconditioner_path: str | None = None
-    """Path to a precomputed preconditioner."""
+    hessian_path: str | None = None
+    """Path to a precomputed gradient processor. Set to apply Hessian approx."""
 
     aggregation: Literal["mean", "sum", "none"] = "none"
     """Method for aggregating the gradients. In score, only query
@@ -499,13 +535,13 @@ class ScoreConfig(Serializable):
 class HessianConfig(Serializable):
     """Config for reducing the gradients."""
 
-    method: Literal["kfac", "tkfac", "shampoo"] = "kfac"
+    method: Literal["kfac", "tkfac", "shampoo", "autocorrelation"] = "autocorrelation"
     """Method for approximating the Hessian."""
 
     ev_correction: bool = False
     """Whether to additionally compute eigenvalue correction."""
 
-    hessian_dtype: Literal["auto", "bf16", "fp16", "fp32"] = "auto"
+    hessian_dtype: Literal["bf16", "fp16", "fp32"] = "fp32"
     """Precision (dtype) to use for the Hessian approximation."""
 
     use_dataset_labels: bool = False
@@ -564,6 +600,29 @@ class HessianPipelineConfig:
 
 
 @dataclass
+class MixConfig(Serializable):
+    """Config for mixing two autocorrelation hessians."""
+
+    query_path: str = ""
+    """Directory containing the query autocorrelation hessian
+    (a saved GradientProcessor)."""
+
+    index_path: str = ""
+    """Directory containing the index autocorrelation hessian
+    (a saved GradientProcessor)."""
+
+    output_path: str = ""
+    """Directory to write the mixed hessian to."""
+
+    target_downweight_components: int = 1000
+    """Number of gradient components to downweight via automatic lambda
+    selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is
+    computed so that the sorted singular-value curves of the query and
+    index hessians intersect at this component. Typical value is
+    ~1000 out of ~65K total components."""
+
+
+@dataclass
 class TrackstarConfig:
     """Config for the trackstar pipeline query dataset."""
 
@@ -578,12 +637,12 @@ class TrackstarConfig:
     """Number of gradient components to downweight via automatic lambda
     selection (§A.1.3 of Chang et al., 2024). The mixing coefficient is
     computed so that the sorted singular-value curves of the query and
-    index preconditioners intersect at this component. Typical value is
+    index hessians intersect at this component. Typical value is
     ~1000 out of ~65K total components."""
 
-    num_stats_sample_preconditioner: bool = True
+    num_stats_sample_hessian: bool = True
     """Whether to use num_stats_sample items or the full dataset to
-    compute preconditioners."""
+    compute hessians."""
 
     resume: bool = False
     """Skip pipeline steps whose output directory already exists."""

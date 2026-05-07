@@ -217,8 +217,18 @@ class HookCollectorBase(ContextDecorator, ABC):
 
         return wrapper
 
+    @property
+    def per_module_projection_dim(self) -> int | None:
+        if self.processor.projection_target == "global":
+            return None
+        return self.processor.projection_dim
+
     def shapes(self) -> Mapping[str, torch.Size]:
         """Return the shapes of the gradients collected by this collector."""
+        if self.processor.projection_target == "global":
+            assert self.processor.projection_dim is not None
+            return {"gradients": torch.Size((self.processor.projection_dim,))}
+
         proj_shape = (
             torch.Size((p_dim, p_dim))
             if (p_dim := self.processor.projection_dim) is not None
@@ -394,7 +404,7 @@ class HookCollectorBase(ContextDecorator, ABC):
         and compress via random projection if configured.
         Stores result in module._inputs for use in backward_hook.
         """
-        p = self.processor.projection_dim
+        p = self.per_module_projection_dim
         name = assert_type(str, module._name)
         i = getattr(module, LayerAdapter.in_attr(module))
         normalizer = self.processor.normalizers.get(name)
@@ -433,14 +443,13 @@ class HookCollectorBase(ContextDecorator, ABC):
         a = module._inputs  # [N, S, I/q]
         assert isinstance(a, torch.Tensor), "Activation cache missing for module"
         name = assert_type(str, module._name)
-        p = self.processor.projection_dim
+        p = self.per_module_projection_dim
         i = getattr(module, LayerAdapter.in_attr(module))
         o = getattr(module, LayerAdapter.out_attr(module))
         normalizer = self.processor.normalizers.get(name)
 
         if isinstance(normalizer, AdamNormalizer):
             if self.processor.include_bias:
-                # Clone g before normalize_bias since it mutates in-place (div_)
                 if self.attribute_tokens:
                     bias_grad = normalizer.normalize_bias(g)  # [N, S, O]
                 else:

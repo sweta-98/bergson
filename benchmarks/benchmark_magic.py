@@ -101,7 +101,7 @@ class RunConfig:
     notes: str | None = None
     """Optional notes for the run."""
 
-    num_gpus: int = 1
+    num_gpus: int = 8
     """Number of GPUs to use for benchmarking."""
 
     batch_size: int = 8

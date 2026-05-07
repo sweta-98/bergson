@@ -29,8 +29,7 @@ from bergson.data import allocate_batches
 from bergson.gradients import GradientProcessor
 from bergson.score.score_writer import InMemorySequenceScoreWriter
 from bergson.score.scorer import Scorer
-from bergson.utils.auto_batch_size import determine_batch_size
-from bergson.utils.utils import assert_type
+from bergson.utils.batch_size import determine_batch_size
 from bergson.utils.worker_utils import (
     setup_data_pipeline,
     setup_model_and_peft,
@@ -123,8 +122,8 @@ class RunConfig:
     token_batch_size: int | None = None
     """Override auto-tuned token_batch_size with a fixed value."""
 
-    skip_preconditioners: bool = True
-    """Skip preconditioners."""
+    skip_hessians: bool = True
+    """Skip hessians."""
 
     projection_dim: int = 16
     """Dimension to project gradients to. 0 = no projection (full gradients)."""
@@ -248,7 +247,7 @@ class Run:
             token_batch_size=self.run_cfg.max_length,
             max_tokens=train_tokens,
             precision=precision,
-            skip_preconditioners=self.run_cfg.skip_preconditioners,
+            skip_hessians=self.run_cfg.skip_hessians,
         )
         run_path.mkdir(parents=True, exist_ok=True)
         index_cfg.partial_run_path.mkdir(

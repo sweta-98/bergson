@@ -5,7 +5,7 @@ overwrite: true
 data:
   dataset: Salesforce/wikitext
   subset: wikitext-2-raw-v1
-  split: "train[:50_000]"
+  split: "train[:4608]"
   chunk_length: 512
 
 query:
@@ -26,4 +26,5 @@ lr_schedule:
   lr_end: 0.00008
   warmup_steps: 0.25
 
+subset_strategy: random
 wandb_project: magic

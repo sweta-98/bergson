@@ -13,8 +13,8 @@ from torch import Tensor, nn
 from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
-from bergson.process_preconditioners import (
-    process_preconditioners,
+from bergson.process_autocorrelation import (
+    process_autocorrelation_matrices,
 )
 from bergson.score.scorer import Scorer
 from bergson.utils.utils import get_gradient_dtype, numpy_to_tensor
@@ -106,10 +106,10 @@ class InMemoryCollector(HookCollectorBase):
             dist.reduce(self.per_doc_losses, dst=0)
 
         grad_sizes = {name: math.prod(s) for name, s in self.shapes().items()}
-        if self.processor.preconditioners:
-            process_preconditioners(
+        if self.processor.hessians:
+            process_autocorrelation_matrices(
                 self.processor,
-                self.processor.preconditioners,
+                self.processor.hessians,
                 len(self.data),
                 grad_sizes,
                 self.rank,
@@ -134,16 +134,16 @@ class InMemoryCollector(HookCollectorBase):
         module: nn.Module,
         g: Float[Tensor, "N S O"],
     ) -> None:
-        """Compute per-sample gradient, accumulate preconditioner, and store."""
+        """Compute per-sample gradient, accumulate hessian, and store."""
         name: str = module._name  # type: ignore[assignment]
         P = self._compute_gradient(module, g)
 
-        if not self.cfg.skip_preconditioners:
+        if not self.cfg.skip_hessians:
             P = P.float()
-            if name in self.processor.preconditioners:
-                self.processor.preconditioners[name].addmm_(P.mT, P)
+            if name in self.processor.hessians:
+                self.processor.hessians[name].addmm_(P.mT, P)
             else:
-                self.processor.preconditioners[name] = P.mT @ P
+                self.processor.hessians[name] = P.mT @ P
 
         # GPU for scorer/reduce, CPU for builder
         if self.scorer is not None or self.preprocess_cfg.aggregation != "none":

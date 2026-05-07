@@ -164,8 +164,7 @@ def setup_paths_and_config(
     if os.path.exists(config_path):
         if not overwrite:
             # Load existing config and compare
-            with open(config_path, "r") as f:
-                existing_cfg_dict = json.load(f)
+            existing_cfg_dict = asdict(IndexConfig.load_yaml(config_path))
 
             new_cfg_dict = asdict(cfg)
 
@@ -585,8 +584,12 @@ def compute_eigenvectors_step(
             f"{name}: eigenvectors_a.sum()={eigenvectors_a.sum()}, "
             f"eigenvectors_g.sum()={eigenvectors_g.sum()}"
         )
-        eigenvectors_activations[name] = eigenvectors_a.to(dtype=dtype).contiguous()
-        eigenvectors_gradients[name] = eigenvectors_g.to(dtype=dtype).contiguous()
+        eigenvectors_activations[name] = eigenvectors_a.to(
+            dtype=torch.float32
+        ).contiguous()
+        eigenvectors_gradients[name] = eigenvectors_g.to(
+            dtype=torch.float32
+        ).contiguous()
 
     save_file(
         eigenvectors_activations,
