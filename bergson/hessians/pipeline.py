@@ -85,6 +85,8 @@ def hessian_pipeline(
             run_path=transformed_query_path,
             ev_correction=hessian_cfg.ev_correction,
             lambda_damp_factor=hessian_pipeline_cfg.lambda_damp_factor,
+            projection_dim=index_cfg.projection_dim,
+            projection_type=index_cfg.projection_type,
         )
         launch_distributed_run(
             "apply_hessian",
@@ -94,22 +96,15 @@ def hessian_pipeline(
         )
 
     # ── Step 4: Score training examples ───────────────────────────────────
+    # The deepcopy carries projection_dim / projection_type / projection_target
+    # from index_cfg, so training-side gradients are stored at the same shape
+    # as the IVHP output (apply_hessian compresses iff index_cfg.projection_dim
+    # > 0). No override needed on either branch.
     print("Step 4/4: Scoring training data against transformed query...")
     if not _step_complete(scores_path, resume):
         score_index_cfg = deepcopy(index_cfg)
         score_index_cfg.run_path = scores_path
         score_index_cfg.skip_hessians = True
-        if hessian_cfg.projection_dim > 0:
-            # Hessian-factor compression is on, so apply_hessian writes the
-            # transformed query at [p, p] per layer. Training gradients must
-            # match that shape, which means projecting them with the same
-            # per-module random matrix used to build M (same projection_dim,
-            # projection_type, and projection_target).
-            score_index_cfg.projection_dim = hessian_cfg.projection_dim
-            score_index_cfg.projection_type = hessian_cfg.projection_type
-            score_index_cfg.projection_target = "per_module"
-        else:
-            score_index_cfg.projection_dim = 0
         score_cfg.query_path = transformed_query_path
         _validate(score_index_cfg)
 

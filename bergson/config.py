@@ -548,25 +548,6 @@ class HessianConfig(Serializable):
     """Whether to use dataset labels for Hessian (empirical Fisher) approximation.
     If false, the model predictions will be used."""
 
-    projection_dim: int = 0
-    """If > 0, fold the same per-layer random projection used by ``bergson build``
-    into the damped inverse of the Kronecker factors (A and S) so each per-side
-    factor is compressed to a ``[d, projection_dim]`` whitening-projection matrix.
-    Set this to the same value as the gradient store these factors will be applied
-    to, with matching ``projection_type``. Works for any Kronecker-factored method
-    (``kfac``, ``shampoo``, ...). Requires ``projection_target='per_module'`` and
-    is incompatible with ``ev_correction=True``."""
-
-    projection_type: Literal["normal", "rademacher"] = "rademacher"
-    """Type of random projection used when ``projection_dim > 0``. Must match the
-    value used in ``bergson build``."""
-
-    lambda_damp_factor: float = 0.1
-    """Damping factor baked into the precomputed whitening-projection matrices
-    when ``projection_dim > 0``. The damped inverse uses
-    ``α = lambda_damp_factor * mean(E)`` per side. Has no effect when
-    ``projection_dim == 0``."""
-
 
 @dataclass
 class FaissConfig:

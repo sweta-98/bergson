@@ -1,7 +1,6 @@
 import gc
 import os
 from dataclasses import dataclass
-from typing import Literal
 
 import torch
 import torch.distributed as dist
@@ -11,7 +10,7 @@ from safetensors.torch import load_file, save_file
 from torch import Tensor
 from tqdm import tqdm
 
-from bergson.collector.collector import HookCollectorBase, create_projection_matrix
+from bergson.collector.collector import HookCollectorBase
 from bergson.hessians.sharded_computation import ShardedMul
 from bergson.utils.logger import get_logger
 from bergson.utils.utils import (
@@ -230,11 +229,10 @@ def compute_eigendecomposition(
         total_processed: Number of samples used to compute covariance.
 
     Returns:
-        Per-key eigenvalue shards (each `[m/world_size]`) on CPU. Both the
-        eigenvectors and eigenvalues are persisted to disk (under
-        ``eigen_<basename>/`` and ``eigenvalue_<basename>/`` respectively);
-        the eigenvalues are also returned so in-process callers (e.g.
-        `save_uncorrected_eigenvalues`) can use them without reloading.
+        Per-key eigenvalue shards (each `[m/world_size]`) on CPU. The
+        eigenvectors are written to disk; the eigenvalues are returned so
+        callers (e.g. `save_uncorrected_eigenvalues`) can use them without
+        reloading.
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -314,28 +312,20 @@ def compute_eigendecomposition(
         device=device,
     )
 
-    # Generic output paths by prefixing the covariance basename
+    # Generic output path by adding eigen_prefix to the path
     dirname = os.path.dirname(covariance_path)
     basename = os.path.basename(covariance_path)
-    eigvec_path = os.path.join(dirname, "eigen_" + basename)
-    eigval_path = os.path.join(dirname, "eigenvalue_" + basename)
+    output_path = os.path.join(dirname, "eigen_" + basename)
 
-    os.makedirs(eigvec_path, exist_ok=True)
+    os.makedirs(output_path, exist_ok=True)
     save_file(
         covariance_eigenvectors,
-        os.path.join(eigvec_path, f"shard_{rank}.safetensors"),
-    )
-
-    os.makedirs(eigval_path, exist_ok=True)
-    save_file(
-        covariance_eigenvalues,
-        os.path.join(eigval_path, f"shard_{rank}.safetensors"),
+        os.path.join(output_path, f"shard_{rank}.safetensors"),
     )
 
     gc.collect()
 
-    get_logger().info(f"Saved eigenvectors to {eigvec_path}")
-    get_logger().info(f"Saved eigenvalues to {eigval_path}")
+    get_logger().info(f"Saved eigenvectors to {output_path}")
 
     return covariance_eigenvalues
 
@@ -430,128 +420,3 @@ def _gather_and_shard_along_dim0(
         gc.collect()
 
     return result_dict
-
-
-def compute_whitening_projection_matrices(
-    eigvec_path: str,
-    eigval_path: str,
-    output_path: str,
-    *,
-    projection_dim: int,
-    projection_type: Literal["normal", "rademacher"],
-    side: Literal["left", "right"],
-    lambda_damp_factor: float = 0.1,
-) -> None:
-    """
-    For each layer, compute the damped-inverse-projection matrix
-
-        M = (C + α I)^{-1} P^T = Q · diag((E + α)^{-1}) · Q^T · P^T
-
-    of shape ``[d, projection_dim]``, where:
-
-    - ``C`` is the per-layer covariance (A for ``side='right'``, S for
-      ``side='left'``) with eigendecomposition ``C = Q E Q^T``.
-    - ``P`` is the same per-layer Rademacher / normal projection matrix used
-      by ``bergson build``, identified by ``f"{name}/{side}"`` and shape
-      ``[projection_dim, d]``.
-    - ``α = lambda_damp_factor * mean(E)`` is the adaptive damping (mirrors
-      the convention used by ``ShardedMul._sharded_hadamard``).
-
-    The output is row-sharded along ``d`` so each rank stores
-    ``M[rank*d/W : (rank+1)*d/W, :]``, matching the ``ShardedMul`` convention
-    used elsewhere in the K-FAC pipeline. With this sharding,
-    ``ShardedMul._matmul(activations, M_shard)`` produces whitened-and-projected
-    activations in one matmul.
-
-    Args:
-        eigvec_path: Directory containing eigenvector shards (e.g.
-            ``.../eigen_activation_sharded``).
-        eigval_path: Directory containing eigenvalue shards (e.g.
-            ``.../eigenvalue_activation_sharded``).
-        output_path: Directory to write ``shard_{rank}.safetensors`` files
-            containing the per-rank row-shard of ``M`` for every layer.
-        projection_dim: Width ``p`` of the random projection (must match the
-            value used by ``bergson build``).
-        projection_type: Random projection family (must match build).
-        side: Which side of the per-layer factorization this is. ``'right'``
-            for the activation covariance ``A``, ``'left'`` for the gradient
-            covariance ``S``.
-        lambda_damp_factor: Multiplier on ``mean(E)`` used to damp the inverse.
-    """
-    rank = dist.get_rank() if dist.is_initialized() else 0
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
-    device = get_device(rank)
-
-    # Discover keys / dimensions from the first eigenvector shard. Each rank's
-    # eigenvector shard has shape [d/W, d], so column count is the full layer
-    # dim.
-    first_eigvec = os.path.join(eigvec_path, "shard_0.safetensors")
-    with safe_open(first_eigvec, framework="pt") as f:
-        all_keys = list(f.keys())
-        original_dtype = f.get_tensor(all_keys[0]).dtype
-        key_dimensions = {key: f.get_tensor(key).shape[1] for key in all_keys}
-
-    # Distribute keys across ranks. Cost is dominated by the full-rank matmul
-    # Q · diag · Q^T · P^T which is O(d^3) just like the eigendecomposition.
-    all_assignments = fair_distribute_by_cost(key_dimensions, world_size)
-    keys_for_this_rank = all_assignments[rank]
-
-    M_dict: dict[str, Tensor] = {}
-    for key in tqdm(
-        keys_for_this_rank,
-        disable=False,
-        desc=f"Rank {rank}: Computing M_{side}",
-        position=rank,
-        leave=False,
-    ):
-        d = key_dimensions[key]
-
-        # Gather full Q [d, d] and E [d] for this key from disk.
-        Q = _compute_full_matrix(
-            name=key, shard_path=eigvec_path, rank=rank, world_size=world_size
-        ).to(device=device, dtype=torch.float64)
-        E = _compute_full_matrix(
-            name=key, shard_path=eigval_path, rank=rank, world_size=world_size
-        ).to(device=device, dtype=torch.float64)
-
-        # Adaptive damping: α = lambda_damp_factor * mean(E).
-        alpha = lambda_damp_factor * E.mean()
-        E_inv = (E + alpha).reciprocal()  # [d]
-
-        # Per-layer random projection, identified the same way bergson build
-        # does it (see HookCollectorBase.projection).
-        P = create_projection_matrix(
-            identifier=f"{key}/{side}",
-            m=projection_dim,
-            n=d,
-            dtype=Q.dtype,
-            device=Q.device,
-            projection_type=projection_type,
-        )  # [p, d]
-
-        # M = Q · diag(E_inv) · Q^T · P^T, computed as Q @ ((E_inv ⊙ (Q^T P^T))).
-        QtPt = Q.T @ P.T  # [d, p]
-        QtPt.mul_(E_inv.unsqueeze(-1))  # [d, p]
-        M = Q @ QtPt  # [d, p]
-
-        M_dict[key] = M.to(dtype=original_dtype, device="cpu").contiguous()
-
-    # Reshard along dim 0 so every rank ends up with M[rank*d/W : (rank+1)*d/W]
-    # for every layer. This matches the row-sharding used for Q.
-    M_dict = _gather_and_shard_along_dim0(
-        input_dict=M_dict,
-        full_shape_per_key={k: (d, projection_dim) for k, d in key_dimensions.items()},
-        dtype=original_dtype,  # type: ignore
-        rank=rank,
-        world_size=world_size,
-        device=device,
-    )
-
-    os.makedirs(output_path, exist_ok=True)
-    save_file(
-        M_dict,
-        os.path.join(output_path, f"shard_{rank}.safetensors"),
-    )
-
-    gc.collect()
-    get_logger().info(f"Saved whitening-projection matrices to {output_path}")
