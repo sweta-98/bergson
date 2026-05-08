@@ -46,8 +46,6 @@ class ApproxUnrolling(Serializable):
     hessian_cfg: HessianConfig
 
     approx_unrolling_cfg: ApproxUnrollingConfig
-
-    resume: bool = False
     """If true, skip steps whose output directories already exist."""
 
     def execute(self):
@@ -57,7 +55,6 @@ class ApproxUnrolling(Serializable):
             self.index_cfg,
             self.hessian_cfg,
             self.approx_unrolling_cfg,
-            resume=self.resume,
         )
 
 
@@ -144,8 +141,7 @@ class Mix(MixConfig):
     def execute(self):
         if not self.query_path or not self.index_path or not self.output_path:
             raise ValueError(
-                "mix requires --query_path, --index_path, "
-                "and --output_path to be set."
+                "mix requires --query_path, --index_path, and --output_path to be set."
             )
         mix_autocorrelation_matrices(
             query_path=self.query_path,
