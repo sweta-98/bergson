@@ -89,8 +89,8 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> 
 
 
 def hessian_worker(
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     index_cfg: IndexConfig,
     hessian_cfg: HessianConfig,

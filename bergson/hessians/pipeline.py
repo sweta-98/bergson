@@ -101,6 +101,7 @@ def hessian_pipeline(
         score_index_cfg.projection_dim = 0
         score_index_cfg.skip_hessians = True
         score_cfg.query_path = transformed_query_path
+        score_cfg.higher_is_better = True
         _validate(score_index_cfg)
 
         score_dataset(score_index_cfg, score_cfg, preprocess_cfg)

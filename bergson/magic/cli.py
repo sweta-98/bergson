@@ -23,7 +23,7 @@ from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
 
-from ..config import TrainingConfig, ValidationConfig
+from ..config import ScoreConfig, TrainingConfig, ValidationConfig
 from ..data import load_scores
 from ..distributed import grad_tree, launch_distributed_run
 from ..utils.logging import wandb_log_fn
@@ -267,8 +267,8 @@ def pad_dataset_to_batch_size(
 
 
 def worker(
-    global_rank: int,
-    rank: int,
+    global_rank: int,  # global
+    rank: int,  # local
     world_size: int,
     train_dataset: Dataset,
     query_dataset: Dataset | None,
@@ -452,6 +452,9 @@ def worker(
             print(f"Saved attribution scores to {score_path}")
     elif os.path.isdir(score_path):
         scores = torch.from_numpy(load_scores(Path(score_path))[:])
+        cfg_path = Path(score_path) / "score_config.yaml"
+        if cfg_path.exists() and ScoreConfig.load(cfg_path).higher_is_better:
+            scores = -scores
     else:
         scores = torch.load(score_path, map_location="cpu")
 
@@ -472,11 +475,20 @@ def worker(
     diffs = []
     score_sums = []
 
+    assert scores.ndim == 1 or scores.shape[1] == 1
+    scores = scores.flatten()
+
+    if run_cfg.exclude_zero_scores:
+        valid_indices = torch.nonzero(scores != 0, as_tuple=True)[0]
+    else:
+        valid_indices = torch.arange(len(scores))
+
     if run_cfg.subset_strategy == "random":
         rng = torch.Generator().manual_seed(run_cfg.seed)
-        perm = torch.randperm(len(scores), generator=rng)
+        perm = valid_indices[torch.randperm(len(valid_indices), generator=rng)]
     elif run_cfg.subset_strategy == "sorted":
-        perm = scores.argsort()
+
+        perm = valid_indices[scores[valid_indices].argsort()]
     else:
         raise ValueError(f"Unsupported subset strategy: {run_cfg.subset_strategy}")
 

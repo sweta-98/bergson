@@ -113,6 +113,7 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         score_index_cfg.processor_path = value_hess_path
         score_index_cfg.skip_hessians = True
         trackstar_cfg.score_cfg.query_path = query_path
+        trackstar_cfg.score_cfg.higher_is_better = True
         _validate(score_index_cfg)
         score_dataset(
             score_index_cfg, trackstar_cfg.score_cfg, trackstar_cfg.preprocess_cfg

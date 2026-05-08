@@ -1,3 +1,4 @@
+import heapq
 import json
 import math
 import os
@@ -192,6 +193,7 @@ def allocate_batches(
     doc_lengths: list[int],
     N: int,
     seed: int = 42,
+    max_batch_size: int | None = None,
 ) -> list[list[int]]:
     """
     Allocate documents into batches that are then distributed evenly across
@@ -230,7 +232,9 @@ def allocate_batches(
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
-    (batches,) = _allocate_batches_world(doc_lengths, N, world_size, seed, ranks=[rank])
+    (batches,) = _allocate_batches_world(
+        doc_lengths, N, world_size, seed, ranks=[rank], max_batch_size=max_batch_size
+    )
     return batches
 
 
@@ -240,6 +244,7 @@ def _allocate_batches_world(
     world_size: int,
     seed: int = 42,
     ranks: list[int] | None = None,
+    max_batch_size: int | None = None,
 ) -> list[list[list[int]]]:
     """Lower-level version of allocate_batches that returns batches for specified ranks.
 
@@ -287,7 +292,10 @@ def _allocate_batches_world(
         else:
             # Check if adding this document would exceed the budget
             new_cost = max(length, doc_lengths[cur_batch[0]]) * (len(cur_batch) + 1)
-            if new_cost <= N:
+            within_count = (
+                max_batch_size is None or len(cur_batch) + 1 <= max_batch_size
+            )
+            if new_cost <= N and within_count:
                 # It fits, so add it to the current batch
                 cur_batch.append(idx)
             else:
@@ -303,17 +311,30 @@ def _allocate_batches_world(
     # 2) Ensure every worker gets ≥ 1 batch
     # ---------------------------------------------------------------------
     if len(batches) < world_size:
-        # split the largest batches (by size) until we have ≥ workers batches
-        batches.sort(key=len, reverse=True)
-        while len(batches) < world_size:
-            big = batches.pop(0)  # take the current largest
-            if len(big) == 1:  # cannot split a singleton
+        # Heapify
+        counter = 0
+        heap: list[tuple[int, int, list[int]]] = []
+        for batch in batches:
+            heapq.heappush(heap, (-len(batch), counter, batch))
+            counter += 1
+
+        # Split large batches until we have >= workers batches.
+        # Use an inverted min heap rather than a max heap for old
+        # python version support.
+        while len(heap) < world_size:
+            _, _, big = heapq.heappop(heap)
+            if len(big) == 1:
+                # Every remaining bin in the heap is a singleton,
+                # so the constraint is unsatisfiable.
                 raise RuntimeError(
                     "Not enough documents to give each worker at least one batch."
                 )
-            batches.append([big.pop()])  # move one doc into new batch
-            batches.append(big)  # put the remainder back
-            # preserve cost constraint automatically
+            singleton = [big.pop()]
+            heapq.heappush(heap, (-len(big), counter, big))
+            counter += 1
+            heapq.heappush(heap, (-1, counter, singleton))
+            counter += 1
+        batches = [b for _, _, b in heap]
 
     # ---------------------------------------------------------------------
     # 3) Pad the number of batches to a multiple of `workers`
@@ -766,6 +787,8 @@ def tokenize_and_chunk(
 
     Returns:
         A Dataset where every row has a single 'input_ids' list of length chunk_size.
+        The dataset has a doc_ids column of the same size as input_ids, that
+        maps chunk tokens to the corresponding doc ID in the input dataset.
     """
     eos_id = tokenizer.eos_token_id
     if eos_id is None:
@@ -775,29 +798,50 @@ def tokenize_and_chunk(
     original_verbosity = logging.get_verbosity()
     logging.set_verbosity_error()
 
+    # Add original index as column
+    n_before = len(dataset)
+    dataset = dataset.map(
+        lambda _, idx: {"_orig_idx": idx},
+        with_indices=True,
+        desc="Tagging original indices",
+    )
+
+    # Drop and log empty rows.
+    dataset = dataset.filter(
+        lambda row: isinstance(row[text_column], str)
+        and row[text_column].strip() != "",
+        desc="Filtering empty documents",
+    )
+    n_dropped = n_before - len(dataset)
+    if n_dropped > 0:
+        pct = n_dropped / n_before * 100
+        print(f"Warning: {n_dropped}/{n_before} empty documents " f"({pct:.1f}%).")
+
     # ── Step 1: tokenize each document in parallel ───────────────────────────
     def tokenize_batch(batch):
-        return tokenizer(
+        out = tokenizer(
             batch[text_column],
             add_special_tokens=False,
             truncation=False,
             padding=False,
         )
+        out["_orig_idx"] = batch["_orig_idx"]
+        return out
 
     tokenized = dataset.map(
         tokenize_batch,
         batched=True,
         desc="Tokenizing",
         num_proc=num_proc,
-        remove_columns=dataset.column_names,
+        remove_columns=[c for c in dataset.column_names if c != "_orig_idx"],
     )
 
     # ── Step 2: concatenate the token stream and slice into fixed-size chunks ──
-    def chunk_batch(batch, indices: list[int]):
+    def chunk_batch(batch):
         # Flatten all token lists in this batch into one stream
         doc_stream = []
         token_stream = []
-        for doc_idx, ids in zip(indices, batch["input_ids"]):
+        for doc_idx, ids in zip(batch["_orig_idx"], batch["input_ids"]):
             # Mark these tokens as belonging to the current document
             doc_stream.extend([doc_idx] * (len(ids) + 1))  # +1 for EOS token
 
@@ -834,7 +878,6 @@ def tokenize_and_chunk(
         num_proc=num_proc,
         desc="Chunking",
         remove_columns=tokenized.column_names,
-        with_indices=True,
     )
     # Make sure HuggingFace didn't change the dataset type!
     assert isinstance(chunked, type(dataset))
@@ -849,8 +892,8 @@ def tokenize_and_chunk(
         if n_dropped > 0:
             pct = n_dropped / n_docs * 100
             print(
-                f"Warning: chunking dropped {n_dropped}/{n_docs} documents "
-                f"({pct:.1f}%) that didn't fill a {chunk_size}-token chunk "
+                f"Warning: chunking dropped {n_dropped}/{n_docs} short documents"
+                f" ({pct:.1f}%) that didn't fill a {chunk_size}-token chunk "
                 f"when using a document batch size of {bs}."
             )
 

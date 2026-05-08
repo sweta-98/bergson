@@ -165,9 +165,13 @@ class HookCollectorBase(ContextDecorator, ABC):
 
             collect_bias = getattr(layer, "bias", None) is not None and include_bias
 
+            o = getattr(layer, LayerAdapter.out_attr(layer))
+            i = getattr(layer, LayerAdapter.in_attr(layer))
+            weight_shape = torch.Size([o, i])
+
             target_info[name] = (
                 layer.weight.device,
-                layer.weight.shape,
+                weight_shape,
                 collect_bias,
             )
         return target_info
