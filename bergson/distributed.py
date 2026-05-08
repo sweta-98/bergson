@@ -110,6 +110,8 @@ def launch_distributed_run(
     start_rank = dist_config.start_rank
 
     if world_size <= 1:
+        # Handle multi-node pipelines with single-process steps
+        # Other nodes proceed to next step's NCCL rendezvous
         if dist_config._node_rank == 0:
             worker(0, 0, 1, *const_worker_args)
     else:
