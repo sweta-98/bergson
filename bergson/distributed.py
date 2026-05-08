@@ -26,6 +26,21 @@ def cap_world_size_to_dataset(
     return capped_cfg
 
 
+def parent_barrier(dist_config: DistributedConfig) -> None:
+    if dist_config.nnode <= 1:
+        return
+    master_addr = os.environ.get("MASTER_ADDR", "localhost")
+    master_port = str(int(os.environ.get("MASTER_PORT", "29500")) + 1)
+    dist.init_process_group(
+        "gloo",
+        init_method=f"tcp://{master_addr}:{master_port}",
+        rank=dist_config._node_rank,
+        world_size=dist_config.nnode,
+    )
+    dist.barrier()
+    dist.destroy_process_group()
+
+
 def grad_tree(
     outputs: torch.Tensor,
     inputs: Mapping[str, torch.Tensor],

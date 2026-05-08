@@ -607,3 +607,229 @@ def test_token_sum_equals_sequence(
                 msg=f"Module {name}, example {i}: "
                 f"token sum and sequence grad diverge",
             )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+@pytest.mark.parametrize("projection_dim", [None, 8])
+def test_trackstar_token_scores_sum_to_sequence_scores(
+    tmp_path, model, dataset, projection_dim
+):
+    """Per-token TrackStar scores summed within a doc equal the per-doc score.
+
+    TrackStar's score is ``s(d) = <q, H^-1, grad(d)>`` — a linear function of
+    the index gradient. With ``loss_reduction='sum'`` the per-token gradients
+    ``g_{d,t}`` satisfy ``sum_t g_{d,t} = grad(d)`` (see
+    ``test_token_sum_equals_sequence``); composing with the linear scoring
+    operator gives ``sum_t s(d, t) = s(d)`` for every doc d.
+
+    This is the score-level analog of the gradient-level test above, and
+    the trackstar analog of ``test_magic_per_token_sums_to_per_doc``.
+    """
+    from bergson.score.score_writer import InMemorySequenceScoreWriter
+    from bergson.score.scorer import Scorer
+
+    model = model.float()
+    dataset = dataset.repeat(10)
+
+    target_modules = {
+        name
+        for name, module in model.base_model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+    }
+
+    processor = GradientProcessor(projection_dim=projection_dim)
+
+    seq_collector = _collect_in_memory(
+        model,
+        dataset,
+        processor,
+        target_modules,
+        attribute_tokens=False,
+        run_path=str(tmp_path / "seq"),
+    )
+    tok_collector = _collect_in_memory(
+        model,
+        dataset,
+        processor,
+        target_modules,
+        attribute_tokens=True,
+        run_path=str(tmp_path / "tok"),
+    )
+
+    sorted_modules = sorted(seq_collector.gradients.keys())
+    torch.manual_seed(0)
+    query_grads = {
+        m: torch.randn(1, seq_collector.gradients[m].shape[-1]) for m in sorted_modules
+    }
+
+    device = torch.device("cpu")
+    dtype = torch.float32
+
+    seq_scorer = Scorer(
+        query_grads=query_grads,
+        modules=sorted_modules,
+        writer=InMemorySequenceScoreWriter(len(dataset), 1, dtype=dtype),
+        device=device,
+        dtype=dtype,
+    )
+    seq_scores = seq_scorer.score(seq_collector.gradients).float().cpu().squeeze(-1)
+
+    n_tokens = tok_collector.gradients[sorted_modules[0]].shape[0]
+    tok_scorer = Scorer(
+        query_grads=query_grads,
+        modules=sorted_modules,
+        writer=InMemorySequenceScoreWriter(n_tokens, 1, dtype=dtype),
+        device=device,
+        dtype=dtype,
+    )
+    tok_scores = tok_scorer.score(tok_collector.gradients).float().cpu().squeeze(-1)
+
+    assert tok_collector.builder is not None
+    offsets = tok_collector.builder.offsets
+
+    for i in range(len(dataset)):
+        start, end = int(offsets[i]), int(offsets[i + 1])
+        tok_sum = tok_scores[start:end].sum()
+        torch.testing.assert_close(
+            tok_sum,
+            seq_scores[i],
+            atol=1e-2,
+            rtol=1e-2,
+            msg=(
+                f"Example {i}: per-token score sum {tok_sum:.6e} != "
+                f"per-doc score {seq_scores[i]:.6e}"
+            ),
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+@pytest.mark.parametrize("projection_dim", [None, 8])
+def test_trackstar_token_scores_sum_to_sequence_scores_on_disk(
+    tmp_path, model, dataset, projection_dim
+):
+    """On-disk per-token scores summed within a doc equal on-disk per-doc scores.
+
+    Same property as ``test_trackstar_token_scores_sum_to_sequence_scores``,
+    routed through ``MemmapSequenceScoreWriter`` /
+    ``MemmapTokenScoreWriter`` so the disk write + read-back paths
+    (info.json, structured scores.bin, token_scores.bin, offsets.npy)
+    are exercised end-to-end.
+    """
+    from bergson.score.score_writer import (
+        MemmapSequenceScoreWriter,
+        MemmapTokenScoreWriter,
+    )
+    from bergson.score.scorer import Scorer
+
+    model = model.float()
+    dataset = dataset.repeat(10)
+
+    target_modules = {
+        name
+        for name, module in model.base_model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+    }
+
+    processor = GradientProcessor(projection_dim=projection_dim)
+
+    seq_collector = _collect_in_memory(
+        model,
+        dataset,
+        processor,
+        target_modules,
+        attribute_tokens=False,
+        run_path=str(tmp_path / "seq"),
+    )
+    tok_collector = _collect_in_memory(
+        model,
+        dataset,
+        processor,
+        target_modules,
+        attribute_tokens=True,
+        run_path=str(tmp_path / "tok"),
+    )
+
+    sorted_modules = sorted(seq_collector.gradients.keys())
+    torch.manual_seed(0)
+    query_grads = {
+        m: torch.randn(1, seq_collector.gradients[m].shape[-1]) for m in sorted_modules
+    }
+
+    device = torch.device("cpu")
+    dtype = torch.float32
+    indices = list(range(len(dataset)))
+
+    # --- Per-doc scores via MemmapSequenceScoreWriter ---
+    seq_path = tmp_path / "seq_scores"
+    seq_writer = MemmapSequenceScoreWriter(seq_path, len(dataset), 1, dtype=dtype)
+    seq_scorer = Scorer(
+        query_grads=query_grads,
+        modules=sorted_modules,
+        writer=seq_writer,
+        device=device,
+        dtype=dtype,
+    )
+    seq_scorer(indices, seq_collector.gradients)
+    seq_writer.flush()
+
+    # --- Per-token scores via MemmapTokenScoreWriter ---
+    tok_path = tmp_path / "tok_scores"
+    tok_writer = MemmapTokenScoreWriter(tok_path, dataset, 1, dtype=dtype)
+    tok_scorer = Scorer(
+        query_grads=query_grads,
+        modules=sorted_modules,
+        writer=tok_writer,
+        device=device,
+        dtype=dtype,
+        attribute_tokens=True,
+    )
+    # Per-token Scorer expects already-flat per-token gradients of shape
+    # [total_valid_tokens, grad_dim] per module, which is exactly what the
+    # InMemoryCollector populated with attribute_tokens=True produces.
+    tok_scorer(indices, tok_collector.gradients)
+    tok_writer.flush()
+
+    # --- Read back from disk ---
+    with open(seq_path / "info.json") as f:
+        seq_info = json.load(f)
+    seq_dtype = np.dtype(
+        {
+            "names": seq_info["dtype"]["names"],
+            "formats": seq_info["dtype"]["formats"],
+            "offsets": seq_info["dtype"]["offsets"],
+            "itemsize": seq_info["dtype"]["itemsize"],
+        }
+    )
+    seq_mmap = np.memmap(
+        seq_path / "scores.bin",
+        dtype=seq_dtype,
+        mode="r",
+        shape=(seq_info["num_items"],),
+    )
+    seq_scores = torch.from_numpy(seq_mmap["score_0"].copy())
+
+    with open(tok_path / "info.json") as f:
+        tok_info = json.load(f)
+    tok_np_dtype = np.dtype(tok_info["dtype"])
+    tok_mmap = np.memmap(
+        tok_path / "token_scores.bin",
+        dtype=tok_np_dtype,
+        mode="r",
+        shape=(tok_info["total_tokens"], tok_info["num_scores"]),
+    )
+    tok_scores = torch.from_numpy(tok_mmap[:, 0].copy())
+    offsets = np.load(tok_path / "offsets.npy")
+
+    for i in range(len(dataset)):
+        start, end = int(offsets[i]), int(offsets[i + 1])
+        tok_sum = tok_scores[start:end].sum()
+        torch.testing.assert_close(
+            tok_sum,
+            seq_scores[i],
+            atol=1e-2,
+            rtol=1e-2,
+            msg=(
+                f"Example {i}: on-disk token sum {tok_sum:.6e} != "
+                f"on-disk per-doc score {seq_scores[i]:.6e}"
+            ),
+        )
