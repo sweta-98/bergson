@@ -16,7 +16,11 @@ from bergson.data import (
     allocate_batches,
     load_gradients,
 )
-from bergson.distributed import launch_distributed_run
+from bergson.distributed import (
+    cap_world_size_to_dataset,
+    launch_distributed_run,
+    parent_barrier,
+)
 from bergson.process_grads import (
     get_trackstar_hessian,
     normalize_and_aggregate_grads,
@@ -26,7 +30,6 @@ from bergson.score.score_writer import (
     MemmapTokenScoreWriter,
 )
 from bergson.score.scorer import Scorer
-from bergson.utils.batch_size import test_fwd_bwd
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
@@ -220,8 +223,8 @@ def create_scorer(
 
 
 def score_worker(
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,
@@ -267,7 +270,6 @@ def score_worker(
 
     model, target_modules = setup_model_and_peft(index_cfg)
     processor = create_processor(model, index_cfg, target_modules)
-    test_fwd_bwd(model, index_cfg.token_batch_size)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -291,7 +293,9 @@ def score_worker(
 
     if isinstance(ds, Dataset):
         kwargs["batches"] = allocate_batches(
-            ds["length"][:], index_cfg.token_batch_size
+            ds["length"][:],
+            index_cfg.token_batch_size,
+            max_batch_size=index_cfg.max_batch_size,
         )
         kwargs["scorer"] = create_scorer(
             index_cfg.partial_run_path,
@@ -314,7 +318,9 @@ def score_worker(
                 return
             ds_shard = assert_type(Dataset, Dataset.from_list(buf))
             batches = allocate_batches(
-                ds_shard["length"][:], index_cfg.token_batch_size
+                ds_shard["length"][:],
+                index_cfg.token_batch_size,
+                max_batch_size=index_cfg.max_batch_size,
             )
             kwargs["ds"] = ds_shard
             kwargs["batches"] = batches
@@ -369,12 +375,22 @@ def score_dataset(
 
     ds, _ = setup_data_pipeline(index_cfg)
 
+    dist_cfg = index_cfg.distributed
+    if isinstance(ds, Dataset) and len(ds) < dist_cfg.world_size:
+        dist_cfg = cap_world_size_to_dataset(dist_cfg, len(ds))
+        print(
+            f"reducing to nnode=1 and nproc_per_node={dist_cfg.nproc_per_node} for step"
+        )
+
     launch_distributed_run(
         "score",
         score_worker,
         [index_cfg, score_cfg, preprocess_cfg, ds],
-        index_cfg.distributed,
+        dist_cfg,
     )
 
-    if index_cfg.distributed.rank == 0:
+    if dist_cfg.rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)
+
+    if dist_cfg.world_size < index_cfg.distributed.world_size:
+        parent_barrier(index_cfg.distributed)

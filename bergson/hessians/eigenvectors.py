@@ -1,7 +1,6 @@
 import gc
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -235,6 +234,12 @@ def compute_eigendecomposition(
     Args:
         covariance_path: Full path to the covariance sharded directory.
         total_processed: Number of samples used to compute covariance.
+
+    Returns:
+        Per-key eigenvalue shards (each `[m/world_size]`) on CPU. The
+        eigenvectors are written to disk; the eigenvalues are returned so
+        callers (e.g. `save_uncorrected_eigenvalues`) can use them without
+        reloading.
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -258,7 +263,7 @@ def compute_eigendecomposition(
     all_assignments = fair_distribute_by_cost(key_dimensions, world_size)
     keys_for_this_rank = all_assignments[rank]
 
-    covariance_eigenvectors = {}
+    covariance_eigenvectors: dict[str, Tensor] = {}
     covariance_eigenvalues: dict[str, Tensor] = {}
 
     for key in tqdm(
@@ -296,8 +301,11 @@ def compute_eigendecomposition(
         covariance_eigenvalues[key] = (
             eigenvalues.to(original_dtype).to(device="cpu").contiguous()
         )
+        covariance_eigenvalues[key] = (
+            eigenvalues.to(original_dtype).to(device="cpu").contiguous()
+        )
 
-    covariance_eigenvectors = _gather_and_shard_along_dim0(
+    covariance_eigenvectors = _gather_and_shard_along_dim_0(
         input_dict=covariance_eigenvectors,
         full_shape_per_key={k: (m, m) for k, m in key_dimensions.items()},
         dtype=original_dtype,  # type: ignore
@@ -305,7 +313,7 @@ def compute_eigendecomposition(
         world_size=world_size,
         device=device,
     )
-    covariance_eigenvalues = _gather_and_shard_along_dim0(
+    covariance_eigenvalues = _gather_and_shard_along_dim_0(
         input_dict=covariance_eigenvalues,
         full_shape_per_key={k: (m,) for k, m in key_dimensions.items()},
         dtype=original_dtype,  # type: ignore
@@ -334,20 +342,15 @@ def compute_eigendecomposition(
 
 def save_uncorrected_eigenvalues(
     partial_run_path: str | os.PathLike,
-    eva_a_local: dict[str, Tensor],
-    eva_g_local: dict[str, Tensor],
+    eigenvalues_a: dict[str, Tensor],
+    eigenvalues_g: dict[str, Tensor],
     total_processed: int | Tensor,
     rank: int,
     world_size: int,
 ) -> None:
-    """Write the outer product of the activation eigenvalues and the local
-    gradient eigenvalues into `eigenvalue_sharded`.
-
-    Both eigenvalue dicts are sharded along the eigenvector-index dim by
-    `_gather_and_shard_along_dim0`.
-
-    The output is scaled by `total_processed` to match the effective scaling
-    of `LambdaCollector`.
+    """Take sharded eigenvalues_a and eigenvalues_g. Computes the sharded
+    outer product by keeping eigenvalues_g in its sharded form and gathering
+    eigenvalues_a to all ranks.
     """
     out_dir = os.path.join(str(partial_run_path), "eigenvalue_sharded")
     os.makedirs(out_dir, exist_ok=True)
@@ -362,102 +365,35 @@ def save_uncorrected_eigenvalues(
     else:
         total_processed = total_processed.to(device)
 
-    payload: dict[str, Tensor] = {}
-    # Sort: each rank's all_gather below must visit keys in the same order or
-    # NCCL collectives mismatch across ranks (set-derived dicts hash differently
-    # under per-process PYTHONHASHSEED randomization).
-    for key, eva_g_shard in sorted(eva_g_local.items()):
-        eva_g_shard = eva_g_shard.to(device)
-        eva_a_shard = eva_a_local[key].to(device)
+    outer_product_sharded: dict[str, Tensor] = {}
+    for key, eigenvalue_g_shard in eigenvalues_g.items():
+        eigenvalue_g_shard = eigenvalue_g_shard.to(device)
+        eigenvalue_a_shard = eigenvalues_a[key].to(device)
 
         if world_size > 1:
-            eva_a_full = torch.empty(
-                eva_a_shard.shape[0] * world_size,
+            eigenvalue_a_full = torch.empty(
+                eigenvalue_a_shard.shape[0] * world_size,
                 device=device,
-                dtype=eva_a_shard.dtype,
+                dtype=eigenvalue_a_shard.dtype,
             )
-            dist.all_gather_into_tensor(eva_a_full, eva_a_shard.contiguous())
+            dist.all_gather_into_tensor(
+                eigenvalue_a_full, eigenvalue_a_shard.contiguous()
+            )
         else:
-            eva_a_full = eva_a_shard
+            eigenvalue_a_full = eigenvalue_a_shard
 
-        outer = torch.outer(eva_g_shard, eva_a_full) * total_processed
-        payload[key] = outer.to(device="cpu").contiguous()
+        outer = torch.outer(eigenvalue_g_shard, eigenvalue_a_full) * total_processed
+        outer_product_sharded[key] = outer.to(device="cpu").contiguous()
 
     save_file(
-        payload,
+        outer_product_sharded,
         os.path.join(out_dir, f"shard_{rank}.safetensors"),
     )
 
     get_logger().info(f"Saved uncorrected eigenvalues to {out_dir}")
 
 
-def save_identity_eigen(
-    partial_run_path: str | os.PathLike,
-    dim_per_key: dict[str, int],
-    sub_dir: str,
-    rank: int,
-    world_size: int,
-    dtype: torch.dtype = torch.float32,
-) -> None:
-    """Write per-rank shards of identity Q-side matrices to `sub_dir`.
-
-    `dim_per_key` maps each module name to the size `d` of its
-    `[d, d]` identity Q.
-    """
-    payload: dict[str, Tensor] = {}
-    for name, d in dim_per_key.items():
-        if d % world_size != 0:
-            raise ValueError(
-                f"dim={d} for {name} is not divisible by world_size={world_size}."
-            )
-        shard_size = d // world_size
-        shard = torch.zeros(shard_size, d, dtype=dtype)
-        shard.diagonal(offset=rank * shard_size).fill_(1.0)
-        payload[name] = shard
-
-    out_dir = Path(str(partial_run_path)) / sub_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-    save_file(payload, out_dir / f"shard_{rank}.safetensors")
-
-
-def save_identity_factors(
-    partial_run_path: str | os.PathLike,
-    layer_dims: dict[str, tuple[int, int]],
-    rank: int,
-    world_size: int,
-    dtype: torch.dtype = torch.float32,
-) -> None:
-    """Synthesise Q_A=I, Q_G=I and a sentinel `total_processed.pt = 1.0`.
-
-    `layer_dims` maps each target module name to its weight shape `(O, I)`.
-    """
-    partial_run_path = Path(str(partial_run_path))
-    save_identity_eigen(
-        partial_run_path,
-        {n: i for n, (_, i) in layer_dims.items()},
-        "eigen_activation_sharded",
-        rank,
-        world_size,
-        dtype,
-    )
-    save_identity_eigen(
-        partial_run_path,
-        {n: o for n, (o, _) in layer_dims.items()},
-        "eigen_gradient_sharded",
-        rank,
-        world_size,
-        dtype,
-    )
-
-    if rank == 0:
-        torch.save(torch.tensor(1.0), partial_run_path / "total_processed.pt")
-
-    get_logger().info(
-        f"Saved identity factors ({len(layer_dims)} modules) to {partial_run_path}"
-    )
-
-
-def _gather_and_shard_along_dim0(
+def _gather_and_shard_along_dim_0(
     input_dict: dict[str, Tensor],
     full_shape_per_key: dict[str, tuple[int, ...]],
     dtype: torch.dtype,

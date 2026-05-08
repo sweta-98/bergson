@@ -91,39 +91,38 @@ def hessian_pipeline(
             hessian_index_cfg.run_path = hessian_path
             _validate(hessian_index_cfg)
 
-            approximate_hessians(hessian_index_cfg, hessian_cfg)
+        approximate_hessians(hessian_index_cfg, hessian_cfg)
 
     # ── Step 3: Apply inverse Hessian to the mean query gradient ──────────
     print(f"Step 3/4: Applying {method} inverse Hessian to mean query gradient...")
     if not _step_complete(transformed_query_path, resume):
-        with _timed("step3_apply_hessian", durations):
-            hessian_method_path = f"{hessian_path}/{method}"
-            ekfac_cfg = EkfacConfig(
-                hessian_method_path=hessian_method_path,
-                gradient_path=query_path,
-                run_path=transformed_query_path,
-                ev_correction=hessian_cfg.ev_correction,
-                lambda_damp_factor=hessian_pipeline_cfg.lambda_damp_factor,
-            )
-            launch_distributed_run(
-                "apply_hessian",
-                apply_worker,
-                [ekfac_cfg],
-                index_cfg.distributed,
-            )
+        hessian_method_path = f"{hessian_path}/{method}"
+        ekfac_cfg = EkfacConfig(
+            hessian_method_path=hessian_method_path,
+            gradient_path=query_path,
+            run_path=transformed_query_path,
+            ev_correction=hessian_cfg.ev_correction,
+            lambda_damp_factor=hessian_pipeline_cfg.lambda_damp_factor,
+        )
+        launch_distributed_run(
+            "apply_hessian",
+            apply_worker,
+            [ekfac_cfg],
+            index_cfg.distributed,
+        )
 
     # ── Step 4: Score training examples ───────────────────────────────────
     print("Step 4/4: Scoring training data against transformed query...")
     if not _step_complete(scores_path, resume):
-        with _timed("step4_score", durations):
-            score_index_cfg = deepcopy(index_cfg)
-            score_index_cfg.run_path = scores_path
-            score_index_cfg.projection_dim = 0
-            score_index_cfg.skip_hessians = True
-            score_cfg.query_path = transformed_query_path
-            _validate(score_index_cfg)
+        score_index_cfg = deepcopy(index_cfg)
+        score_index_cfg.run_path = scores_path
+        score_index_cfg.projection_dim = 0
+        score_index_cfg.skip_hessians = True
+        score_cfg.query_path = transformed_query_path
+        score_cfg.higher_is_better = True
+        _validate(score_index_cfg)
 
-            score_dataset(score_index_cfg, score_cfg, preprocess_cfg)
+        score_dataset(score_index_cfg, score_cfg, preprocess_cfg)
 
     print(f"Done! Scores saved to: {scores_path}")
     if durations:

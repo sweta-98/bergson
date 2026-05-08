@@ -125,29 +125,56 @@ class GradientCollector(HookCollectorBase):
 
     def global_project(self) -> None:
         """Concatenate per-module per-example gradients and project.
-        Sets ``self.mod_grads`` to ``{"gradients": projected}``."""
+        Sets ``self.mod_grads`` to ``{"gradients": projected}``.
+
+        Projects in row-chunks. A naive ``flat = torch.cat(..., dim=1)`` of
+        all module gradients can need tens of GiB contiguous on rank 0 when
+        the bin-packer assigns many short examples to a single batch (e.g.
+        flan_v2 with token_batch_size=2048 packs ~80 rows of ~525 MB each).
+        The projector is per-row, so chunking is exact; chunk size is sized
+        to a fixed GPU-byte budget.
+        """
         # backward_hook fires in reverse forward order, so insertion order in
         # mod_grads is deterministic for a given model.
-        flat = torch.cat(
-            [P.view(P.shape[0], -1) for P in self.mod_grads.values()], dim=1
-        )
+        parts = list(self.mod_grads.values())
+        n_rows = parts[0].shape[0]
+        total_grad_dim: int = sum(int(math.prod(P.shape[1:])) for P in parts)
 
         if self.global_projector is None:
             assert self.processor.projection_dim is not None
             self.global_projector = make_global_projector(
-                grad_dim=flat.shape[1],
+                grad_dim=total_grad_dim,
                 proj_dim=self.processor.projection_dim,
-                device=flat.device,
-                dtype=flat.dtype,
+                device=parts[0].device,
+                dtype=parts[0].dtype,
                 projection_type=self.processor.projection_type,
             )
 
-        projected = self.global_projector.project(flat, model_id=0)
-        self.mod_grads = {
-            "gradients": projected.to(
-                device="cpu", dtype=self.save_dtype, non_blocking=True
+        # Cap chunk_flat at ~4 GiB per chunk to leave headroom for fast_jl's
+        # internal scratch buffers alongside the per-module tensors that stay
+        # alive until the loop exits.
+        bytes_per_row = total_grad_dim * parts[0].element_size()
+        chunk_rows = max(1, (4 * 1024**3) // max(bytes_per_row, 1))
+        chunk_rows = min(chunk_rows, n_rows)
+
+        chunks_cpu: list[torch.Tensor] = []
+        for start in range(0, n_rows, chunk_rows):
+            end = min(start + chunk_rows, n_rows)
+            chunk_flat = torch.cat(
+                [P[start:end].reshape(end - start, -1) for P in parts], dim=1
             )
-        }
+            chunk_projected = self.global_projector.project(chunk_flat, model_id=0)
+            chunks_cpu.append(
+                chunk_projected.to(
+                    device="cpu", dtype=self.save_dtype, non_blocking=True
+                )
+            )
+            del chunk_flat, chunk_projected
+
+        # Free per-module GPU tensors now that all chunks are projected.
+        self.mod_grads = {}
+
+        self.mod_grads = {"gradients": torch.cat(chunks_cpu, dim=0)}
 
     def process_batch(self, indices: list[int], **kwargs):
         """Process collected gradients for a batch and update losses."""

@@ -13,12 +13,17 @@ import torchopt
 from datasets import Dataset
 from scipy.stats import describe, pearsonr, spearmanr
 from simple_parsing import ArgumentParser
-from torch.distributed.nn.functional import all_reduce as differentiable_all_reduce
+from torch.distributed._functional_collectives import (
+    all_reduce as differentiable_all_reduce,
+)
+from torch.distributed._functional_collectives import (
+    wait_tensor,
+)
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
 
-from ..config import TrainingConfig, ValidationConfig
+from ..config import ScoreConfig, TrainingConfig, ValidationConfig
 from ..data import load_scores
 from ..distributed import grad_tree, launch_distributed_run
 from ..utils.logging import wandb_log_fn
@@ -49,7 +54,7 @@ def compute_query_gradients(
     """
     grad_accum: dict[str, torch.Tensor] | None = None
     loss_accum = 0.0
-    n_batches = len(query_stream)
+    denom = len(query_stream) * (dist.get_world_size() if dist.is_initialized() else 1)
 
     with fwd_state.activate(model) as params:
         for batch in tqdm(query_stream, desc="Query"):
@@ -69,18 +74,25 @@ def compute_query_gradients(
 
     if method == "mean":
         for k in grad_accum:
-            grad_accum[k] /= n_batches
+            grad_accum[k] /= denom
 
-        loss_accum /= n_batches
+        loss_accum /= denom
 
     if dist.is_initialized():
-        op = dist.ReduceOp.SUM if method == "sum" else dist.ReduceOp.AVG
         if not fsdp:
-            for k in grad_accum:
-                differentiable_all_reduce(grad_accum[k], op=op)
+            grad_accum = {
+                k: differentiable_all_reduce(
+                    g,
+                    "sum",
+                    dist.distributed_c10d._get_default_group(),
+                )
+                for k, g in grad_accum.items()
+            }
+            for g in grad_accum.values():
+                wait_tensor(g)
 
         # Loss is never a DTensor
-        dist.all_reduce(loss_accum, op=op)
+        dist.all_reduce(loss_accum)
 
     return grad_accum, float(loss_accum)
 
@@ -255,8 +267,8 @@ def pad_dataset_to_batch_size(
 
 
 def worker(
-    global_rank: int,
-    rank: int,
+    global_rank: int,  # global
+    rank: int,  # local
     world_size: int,
     train_dataset: Dataset,
     query_dataset: Dataset | None,
@@ -275,7 +287,7 @@ def worker(
             "cpu:gloo,cuda:nccl",
             init_method=f"tcp://{addr}:{port}",
             device_id=torch.device(get_device(rank)),
-            rank=rank,
+            rank=global_rank,
             world_size=world_size,
         )
 
@@ -440,6 +452,9 @@ def worker(
             print(f"Saved attribution scores to {score_path}")
     elif os.path.isdir(score_path):
         scores = torch.from_numpy(load_scores(Path(score_path))[:])
+        cfg_path = Path(score_path) / "score_config.yaml"
+        if cfg_path.exists() and ScoreConfig.load(cfg_path).higher_is_better:
+            scores = -scores
     else:
         scores = torch.load(score_path, map_location="cpu")
 
@@ -460,11 +475,20 @@ def worker(
     diffs = []
     score_sums = []
 
+    assert scores.ndim == 1 or scores.shape[1] == 1
+    scores = scores.flatten()
+
+    if run_cfg.exclude_zero_scores:
+        valid_indices = torch.nonzero(scores != 0, as_tuple=True)[0]
+    else:
+        valid_indices = torch.arange(len(scores))
+
     if run_cfg.subset_strategy == "random":
         rng = torch.Generator().manual_seed(run_cfg.seed)
-        perm = torch.randperm(len(scores), generator=rng)
+        perm = valid_indices[torch.randperm(len(valid_indices), generator=rng)]
     elif run_cfg.subset_strategy == "sorted":
-        perm = scores.argsort()
+
+        perm = valid_indices[scores[valid_indices].argsort()]
     else:
         raise ValueError(f"Unsupported subset strategy: {run_cfg.subset_strategy}")
 

@@ -165,9 +165,13 @@ class HookCollectorBase(ContextDecorator, ABC):
 
             collect_bias = getattr(layer, "bias", None) is not None and include_bias
 
+            o = getattr(layer, LayerAdapter.out_attr(layer))
+            i = getattr(layer, LayerAdapter.in_attr(layer))
+            weight_shape = torch.Size([o, i])
+
             target_info[name] = (
                 layer.weight.device,
-                layer.weight.shape,
+                weight_shape,
                 collect_bias,
             )
         return target_info
@@ -707,10 +711,14 @@ class CollectorComputer:
 
                 # Compute padded tensors and valid_mask before entering context
                 # TODO check if valid_mask has bug
+                # Local padding only: bin-packer enforces a per-rank
+                # ``max_len × batch_size ≤ N`` budget that a global-max
+                # all-reduce would silently violate.
                 x, y, valid_mask = pad_and_tensor(
                     batch["input_ids"],
                     labels=batch.get("labels"),
                     device=self.device,
+                    sync_max_len=False,
                 )
                 total_processed += valid_mask.sum()
 
