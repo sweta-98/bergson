@@ -43,9 +43,19 @@ def compute_eta_K_per_segment(
         for p in cfg.checkpoints
     ]
     boundaries = [0] + [ckpt_steps[(l + 1) * per_segment - 1] for l in range(L)]
-    log_path = Path(str(cfg.checkpoints[0])).parent / "log_history.json"
-    with open(log_path) as f:
-        step_to_lr = {e["step"]: e["learning_rate"] for e in json.load(f)}
+    # Prefer log_history.json if dumped at the parent dir; otherwise pull
+    # log_history out of the final checkpoint's trainer_state.json (what HF
+    # Trainer writes natively).
+    parent = Path(str(cfg.checkpoints[0])).parent
+    log_path = parent / "log_history.json"
+    if log_path.exists():
+        with open(log_path) as f:
+            log_history = json.load(f)
+    else:
+        ts_path = Path(str(cfg.checkpoints[-1])) / "trainer_state.json"
+        with open(ts_path) as f:
+            log_history = json.load(f)["log_history"]
+    step_to_lr = {e["step"]: e["learning_rate"] for e in log_history}
     return [
         sum(
             step_to_lr.get(s, 0.0)

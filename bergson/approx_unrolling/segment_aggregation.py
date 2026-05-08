@@ -15,6 +15,19 @@ from bergson.utils.logger import get_logger
 from bergson.utils.utils import get_device, get_device_index
 
 _SHARD_KINDS = ("activation_sharded", "gradient_sharded")
+# Per-method raw covariance dirs that the per-checkpoint step actually writes.
+# - kfac/tkfac/shampoo: full E[aaᵀ] and E[ggᵀ] are summed and eigendecomposed.
+# - foof: only activation cov is collected; Q_G = I (per-ckpt step saves
+#   eigen_gradient_sharded directly), so we just sum + eigendecompose activation.
+# - identity: no raw cov collected; both eigen_*_sharded are identity per-ckpt
+#   and we copy them straight to the segment dir.
+_RAW_KINDS_PER_METHOD: dict[str, tuple[str, ...]] = {
+    "kfac": ("activation_sharded", "gradient_sharded"),
+    "tkfac": ("activation_sharded", "gradient_sharded"),
+    "shampoo": ("activation_sharded", "gradient_sharded"),
+    "foof": ("activation_sharded",),
+    "identity": (),
+}
 
 
 def sum_sharded_dirs(
@@ -156,16 +169,18 @@ def _aggregate_cov_worker(
     logger = get_logger("aggregate_segment_covariances")
     device = get_device(local_rank)
     shard_name = f"shard_{rank}.safetensors"
+    raw_kinds = _RAW_KINDS_PER_METHOD.get(method, _SHARD_KINDS)
 
     for seg in segments_to_process:
         seg_dir = base_run / f"segment_{seg}"
         out_dir = seg_dir / method
         ckpt_method_dirs = [seg_dir / f"ckpt_{i}" / method for i in range(per_segment)]
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         cov_done = (out_dir / "total_processed.pt").exists()
         if not cov_done:
             logger.info(f"[seg {seg} rank {rank}] summing covariances -> {out_dir}")
-            for kind in _SHARD_KINDS:
+            for kind in raw_kinds:
                 (out_dir / kind).mkdir(parents=True, exist_ok=True)
                 in_paths = [d / kind / shard_name for d in ckpt_method_dirs]
                 _sum_my_shard(in_paths, out_dir / kind / shard_name, device=device)
@@ -190,11 +205,34 @@ def _aggregate_cov_worker(
             map_location="cpu",
             weights_only=False,
         )
-        for kind in _SHARD_KINDS:
+        for kind in raw_kinds:
             compute_eigendecomposition(
                 str(out_dir / kind),
                 total_processed=total_processed,
             )
+
+        # Synthesise any eigen_*_sharded dirs that the eigendecomposition step
+        # didn't produce (foof gradient side, identity both sides) by copying
+        # ckpt_0's. These are identity matrices at every checkpoint, so the
+        # segment-average is also identity → copy is the right answer.
+        for kind in _SHARD_KINDS:
+            eigen_kind = f"eigen_{kind}"
+            dst_dir = out_dir / eigen_kind
+            dst_shard = dst_dir / shard_name
+            if dst_shard.exists():
+                continue
+            src_shard = ckpt_method_dirs[0] / eigen_kind / shard_name
+            if not src_shard.exists():
+                raise FileNotFoundError(
+                    f"Cannot synthesise {eigen_kind} for method={method}: "
+                    f"per-ckpt source {src_shard} missing. Did the per-ckpt "
+                    "step run for this method?"
+                )
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src_shard, dst_shard)
+
+        if world_size > 1:
+            dist.barrier()
 
     if world_size > 1:
         dist.barrier()

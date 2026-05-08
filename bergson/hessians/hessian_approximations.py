@@ -214,6 +214,27 @@ def hessian_worker(
 
     dist.barrier() if dist.is_initialized() else None
 
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+
+    if hessian_cfg.method == "foof":
+        # F_FOOF = E[aaᵀ] ⊗ I. Synthesise identity Q_G unconditionally so even
+        # `do_eigendecomposition=False` callers (approx_unrolling per-ckpt step)
+        # leave eigen_gradient_sharded on disk for the segment-aggregation step
+        # to copy into the segment dir.
+        out_dims = {
+            name: model.get_submodule(name).weight.shape[0] for name in target_modules
+        }
+        dtype = convert_precision_to_torch(hessian_cfg.hessian_dtype)
+        save_identity_eigen(
+            index_cfg.partial_run_path,
+            out_dims,
+            "eigen_gradient_sharded",
+            rank,
+            world_size,
+            dtype,
+        )
+
     if not do_eigendecomposition:
         return
 
@@ -228,26 +249,8 @@ def hessian_worker(
         total_processed=total_processed,
     )
 
-    rank = dist.get_rank() if dist.is_initialized() else 0
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
-
     if hessian_cfg.method == "foof":
-        # F_FOOF = E[aaᵀ] ⊗ I. Synthesise identity Q_G and eva_g = 1 to reuse
-        # the standard apply path.
-        # named_modules() returns un-stripped PEFT paths; get_submodule resolves
-        # the stripped target_modules names via PEFT's __getattr__ shim.
-        out_dims = {
-            name: model.get_submodule(name).weight.shape[0] for name in target_modules
-        }
-        dtype = convert_precision_to_torch(hessian_cfg.hessian_dtype)
-        save_identity_eigen(
-            index_cfg.partial_run_path,
-            out_dims,
-            "eigen_gradient_sharded",
-            rank,
-            world_size,
-            dtype,
-        )
+        # eigen_gradient_sharded already saved above; just build eva_g = 1.
         eva_g = {
             name: torch.ones(d // world_size, dtype=dtype)
             for name, d in out_dims.items()
