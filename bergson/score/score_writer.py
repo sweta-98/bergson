@@ -289,6 +289,7 @@ class MemmapSequenceScoreWriter(ScoreWriter):
         if scores.dim() == 1:
             scores = scores.unsqueeze(1)
         scores = scores.to(dtype=self.dtype)
+        #print(scores.shape)
         for i in range(self.num_scores):
             score_col = tensor_to_numpy(scores[:, i].cpu()).flatten()
             self.scores[f"score_{i}"][indices] = score_col

@@ -24,6 +24,19 @@ def _step_complete(path: str, resume: bool) -> bool:
         print(f"  Skipping (output exists at {path})")
         return True
     return False
+def _limit_split_for_hess(cfg: IndexConfig) -> None:
+    """Limit the data split to stats_sample_size for hessian-only steps."""
+    # TODO this code is hacky and bad
+
+    if cfg.stats_sample_size is not None:
+        split = cfg.data.split
+        # Append HF slice notation if not already present
+        if "[" not in split:
+            cfg.data.split = f"{split}[:{cfg.stats_sample_size}]"
+        else:
+            base_split = split.split("[")[0]
+            cfg.data.split = f"{base_split}[:{cfg.stats_sample_size}]"
+
 
 
 def hessian_pipeline(
@@ -80,6 +93,8 @@ def hessian_pipeline(
         _validate(hessian_index_cfg)
 
         hessian_cfg.ev_correction = True
+        if hessian_index_cfg.stats_sample_size:
+            _limit_split_for_hess(hessian_index_cfg)
         approximate_hessians(hessian_index_cfg, hessian_cfg)
 
     # ── Step 3: Apply inverse Hessian to the mean query gradient ──────────
