@@ -100,7 +100,7 @@ def approx_unrolling_pipeline(
     logger.info(f"  overwrite         : {index_cfg.overwrite}")
     logger.info("=" * 70)
 
-    # ── Step 1: Per-checkpoint Hessian precompute ─────────────────────────
+    # ── Step 1: Per-checkpoint Hessian precompute
     logger.info(
         f"Step 1/{_N_TOTAL_STEPS}: "
         f"Precomputing {hessian_cfg.method} factors at each checkpoint..."
@@ -115,7 +115,7 @@ def approx_unrolling_pipeline(
     # where the worker ran in-process and may still hold model references.
     gc.collect()
 
-    # ── Step 2: Per-segment covariance aggregation + eigendecomposition ───
+    # ── Step 2: Per-segment covariance aggregation + eigendecomposition
     logger.info(
         f"Step 2/{_N_TOTAL_STEPS}: "
         f"Aggregating per-checkpoint covariances into segment averages..."
@@ -129,7 +129,7 @@ def approx_unrolling_pipeline(
         resume=index_cfg.overwrite,
     )
 
-    # ── Step 3: Per-checkpoint lambda in segment eigenbasis ───────────────
+    # ── Step 3: Per-checkpoint lambda in segment eigenbasis
 
     logger.info(
         f"Step 3/{_N_TOTAL_STEPS}: Per-checkpoint lambda using segment eigvecs..."
@@ -141,7 +141,7 @@ def approx_unrolling_pipeline(
         resume=index_cfg.overwrite,
     )
 
-    # ── Step 4: Per-segment lambda aggregation ────────────────────────────
+    # ── Step 4: Per-segment lambda aggregation
     logger.info(
         f"Step 4/{_N_TOTAL_STEPS}: "
         f"Aggregating per-checkpoint lambdas into segment lambdas..."
@@ -155,7 +155,7 @@ def approx_unrolling_pipeline(
         resume=index_cfg.overwrite,
     )
 
-    # ── Step 5: Mean query gradient at the final checkpoint ───────────────
+    # ── Step 5: Mean query gradient at the final checkpoint
     logger.info(
         f"Step 5/{_N_TOTAL_STEPS}: "
         f"Building mean query gradient at the final checkpoint..."
@@ -174,7 +174,7 @@ def approx_unrolling_pipeline(
         query_cfg.skip_hessians = True
         build(query_cfg, PreprocessConfig(aggregation="mean"))
 
-    # ── Step 6: Phase 1 -- walk query backwards via F_S ───────────────────
+    # ── Step 6: Phase 1 -- walk query backwards to get segment queries
     logger.info(
         f"Step 6/{_N_TOTAL_STEPS}: "
         f"Phase 1 -- walking query backwards via F_S to build u_0..u_(L-1)..."
@@ -187,7 +187,7 @@ def approx_unrolling_pipeline(
         distributed=index_cfg.distributed,
     )
 
-    # ── Step 7: Phase 2 -- per-segment F_r to build psi_0..psi_(L-1) ──────
+    # ── Step 7: Phase 2 -- Get per-ckpt queries from segment queries
     logger.info(
         f"Step 7/{_N_TOTAL_STEPS}: "
         f"Phase 2 -- per-segment F_r on u_l to build psi_0..psi_(L-1)..."
@@ -200,7 +200,7 @@ def approx_unrolling_pipeline(
         distributed=index_cfg.distributed,
     )
 
-    # ── Step 8: Phase 3 -- per-segment scoring + sum ──────────────────────
+    # ── Step 8: Phase 3 -- per-segment scoring + sum
     logger.info(
         f"Step 8/{_N_TOTAL_STEPS}: Phase 3 -- per-segment scoring + aggregation..."
     )

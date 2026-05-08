@@ -1,6 +1,4 @@
-import os
 import shutil
-from datetime import timedelta
 from pathlib import Path
 
 import torch
@@ -9,10 +7,10 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 from bergson.config import DistributedConfig
-from bergson.distributed import launch_distributed_run
+from bergson.distributed import init_dist, launch_distributed_run
 from bergson.hessians.eigenvectors import compute_eigendecomposition
 from bergson.utils.logger import get_logger
-from bergson.utils.utils import get_device, get_device_index
+from bergson.utils.utils import get_device
 
 _SHARD_KINDS = ("activation_sharded", "gradient_sharded")
 
@@ -39,30 +37,13 @@ def _sum_sharded_dirs_worker(
     input_dirs: list[Path],
     output_dir: Path,
 ) -> None:
-    _init_dist(rank, local_rank, world_size)
+    init_dist(rank, local_rank, world_size)
     device = get_device(local_rank)
     shard_name = f"shard_{rank}.safetensors"
     in_paths = [d / shard_name for d in input_dirs]
     _sum_my_shard(in_paths, output_dir / shard_name, device=device)
     if world_size > 1:
         dist.barrier()
-
-
-def _init_dist(rank: int, local_rank: int, world_size: int) -> None:
-    """Common dist init for workers in this module."""
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
 
 
 def _sum_my_shard(
@@ -150,7 +131,7 @@ def _aggregate_cov_worker(
     segments_to_process: list[int],
 ) -> None:
     """Sum cov shards + total_processed, then eigendecompose, in one launch."""
-    _init_dist(rank, local_rank, world_size)
+    init_dist(rank, local_rank, world_size)
     logger = get_logger("aggregate_segment_covariances")
     device = get_device(local_rank)
     shard_name = f"shard_{rank}.safetensors"

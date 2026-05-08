@@ -1,15 +1,12 @@
 import json
-import os
 import re
 import shutil
 from copy import deepcopy
-from datetime import timedelta
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 import torch
-import torch.distributed as dist
 from torch import Tensor
 
 from bergson.config import (
@@ -20,10 +17,9 @@ from bergson.config import (
     ScoreConfig,
 )
 from bergson.data import load_scores
-from bergson.distributed import launch_distributed_run
+from bergson.distributed import init_dist, launch_distributed_run
 from bergson.hessians.apply_hessian import EkfacApplicator, EkfacConfig
 from bergson.score.score import score_dataset
-from bergson.utils.utils import get_device, get_device_index
 
 
 def compute_eta_K_per_segment(
@@ -126,19 +122,7 @@ def _apply_eigfn_worker(
     n_seg: int,
     fn_kind: str,
 ) -> None:
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
+    init_dist(rank, local_rank, world_size)
 
     base_fn = {"f_r": f_r, "f_s": f_s}[fn_kind](eta_K)
     fn = lambda x: base_fn(x / n_seg)  # noqa: E731

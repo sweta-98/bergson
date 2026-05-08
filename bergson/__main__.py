@@ -7,6 +7,7 @@ from simple_parsing import ArgumentParser, ConflictResolution, Serializable
 
 from bergson.hessians.pipeline import hessian_pipeline
 
+from .approx_unrolling.pipeline import approx_unrolling_pipeline
 from .build import build
 from .config import (
     ApproxUnrollingConfig,
@@ -49,7 +50,6 @@ class ApproxUnrolling(Serializable):
     """If true, skip steps whose output directories already exist."""
 
     def execute(self):
-        from bergson.approx_unrolling.pipeline import approx_unrolling_pipeline
 
         approx_unrolling_pipeline(
             self.index_cfg,

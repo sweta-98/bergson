@@ -1,11 +1,7 @@
-import os
 import shutil
 from copy import deepcopy
-from datetime import timedelta
 from pathlib import Path
 
-import torch
-import torch.distributed as dist
 from datasets import Dataset
 
 from bergson.collector.collector import (
@@ -18,10 +14,9 @@ from bergson.config import (
     IndexConfig,
 )
 from bergson.data import allocate_batches
-from bergson.distributed import launch_distributed_run
+from bergson.distributed import init_dist, launch_distributed_run
 from bergson.hessians.eigenvectors import LambdaCollector
 from bergson.utils.logger import get_logger
-from bergson.utils.utils import get_device, get_device_index
 from bergson.utils.worker_utils import (
     setup_data_pipeline,
     setup_model_and_peft,
@@ -107,20 +102,7 @@ def _lambda_worker(
     output_subdir: str,
 ) -> None:
     """Lambda-only data pass for one checkpoint, writing into ``output_dir``."""
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
+    init_dist(rank, local_rank, world_size)
 
     model, target_modules = setup_model_and_peft(index_cfg)
     attention_cfgs = {m: index_cfg.attention for m in index_cfg.split_attention_modules}

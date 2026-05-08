@@ -2,7 +2,6 @@ import gc
 import json
 import os
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -13,9 +12,10 @@ from simple_parsing import ArgumentParser
 from torch import Tensor
 
 from bergson.data import create_index, load_gradients
+from bergson.distributed import init_dist
 from bergson.hessians.sharded_computation import ShardedMul
 from bergson.utils.logger import get_logger
-from bergson.utils.utils import get_device, get_device_index
+from bergson.utils.utils import get_device
 
 
 @dataclass
@@ -167,21 +167,7 @@ def apply_worker(
     cfg: EkfacConfig,
 ):
     """Worker function for distributed IVHP computation."""
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
+    init_dist(rank, local_rank, world_size)
 
     applicator = EkfacApplicator(cfg)
     applicator.compute_ivhp_sharded()

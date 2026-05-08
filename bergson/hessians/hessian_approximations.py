@@ -1,6 +1,5 @@
 import os
 import shutil
-from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -13,7 +12,7 @@ from bergson.collector.collector import (
 )
 from bergson.config import AttentionConfig, HessianConfig, IndexConfig
 from bergson.data import allocate_batches
-from bergson.distributed import launch_distributed_run
+from bergson.distributed import init_dist, launch_distributed_run
 from bergson.hessians.eigenvectors import (
     LambdaCollector,
     compute_eigendecomposition,
@@ -24,8 +23,6 @@ from bergson.hessians.shampoo import ShampooCollector
 from bergson.hessians.tkfac import TraceCovarianceCollector
 from bergson.utils.utils import (
     convert_precision_to_torch,
-    get_device,
-    get_device_index,
     setup_reproducibility,
 )
 from bergson.utils.worker_utils import (
@@ -129,22 +126,7 @@ def hessian_worker(
         Optional override for the target module set. When `None` (default)
         we fall back to what `setup_model_and_peft` returns.
     """
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-
-    # These should be set by the main process
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
+    init_dist(rank, local_rank, world_size)
 
     model, peft_target_modules = setup_model_and_peft(index_cfg)
     if target_modules is None:
