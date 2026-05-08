@@ -5,7 +5,7 @@ overwrite: true
 data:
   dataset: Salesforce/wikitext
   subset: wikitext-2-raw-v1
-  split: "train[100:]"
+  split: "train"
   chunk_length: 512
 
 query:
