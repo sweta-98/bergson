@@ -192,7 +192,7 @@ def _benchmark_worker(
 
     assert run_cfg.batch_size % world_size == 0
 
-    train_dataset, num_train_docs, pad_count = pad_dataset_to_batch_size(
+    train_dataset, num_train_docs, pad_count, weighted = pad_dataset_to_batch_size(
         train_dataset, run_cfg.batch_size, num_train_docs, "Train", global_rank
     )
 
