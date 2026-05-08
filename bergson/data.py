@@ -1,3 +1,4 @@
+import heapq
 import json
 import math
 import os
@@ -303,17 +304,30 @@ def _allocate_batches_world(
     # 2) Ensure every worker gets ≥ 1 batch
     # ---------------------------------------------------------------------
     if len(batches) < world_size:
-        # split the largest batches (by size) until we have ≥ workers batches
-        batches.sort(key=len, reverse=True)
-        while len(batches) < world_size:
-            big = batches.pop(0)  # take the current largest
-            if len(big) == 1:  # cannot split a singleton
+        # Heapify
+        counter = 0
+        heap: list[tuple[int, int, list[int]]] = []
+        for batch in batches:
+            heapq.heappush(heap, (-len(batch), counter, batch))
+            counter += 1
+
+        # Split large batches until we have >= workers batches.
+        # Use an inverted min heap rather than a max heap for old
+        # python version support.
+        while len(heap) < world_size:
+            _, _, big = heapq.heappop(heap)
+            if len(big) == 1:
+                # Every remaining bin in the heap is a singleton,
+                # so the constraint is unsatisfiable.
                 raise RuntimeError(
                     "Not enough documents to give each worker at least one batch."
                 )
-            batches.append([big.pop()])  # move one doc into new batch
-            batches.append(big)  # put the remainder back
-            # preserve cost constraint automatically
+            singleton = [big.pop()]
+            heapq.heappush(heap, (-len(big), counter, big))
+            counter += 1
+            heapq.heappush(heap, (-1, counter, singleton))
+            counter += 1
+        batches = [b for _, _, b in heap]
 
     # ---------------------------------------------------------------------
     # 3) Pad the number of batches to a multiple of `workers`
