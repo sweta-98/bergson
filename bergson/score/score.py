@@ -220,8 +220,8 @@ def create_scorer(
 
 
 def score_worker(
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     index_cfg: IndexConfig,
     score_cfg: ScoreConfig,

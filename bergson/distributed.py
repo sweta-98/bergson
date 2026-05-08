@@ -40,8 +40,8 @@ def grad_tree(
 
 def dist_worker(
     worker: Callable,
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     master_addr: str,
     master_port: str,

@@ -144,8 +144,8 @@ class EkfacApplicator:
 
 
 def apply_worker(
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     cfg: EkfacConfig,
 ):

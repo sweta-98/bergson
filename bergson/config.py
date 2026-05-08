@@ -530,6 +530,11 @@ class ScoreConfig(Serializable):
     modules: list[str] = field(default_factory=list)
     """Modules to use for the query. If empty, all modules will be used."""
 
+    higher_is_better: bool = True
+    """True when a positive scoring item is a proponent of the query
+    capability (e.g. in influence functions). False for unrolled
+    differentiation."""
+
 
 @dataclass
 class HessianConfig(Serializable):

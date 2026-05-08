@@ -26,8 +26,8 @@ from bergson.utils.worker_utils import (
 
 
 def build_worker(
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     index_cfg: IndexConfig,
     preprocess_cfg: PreprocessConfig,
