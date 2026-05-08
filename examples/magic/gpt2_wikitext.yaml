@@ -11,7 +11,7 @@ data:
 query:
   dataset: Salesforce/wikitext
   subset: wikitext-2-raw-v1
-  split: "train[3:4]"
+  split: "test[3:4]"
   chunk_length: 0
 
 distributed:
