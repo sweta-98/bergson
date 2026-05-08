@@ -787,6 +787,8 @@ def tokenize_and_chunk(
 
     Returns:
         A Dataset where every row has a single 'input_ids' list of length chunk_size.
+        The dataset has a doc_ids column of the same size as input_ids, that
+        maps chunk tokens to the corresponding doc ID in the input dataset.
     """
     eos_id = tokenizer.eos_token_id
     if eos_id is None:
@@ -796,29 +798,50 @@ def tokenize_and_chunk(
     original_verbosity = logging.get_verbosity()
     logging.set_verbosity_error()
 
+    # Add original index as column
+    n_before = len(dataset)
+    dataset = dataset.map(
+        lambda _, idx: {"_orig_idx": idx},
+        with_indices=True,
+        desc="Tagging original indices",
+    )
+
+    # Drop and log empty rows.
+    dataset = dataset.filter(
+        lambda row: isinstance(row[text_column], str)
+        and row[text_column].strip() != "",
+        desc="Filtering empty documents",
+    )
+    n_dropped = n_before - len(dataset)
+    if n_dropped > 0:
+        pct = n_dropped / n_before * 100
+        print(f"Warning: {n_dropped}/{n_before} empty documents " f"({pct:.1f}%).")
+
     # ── Step 1: tokenize each document in parallel ───────────────────────────
     def tokenize_batch(batch):
-        return tokenizer(
+        out = tokenizer(
             batch[text_column],
             add_special_tokens=False,
             truncation=False,
             padding=False,
         )
+        out["_orig_idx"] = batch["_orig_idx"]
+        return out
 
     tokenized = dataset.map(
         tokenize_batch,
         batched=True,
         desc="Tokenizing",
         num_proc=num_proc,
-        remove_columns=dataset.column_names,
+        remove_columns=[c for c in dataset.column_names if c != "_orig_idx"],
     )
 
     # ── Step 2: concatenate the token stream and slice into fixed-size chunks ──
-    def chunk_batch(batch, indices: list[int]):
+    def chunk_batch(batch):
         # Flatten all token lists in this batch into one stream
         doc_stream = []
         token_stream = []
-        for doc_idx, ids in zip(indices, batch["input_ids"]):
+        for doc_idx, ids in zip(batch["_orig_idx"], batch["input_ids"]):
             # Mark these tokens as belonging to the current document
             doc_stream.extend([doc_idx] * (len(ids) + 1))  # +1 for EOS token
 
@@ -855,7 +878,6 @@ def tokenize_and_chunk(
         num_proc=num_proc,
         desc="Chunking",
         remove_columns=tokenized.column_names,
-        with_indices=True,
     )
     # Make sure HuggingFace didn't change the dataset type!
     assert isinstance(chunked, type(dataset))
@@ -870,8 +892,8 @@ def tokenize_and_chunk(
         if n_dropped > 0:
             pct = n_dropped / n_docs * 100
             print(
-                f"Warning: chunking dropped {n_dropped}/{n_docs} documents "
-                f"({pct:.1f}%) that didn't fill a {chunk_size}-token chunk "
+                f"Warning: chunking dropped {n_dropped}/{n_docs} short documents"
+                f" ({pct:.1f}%) that didn't fill a {chunk_size}-token chunk "
                 f"when using a document batch size of {bs}."
             )
 
