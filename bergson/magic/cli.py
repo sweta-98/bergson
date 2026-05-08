@@ -13,7 +13,9 @@ import torchopt
 from datasets import Dataset
 from scipy.stats import describe, pearsonr, spearmanr
 from simple_parsing import ArgumentParser
-from torch.distributed.nn.functional import all_reduce as differentiable_all_reduce
+from torch.distributed._functional_collectives import (
+    all_reduce as differentiable_all_reduce,
+)
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
@@ -74,12 +76,18 @@ def compute_query_gradients(
         loss_accum /= n_batches
 
     if dist.is_initialized():
-        op = dist.ReduceOp.SUM if method == "sum" else dist.ReduceOp.AVG
         if not fsdp:
+            denom = dist.get_world_size() if method == "mean" else 1
+
             for k in grad_accum:
-                differentiable_all_reduce(grad_accum[k], op=op)
+                differentiable_all_reduce(
+                    grad_accum[k] / denom,
+                    "sum",
+                    dist.distributed_c10d._get_default_group(),
+                )
 
         # Loss is never a DTensor
+        op = dist.ReduceOp.SUM if method == "sum" else dist.ReduceOp.AVG
         dist.all_reduce(loss_accum, op=op)
 
     return grad_accum, float(loss_accum)

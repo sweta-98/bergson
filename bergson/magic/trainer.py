@@ -15,7 +15,9 @@ import torch.distributed.checkpoint as dcp
 import torch.distributed.tensor  # noqa: F401 — register DTensor for torch.load
 import torchopt
 from torch import nn
-from torch.distributed.nn.functional import all_reduce as differentiable_all_reduce
+from torch.distributed._functional_collectives import (
+    all_reduce as differentiable_all_reduce,
+)
 from torchopt.pytree import tree_flatten_with_path, tree_iter, tree_map
 from torchopt.typing import GradientTransformation, OptState
 from tqdm.auto import tqdm
@@ -309,7 +311,11 @@ class Trainer:
             if trace:
                 # Use differentiable all_reduce to preserve autograd graph
                 grads = {
-                    k: differentiable_all_reduce(g, op=dist.ReduceOp.AVG)
+                    k: differentiable_all_reduce(
+                        g / dist.get_world_size(),
+                        "sum",
+                        dist.distributed_c10d._get_default_group(),
+                    )
                     for k, g in grads.items()
                 }
             else:
@@ -574,7 +580,8 @@ class Trainer:
                 # Save checkpoints for states we will need later
                 if idx == next_save and idx < expected_idx:
                     # Switch from RAM disk to checkpoint dir if needed
-                    if psutil.virtual_memory().available > 2 * state_size:
+                    num_copies = dist.get_world_size() if dist.is_initialized() else 1
+                    if psutil.virtual_memory().available > num_copies * state_size:
                         ckpt_list.append((idx, fwd_state.to("cpu").detach_()))
                     else:
                         ckpt = os.path.join(ckpt_dir, f"step_{idx}.ckpt")
