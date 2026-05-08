@@ -1,6 +1,12 @@
 """Top-level orchestrator for the approximate unrolling
 training-data attribution pipeline.
 
+We follow Training Data Attribution via Approximate Unrolled Differentiation
+(Bae et al.). We compute Equation (15)/(22) by first gathering Hessian approximations
+that we need. In Step 6 we multiply the query gradient with (16) to get pullbacked
+per-segment query gradients and in Step 7 we multiply by F_segment(sigma) (20) which
+allows us to compute per-segment average scores in Step 8 that sum to the final score.
+
 Pipeline steps
 --------------
 1. Per-checkpoint covariance precompute (raw cov shards only, no eigvecs).
@@ -8,10 +14,11 @@ Pipeline steps
 3. Per-checkpoint lambda in segment eigenbasis.
 4. Per-segment lambda aggregation.
 5. Mean query gradient at the final checkpoint.
-6. Phase 1: walk query backwards via F_S to build u_0..u_{L-2} at
-   ``<run>/segment_{l}/u/`` (u_{L-1} is just the top-level query).
-7. Phase 2: per-segment F_r on u_l to build psi_l at
-   ``<run>/segment_{l}/psi/``.
+6. Phase 1: walk query backwards via F_backward to build
+query_grad_0.. query_grad_{L-1} and save at
+   ``<run>/segment_{l}/query_grad/`` (query_grad_{L-1} is just the top-level query).
+7. Phase 2: Apply per-segment F_segment on query_grad_l to build query_grad_segment at
+   ``<run>/segment_{l}/query_grad_segment/``.
 8. Phase 3: per-segment scores at ``<run>/segment_{l}/scores/``, summed
    into ``<run>/scores.npy``.
 """
@@ -30,7 +37,7 @@ from ..config import (
 )
 from ..utils.logger import get_logger
 from .approx_unrolling_math import (
-    compute_eta_K_per_segment,
+    compute_lr_times_steps_per_segment,
     score_per_segment_and_aggregate,
     walk_query_phase1,
     walk_query_phase2,
@@ -91,7 +98,9 @@ def approx_unrolling_pipeline(
     assert hessian_cfg.ev_correction, "Approximate unrolling pipeline currently only "
     "supports EV correction on."
 
-    eta_K_per_segment = compute_eta_K_per_segment(approx_unrolling_cfg)
+    lr_times_steps_per_segment = compute_lr_times_steps_per_segment(
+        approx_unrolling_cfg
+    )
 
     logger.info("=" * 70)
     logger.info(f"approximate unrolling pipeline -> {index_cfg.run_path}")
@@ -179,26 +188,28 @@ def approx_unrolling_pipeline(
     # ── Step 6: Phase 1 -- walk query backwards to get segment queries
     logger.info(
         f"Step 6/{_N_TOTAL_STEPS}: "
-        f"Phase 1 -- walking query backwards via F_S to build u_0..u_(L-1)..."
+        f"Phase 1 -- walking query backwards via F_backward to build "
+        f"query_grad_0..query_grad_(L-1)..."
     )
-    logger.info(f"  eta_K per segment: {eta_K_per_segment}")
-    u_paths = walk_query_phase1(
+    logger.info(f"  lr_times_steps per segment: {lr_times_steps_per_segment}")
+    query_grad_paths = walk_query_phase1(
         run_path=index_cfg.run_path,
         method=hessian_cfg.method,
-        eta_K_per_segment=eta_K_per_segment,
+        lr_times_steps_per_segment=lr_times_steps_per_segment,
         distributed=index_cfg.distributed,
     )
 
     # ── Step 7: Phase 2 -- Get per-ckpt queries from segment queries
     logger.info(
         f"Step 7/{_N_TOTAL_STEPS}: "
-        f"Phase 2 -- per-segment F_r on u_l to build psi_0..psi_(L-1)..."
+        f"Phase 2 -- per-segment F_segment on query_grad_l to build "
+        f"query_grad_segment_0..query_grad_segment_(L-1)..."
     )
-    psi_paths = walk_query_phase2(
+    query_grad_segment_paths = walk_query_phase2(
         run_path=index_cfg.run_path,
         method=hessian_cfg.method,
-        eta_K_per_segment=eta_K_per_segment,
-        u_paths=u_paths,
+        lr_times_steps_per_segment=lr_times_steps_per_segment,
+        query_grad_paths=query_grad_paths,
         distributed=index_cfg.distributed,
     )
 
@@ -208,7 +219,7 @@ def approx_unrolling_pipeline(
     )
     out_path = score_per_segment_and_aggregate(
         index_cfg=index_cfg,
-        psi_paths=psi_paths,
+        query_grad_segment_paths=query_grad_segment_paths,
         final_checkpoint=str(approx_unrolling_cfg.checkpoints[-1]),
     )
     logger.info(f"[approximate unrolling pipeline] DONE. Final scores at {out_path}")

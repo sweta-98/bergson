@@ -22,7 +22,7 @@ from bergson.hessians.apply_hessian import EkfacApplicator, EkfacConfig
 from bergson.score.score import score_dataset
 
 
-def compute_eta_K_per_segment(
+def compute_lr_times_steps_per_segment(
     approx_unrolling_cfg: ApproxUnrollingConfig,
 ) -> list[float]:
     """Per-segment lr * K. Use ``lr_list * step_size_list`` if set on config;
@@ -61,26 +61,29 @@ def compute_eta_K_per_segment(
     ]
 
 
-def f_s(eta_K: float) -> Callable[[Tensor], Tensor]:
-    """x -> exp(-eta_K*x)."""
+def f_backward(lr_times_steps: float) -> Callable[[Tensor], Tensor]:
+    """x -> exp(-lr_times_steps*x). This allows us to approximate the
+    back propagated query gradient."""
 
     def fn(sigma: Tensor) -> Tensor:
-        return torch.exp(-eta_K * sigma)
+        return torch.exp(-lr_times_steps * sigma)
 
     return fn
 
 
-def f_r(eta_K: float) -> Callable[[Tensor], Tensor]:
-    """x -> (1 - exp(-eta_K*x)) / x. Limit at x=0 is eta_K."""
+def f_segment(lr_times_steps: float) -> Callable[[Tensor], Tensor]:
+    """x -> (1 - exp(-lr_times_steps*x)) / x. Limit at x=0 is lr_times_steps.
+    This allows us to approximate the segment-wise contribution to the query
+    over multiple checkpoints within a segment."""
 
     def fn(sigma: Tensor) -> Tensor:
-        # Compute as eta_K * ((1 - exp(-x))/x); the parenthesized ratio is in
+        # Compute as lr_times_steps * ((1 - exp(-x))/x); the parenthesized ratio is in
         # [0, 1] for x ≥ 0 and uses expm1 for accuracy near zero.
-        x = eta_K * sigma
+        x = lr_times_steps * sigma
         is_zero = x == 0
         x_safe = x.masked_fill(is_zero, 1.0)
         ratio = -torch.expm1(-x_safe) / x_safe
-        return eta_K * ratio.masked_fill(is_zero, 1.0)
+        return lr_times_steps * ratio.masked_fill(is_zero, 1.0)
 
     return fn
 
@@ -89,15 +92,15 @@ def apply_eigfn_to_query(
     src_grad_path: Path,
     dst_grad_path: Path,
     segment_dir: Path,
-    eta_K: float,
+    lr_times_steps: float,
     n_seg: int,
     fn_kind: str,
     distributed: DistributedConfig,
 ) -> None:
-    """Apply F_r or F_S of one segment to a stored query gradient.
+    """Apply F_segment or F_backward of one segment to a stored query gradient.
 
-    ``fn_kind`` is "f_r" or "f_s". lambda is normalized by ``n_seg`` inside the
-    worker (sum-of-squares -> expected eigenvalue) before fn is applied.
+    ``fn_kind`` is "f_segment" or "f_backward". lambda is normalized by ``n_seg``
+    inside the worker (sum-of-squares -> expected eigenvalue) before fn is applied.
     """
     cfg = EkfacConfig(
         hessian_method_path=str(segment_dir),
@@ -108,7 +111,7 @@ def apply_eigfn_to_query(
     launch_distributed_run(
         "apply_eigfn_to_query",
         _apply_eigfn_worker,
-        [cfg, eta_K, n_seg, fn_kind],
+        [cfg, lr_times_steps, n_seg, fn_kind],
         distributed,
     )
 
@@ -118,13 +121,15 @@ def _apply_eigfn_worker(
     local_rank: int,
     world_size: int,
     cfg: EkfacConfig,
-    eta_K: float,
+    lr_times_steps: float,
     n_seg: int,
     fn_kind: str,
 ) -> None:
     init_dist(rank, local_rank, world_size)
 
-    base_fn = {"f_r": f_r, "f_s": f_s}[fn_kind](eta_K)
+    base_fn = {"f_segment": f_segment, "f_backward": f_backward}[fn_kind](
+        lr_times_steps
+    )
     fn = lambda x: base_fn(x / n_seg)  # noqa: E731
     EkfacApplicator(cfg, apply_fn=fn).compute_ivhp_sharded()
 
@@ -132,73 +137,74 @@ def _apply_eigfn_worker(
 def walk_query_phase1(
     run_path: str | Path,
     method: str,
-    eta_K_per_segment: list[float],
+    lr_times_steps_per_segment: list[float],
     distributed: DistributedConfig,
 ) -> list[Path]:
-    """Phase 1: build u_0, u_1, ..., u_{L-1} by walking F_S backwards.
+    """Phase 1: build query_grad_0, ..., query_grad_{L-1} by walking F_backward.
 
-    u_{L-1} is the original query at <run>/query/.
-    u_{k-1} = F_S(segment_k) applied to u_k for k = L-1, L-2, ..., 1.
-    Outputs land at <run>/segment_{l}/u/ for l = 0 .. L-2.
+    query_grad_{L-1} is the original query at <run>/query/.
+    query_grad_{k-1} = F_backward(segment_k) applied to query_grad_k for
+    k = L-1, ..., 1. Outputs land at <run>/segment_{l}/query_grad/ for
+    l = 0 .. L-2.
 
-    Returns ``[u_0_path, u_1_path, ..., u_{L-1}_path]``.
+    Returns ``[query_grad_0_path, ..., query_grad_{L-1}_path]``.
     """
     base = Path(run_path)
-    L = len(eta_K_per_segment)
-    u_paths: list[Path] = [Path("")] * L
-    u_paths[L - 1] = base / "query"
+    num_segments = len(lr_times_steps_per_segment)
+    query_grad_paths: list[Path] = [Path("")] * num_segments
+    query_grad_paths[num_segments - 1] = base / "query"
 
-    for k in range(L - 1, 0, -1):
+    for k in range(num_segments - 1, 0, -1):
         segment_dir = base / f"segment_{k}" / method
-        dst = base / f"segment_{k - 1}" / "u"
+        dst = base / f"segment_{k - 1}" / "query_grad"
         apply_eigfn_to_query(
-            src_grad_path=u_paths[k],
+            src_grad_path=query_grad_paths[k],
             dst_grad_path=dst,
             segment_dir=segment_dir,
-            eta_K=eta_K_per_segment[k],
+            lr_times_steps=lr_times_steps_per_segment[k],
             n_seg=_load_n_seg(segment_dir),
-            fn_kind="f_s",
+            fn_kind="f_backward",
             distributed=distributed,
         )
-        u_paths[k - 1] = dst
+        query_grad_paths[k - 1] = dst
 
-    return u_paths
+    return query_grad_paths
 
 
 def walk_query_phase2(
     run_path: str | Path,
     method: str,
-    eta_K_per_segment: list[float],
-    u_paths: list[Path],
+    lr_times_steps_per_segment: list[float],
+    query_grad_paths: list[Path],
     distributed: DistributedConfig,
 ) -> list[Path]:
-    """Phase 2: build psi_0, psi_1, ..., psi_{L-1} via F_r per segment.
+    """Phase 2: build query_grad_segment_0, ..., query_grad_segment_{L-1} via F_segment.
 
-    psi_l = F_r(segment_l) applied to u_l for l = 0, 1, ..., L-1.
-    Outputs land at <run>/segment_{l}/psi/.
+    query_grad_segment_l = F_segment(segment_l) applied to query_grad_l for
+    l = 0, ..., L-1. Outputs land at <run>/segment_{l}/query_grad_segment/.
     Global (1/N_train) factor is deferred to scoring time.
 
-    Returns ``[psi_0_path, psi_1_path, ..., psi_{L-1}_path]``.
+    Returns ``[query_grad_segment_0_path, ..., query_grad_segment_{L-1}_path]``.
     """
     base = Path(run_path)
-    L = len(eta_K_per_segment)
-    psi_paths: list[Path] = []
+    num_segments = len(lr_times_steps_per_segment)
+    query_grad_segment_paths: list[Path] = []
 
-    for l in range(L):
+    for l in range(num_segments):
         segment_dir = base / f"segment_{l}" / method
-        dst = base / f"segment_{l}" / "psi"
+        dst = base / f"segment_{l}" / "query_grad_segment"
         apply_eigfn_to_query(
-            src_grad_path=u_paths[l],
+            src_grad_path=query_grad_paths[l],
             dst_grad_path=dst,
             segment_dir=segment_dir,
-            eta_K=eta_K_per_segment[l],
+            lr_times_steps=lr_times_steps_per_segment[l],
             n_seg=_load_n_seg(segment_dir),
-            fn_kind="f_r",
+            fn_kind="f_segment",
             distributed=distributed,
         )
-        psi_paths.append(dst)
+        query_grad_segment_paths.append(dst)
 
-    return psi_paths
+    return query_grad_segment_paths
 
 
 def _load_n_seg(segment_dir: Path) -> int:
@@ -213,19 +219,20 @@ def _load_n_seg(segment_dir: Path) -> int:
 
 def score_per_segment_and_aggregate(
     index_cfg: IndexConfig,
-    psi_paths: list[Path],
+    query_grad_segment_paths: list[Path],
     final_checkpoint: str,
 ) -> Path:
-    """Phase 3: per-segment ``psi_l . g(z_m)`` scores, summed into one final.
+    """Phase 3: per-segment ``query_grad_segment_l . g(z_m)`` scores, summed.
 
     For each l, runs :func:`score_dataset` against the training data at the
-    final checkpoint with ``psi_l`` as the query. Writes per-segment outputs
-    to ``<run>/segment_{l}/scores/``, then sums into ``<run>/scores.npy``.
+    final checkpoint with ``query_grad_segment_l`` as the query. Writes
+    per-segment outputs to ``<run>/segment_{l}/scores/``, then sums into
+    ``<run>/scores.npy``.
     """
     base_run = Path(index_cfg.run_path)
-    L = len(psi_paths)
+    num_segments = len(query_grad_segment_paths)
     score_dirs: list[Path] = []
-    for l in range(L):
+    for l in range(num_segments):
         scores_dir = base_run / f"segment_{l}" / "scores"
         if scores_dir.exists():
             shutil.rmtree(scores_dir)
@@ -234,7 +241,7 @@ def score_per_segment_and_aggregate(
         seg_index_cfg.run_path = str(scores_dir)
         seg_index_cfg.projection_dim = 0
         seg_index_cfg.skip_hessians = True
-        score_cfg = ScoreConfig(query_path=str(psi_paths[l]))
+        score_cfg = ScoreConfig(query_path=str(query_grad_segment_paths[l]))
         score_dataset(seg_index_cfg, score_cfg, PreprocessConfig())
         score_dirs.append(scores_dir)
 
