@@ -35,8 +35,10 @@ from .approx_unrolling_math import (
     walk_query_phase1,
     walk_query_phase2,
 )
-from .checkpoint_hessians import precompute_checkpoint_hessians
-from .checkpoint_lambdas import precompute_checkpoint_averaged_lambdas
+from .precompute_checkpoints import (
+    precompute_checkpoint_averaged_lambdas,
+    precompute_checkpoint_hessians,
+)
 from .segment_aggregation import (
     aggregate_segment_covariances,
     aggregate_segment_lambdas,
