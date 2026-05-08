@@ -16,15 +16,13 @@ from bergson.config import DistributedConfig
 def cap_world_size_to_dataset(
     cfg: DistributedConfig, dataset_size: int
 ) -> DistributedConfig:
-    """Return a DistributedConfig with world_size at most `dataset_size`.
-    This method works when query size is <= nproc_per_node.
-    """
+    """Return a single node DistributedConfig for small datasets."""
     if dataset_size >= cfg.world_size:
         return cfg
-    assert dataset_size <= cfg.nproc_per_node
+
     capped_cfg = deepcopy(cfg)
     capped_cfg.nnode = 1
-    capped_cfg.nproc_per_node = max(1, dataset_size)
+    capped_cfg.nproc_per_node = max(1, min(dataset_size, cfg.nproc_per_node))
     return capped_cfg
 
 
