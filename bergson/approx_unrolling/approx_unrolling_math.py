@@ -144,7 +144,7 @@ def walk_query_phase1(
 
     query_grad_{L-1} is the original query at <run>/query/.
     query_grad_{k-1} = F_backward(segment_k) applied to query_grad_k for
-    k = L-1, ..., 1. Outputs land at <run>/segment_{l}/query_grad/ for
+    k = L-1, ..., 1. Outputs land at <run>/segment_{l}/query_grad_backward/ for
     l = 0 .. L-2.
 
     Returns ``[query_grad_0_path, ..., query_grad_{L-1}_path]``.
@@ -156,7 +156,7 @@ def walk_query_phase1(
 
     for k in range(num_segments - 1, 0, -1):
         segment_dir = base / f"segment_{k}" / method
-        dst = base / f"segment_{k - 1}" / "query_grad"
+        dst = base / f"segment_{k - 1}" / "query_grad_backward"
         apply_eigfn_to_query(
             src_grad_path=query_grad_paths[k],
             dst_grad_path=dst,
