@@ -16,6 +16,9 @@ from simple_parsing import ArgumentParser
 from torch.distributed._functional_collectives import (
     all_reduce as differentiable_all_reduce,
 )
+from torch.distributed._functional_collectives import (
+    wait_tensor,
+)
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
@@ -51,7 +54,7 @@ def compute_query_gradients(
     """
     grad_accum: dict[str, torch.Tensor] | None = None
     loss_accum = 0.0
-    n_batches = len(query_stream)
+    denom = len(query_stream) * (dist.get_world_size() if dist.is_initialized() else 1)
 
     with fwd_state.activate(model) as params:
         for batch in tqdm(query_stream, desc="Query"):
@@ -71,24 +74,25 @@ def compute_query_gradients(
 
     if method == "mean":
         for k in grad_accum:
-            grad_accum[k] /= n_batches
+            grad_accum[k] /= denom
 
-        loss_accum /= n_batches
+        loss_accum /= denom
 
     if dist.is_initialized():
         if not fsdp:
-            denom = dist.get_world_size() if method == "mean" else 1
-
-            for k in grad_accum:
-                differentiable_all_reduce(
-                    grad_accum[k] / denom,
+            grad_accum = {
+                k: differentiable_all_reduce(
+                    g,
                     "sum",
                     dist.distributed_c10d._get_default_group(),
                 )
+                for k, g in grad_accum.items()
+            }
+            for g in grad_accum.values():
+                wait_tensor(g)
 
         # Loss is never a DTensor
-        op = dist.ReduceOp.SUM if method == "sum" else dist.ReduceOp.AVG
-        dist.all_reduce(loss_accum, op=op)
+        dist.all_reduce(loss_accum)
 
     return grad_accum, float(loss_accum)
 

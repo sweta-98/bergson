@@ -18,6 +18,9 @@ from torch import nn
 from torch.distributed._functional_collectives import (
     all_reduce as differentiable_all_reduce,
 )
+from torch.distributed._functional_collectives import (
+    wait_tensor,
+)
 from torchopt.pytree import tree_flatten_with_path, tree_iter, tree_map
 from torchopt.typing import GradientTransformation, OptState
 from tqdm.auto import tqdm
@@ -318,6 +321,8 @@ class Trainer:
                     )
                     for k, g in grads.items()
                 }
+                for g in grads.values():
+                    wait_tensor(g)
             else:
                 for g in grads.values():
                     dist.all_reduce(g, op=dist.ReduceOp.AVG)
