@@ -707,10 +707,14 @@ class CollectorComputer:
 
                 # Compute padded tensors and valid_mask before entering context
                 # TODO check if valid_mask has bug
+                # Local padding only: bin-packer enforces a per-rank
+                # ``max_len × batch_size ≤ N`` budget that a global-max
+                # all-reduce would silently violate.
                 x, y, valid_mask = pad_and_tensor(
                     batch["input_ids"],
                     labels=batch.get("labels"),
                     device=self.device,
+                    sync_max_len=False,
                 )
                 total_processed += valid_mask.sum()
 

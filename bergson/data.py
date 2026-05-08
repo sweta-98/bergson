@@ -595,19 +595,32 @@ def pad_and_tensor(
     padding_value: int = 0,
     dtype: torch.dtype | None = torch.long,
     device: torch.device | None = None,
+    sync_max_len: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Pad a list of sequences to the same length and convert them to tensors.
     Returns a tuple of padded sequences and labels. The labels are the same as the
     sequences, but with -100 for the padding positions, which is useful for ignoring
     padding in loss calculations.
+
+    When ``sync_max_len`` is True (default) and a process group is
+    initialized, the padding length is reduced to the global max across
+    ranks via an ``all_reduce``. This is required by callers that need
+    matching activation shapes across ranks (MAGIC, see PR #227). The
+    build-time gradient collector passes ``sync_max_len=False`` because
+    its bin-packer enforces a per-rank token budget
+    (``max_len × batch_size ≤ N``) that the global all-reduce silently
+    violates when ranks are assigned batches with very different
+    max_lens — a single long-example batch on one rank forces every
+    short-example batch on its peers to pad up to the long length,
+    blowing the budget by orders of magnitude.
     """
     if labels is None:
         labels = sequences
 
     # find max length
     max_len = max(len(seq) for seq in sequences)
-    if dist.is_initialized():
+    if sync_max_len and dist.is_initialized():
         max_len_tensor = torch.tensor(max_len, device=device)
         dist.all_reduce(max_len_tensor, op=dist.ReduceOp.MAX)
         max_len = int(max_len_tensor)
