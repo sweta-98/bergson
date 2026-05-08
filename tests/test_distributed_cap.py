@@ -6,8 +6,14 @@ behavior reduces world_size to ``len(dataset)`` instead — no padding,
 no truncation, no duplicate gradient computation across ranks.
 """
 
+import os
+import socket
+import time
+
+import torch.multiprocessing as mp
+
 from bergson.config import DistributedConfig
-from bergson.distributed import cap_world_size_to_dataset
+from bergson.distributed import cap_world_size_to_dataset, parent_barrier
 
 
 def test_cap_to_dataset_size_when_smaller():
@@ -82,3 +88,64 @@ def test_single_node_unchanged_when_already_small():
     assert capped.world_size == 2
     assert capped.nnode == 1
     assert capped.nproc_per_node == 2
+
+
+def _capped_build_simulator(
+    rank: int, nnode: int, port: int, partial_path, final_path
+) -> None:
+    """Mimic build()'s capped path: rank-0 worker writes, rank-0 renames
+    partial → final, then parent_barrier across all srun parents."""
+    os.environ["SLURM_NODEID"] = str(rank)
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = str(port)
+
+    orig = DistributedConfig(nnode=nnode, nproc_per_node=4)
+    capped = cap_world_size_to_dataset(orig, dataset_size=1)
+
+    if capped.world_size <= 1 and capped._node_rank == 0:
+        time.sleep(0.3)
+        partial_path.mkdir(parents=True, exist_ok=True)
+        (partial_path / "config.yaml").write_text("data")
+
+    if capped.rank == 0:
+        time.sleep(0.3)
+        partial_path.rename(final_path)
+
+    if capped.world_size < orig.world_size:
+        parent_barrier(orig)
+
+    assert (
+        final_path / "config.yaml"
+    ).exists(), f"rank {rank}: file not visible after parent_barrier"
+
+
+def test_parent_barrier_serializes_capped_build_writes(tmp_path):
+    """After build()'s capped rank-0 shutil.move, parent_barrier must keep
+    non-rank-0 srun parents from sprinting ahead. Spawns 2 simulated
+    srun parents and verifies all see the final path post-barrier.
+
+    Without the barrier (or with the barrier placed before the rename),
+    the non-rank-0 process would assert before rank-0 finishes the
+    rename, since rank-0 sleeps to mimic a slow NFS move.
+    """
+    nnode = 2
+    partial_path = tmp_path / "out.part"
+    final_path = tmp_path / "out"
+
+    with socket.socket() as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+
+    procs = [
+        mp.Process(
+            target=_capped_build_simulator,
+            args=(r, nnode, port, partial_path, final_path),
+        )
+        for r in range(nnode)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=30)
+    for p in procs:
+        assert p.exitcode == 0, f"proc exited with {p.exitcode}"
