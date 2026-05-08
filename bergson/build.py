@@ -10,7 +10,11 @@ from tqdm.auto import tqdm
 from bergson.collection import collect_gradients
 from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
-from bergson.distributed import cap_world_size_to_dataset, launch_distributed_run
+from bergson.distributed import (
+    cap_world_size_to_dataset,
+    launch_distributed_run,
+    parent_barrier,
+)
 from bergson.utils.batch_size import maybe_auto_batch_size
 from bergson.utils.utils import (
     assert_type,
@@ -172,3 +176,6 @@ def build(
 
     if dist_cfg.rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)
+
+    if dist_cfg.world_size < index_cfg.distributed.world_size:
+        parent_barrier(index_cfg.distributed)

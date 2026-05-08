@@ -16,7 +16,11 @@ from bergson.data import (
     allocate_batches,
     load_gradients,
 )
-from bergson.distributed import cap_world_size_to_dataset, launch_distributed_run
+from bergson.distributed import (
+    cap_world_size_to_dataset,
+    launch_distributed_run,
+    parent_barrier,
+)
 from bergson.process_grads import (
     get_trackstar_hessian,
     normalize_and_aggregate_grads,
@@ -387,3 +391,6 @@ def score_dataset(
 
     if dist_cfg.rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)
+
+    if dist_cfg.world_size < index_cfg.distributed.world_size:
+        parent_barrier(index_cfg.distributed)
