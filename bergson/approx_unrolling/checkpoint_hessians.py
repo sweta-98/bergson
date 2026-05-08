@@ -28,7 +28,7 @@ def precompute_checkpoint_hessians(
     hessian_cfg: HessianConfig,
     approx_unrolling_cfg: ApproxUnrollingConfig,
     *,
-    resume: bool = False,
+    overwrite: bool = False,
 ) -> None:
     """Run :func:`approximate_hessians` once per checkpoint.
 
@@ -50,7 +50,7 @@ def precompute_checkpoint_hessians(
         out_path = ckpt_dir / method
 
         if out_path.exists():
-            if resume:
+            if not overwrite:
                 logger.info(
                     f"[seg {seg} ckpt {idx_in_seg}] skip — exists at {out_path}"
                 )

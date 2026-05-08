@@ -54,8 +54,6 @@ def approx_unrolling_pipeline(
     index_cfg: IndexConfig,
     hessian_cfg: HessianConfig,
     approx_unrolling_cfg: ApproxUnrollingConfig,
-    *,
-    resume: bool = False,
 ):
     """Run the SOURCE (approximate unrolling) training-data attribution pipeline.
 
@@ -98,7 +96,7 @@ def approx_unrolling_pipeline(
     logger.info(f"  checkpoints (C)   : {len(approx_unrolling_cfg.checkpoints)}")
     logger.info(f"  segments (L)      : {approx_unrolling_cfg.segments}")
     logger.info(f"  hessian method    : {hessian_cfg.method}")
-    logger.info(f"  resume            : {resume}")
+    logger.info(f"  overwrite         : {index_cfg.overwrite}")
     logger.info("=" * 70)
 
     # ── Step 1: Per-checkpoint Hessian precompute ─────────────────────────
@@ -110,7 +108,7 @@ def approx_unrolling_pipeline(
         index_cfg,
         hessian_cfg,
         approx_unrolling_cfg,
-        resume=resume,
+        overwrite=index_cfg.overwrite,
     )
     # Encourage GC between expensive steps; matters most in single-GPU mode
     # where the worker ran in-process and may still hold model references.
@@ -127,7 +125,7 @@ def approx_unrolling_pipeline(
         n_segments=n_segments,
         per_segment=n_ckpts // n_segments,
         distributed=index_cfg.distributed,
-        resume=resume,
+        resume=index_cfg.overwrite,
     )
 
     # ── Step 3: Per-checkpoint lambda in segment eigenbasis ───────────────
@@ -139,7 +137,7 @@ def approx_unrolling_pipeline(
             index_cfg,
             hessian_cfg,
             approx_unrolling_cfg,
-            resume=resume,
+            resume=index_cfg.overwrite,
         )
     else:
         logger.info(f"Step 3/{_N_TOTAL_STEPS}: skipped (ev_correction=False).")
@@ -156,7 +154,7 @@ def approx_unrolling_pipeline(
             n_segments=n_segments,
             per_segment=n_ckpts // n_segments,
             distributed=index_cfg.distributed,
-            resume=resume,
+            resume=index_cfg.overwrite,
         )
     else:
         logger.info(f"Step 4/{_N_TOTAL_STEPS}: skipped (ev_correction=False).")
@@ -167,7 +165,7 @@ def approx_unrolling_pipeline(
         f"Building mean query gradient at the final checkpoint..."
     )
     query_path = Path(index_cfg.run_path) / "query"
-    if resume and query_path.exists():
+    if index_cfg.overwrite and query_path.exists():
         logger.info(f"  skip — exists at {query_path}")
     else:
         if query_path.exists():
@@ -208,7 +206,7 @@ def approx_unrolling_pipeline(
 
     # ── Step 8: Phase 3 -- per-segment scoring + sum ──────────────────────
     logger.info(
-        f"Step 8/{_N_TOTAL_STEPS}: " f"Phase 3 -- per-segment scoring + aggregation..."
+        f"Step 8/{_N_TOTAL_STEPS}: Phase 3 -- per-segment scoring + aggregation..."
     )
     out_path = score_per_segment_and_aggregate(
         index_cfg=index_cfg,

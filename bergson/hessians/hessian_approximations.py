@@ -10,7 +10,6 @@ from transformers import PreTrainedModel
 from bergson.collector.collector import (
     CollectorComputer,
     fwd_bwd_hessian_factory,
-    fwd_only_factory,
 )
 from bergson.config import AttentionConfig, HessianConfig, IndexConfig
 from bergson.data import allocate_batches
@@ -18,11 +17,8 @@ from bergson.distributed import launch_distributed_run
 from bergson.hessians.eigenvectors import (
     LambdaCollector,
     compute_eigendecomposition,
-    save_identity_eigen,
-    save_identity_factors,
     save_uncorrected_eigenvalues,
 )
-from bergson.hessians.foof import ActivationCovarianceCollector
 from bergson.hessians.kfac import CovarianceCollector
 from bergson.hessians.shampoo import ShampooCollector
 from bergson.hessians.tkfac import TraceCovarianceCollector
@@ -41,7 +37,6 @@ HESSIAN_APPROXIMATIONS = {
     "kfac": CovarianceCollector,
     "tkfac": TraceCovarianceCollector,
     "shampoo": ShampooCollector,
-    "foof": ActivationCovarianceCollector,
 }
 
 
@@ -154,7 +149,6 @@ def hessian_worker(
     model, peft_target_modules = setup_model_and_peft(index_cfg)
     if target_modules is None:
         target_modules = peft_target_modules
-    assert target_modules is not None
 
     kwargs = {
         "model": model,
@@ -168,72 +162,12 @@ def hessian_worker(
         "batches": allocate_batches(ds["length"][:], index_cfg.token_batch_size),
     }
 
-    if hessian_cfg.method == "identity":
-        layer_dims = {
-            name: tuple(model.get_submodule(name).weight.shape)
-            for name in target_modules
-        }
-        dtype = convert_precision_to_torch(hessian_cfg.hessian_dtype)
-        save_identity_factors(
-            partial_run_path=index_cfg.partial_run_path,
-            layer_dims=layer_dims,
-            rank=rank,
-            world_size=world_size,
-            dtype=dtype,
-        )
-        if dist.is_initialized():
-            dist.barrier()
-
-        if hessian_cfg.ev_correction:
-            # Note that LambdaCollector will rewrite total_processed.pt,
-            # replacing the 1.0 stored here by save_identity_factors.
-            collect_hessians(**kwargs, ev_correction=True)
-
-        total_processed = torch.load(
-            os.path.join(str(index_cfg.partial_run_path), "total_processed.pt"),
-            map_location="cpu",
-            weights_only=False,
-        )
-        save_uncorrected_eigenvalues(
-            partial_run_path=index_cfg.partial_run_path,
-            eva_a_local={
-                n: torch.ones(i // world_size, dtype=dtype)
-                for n, (_, i) in layer_dims.items()
-            },
-            eva_g_local={
-                n: torch.ones(o // world_size, dtype=dtype)
-                for n, (o, _) in layer_dims.items()
-            },
-            total_processed=total_processed,
-            rank=rank,
-            world_size=world_size,
-        )
-        return
-
     collect_hessians(**kwargs)
 
     dist.barrier() if dist.is_initialized() else None
 
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
-
-    if hessian_cfg.method == "foof":
-        # F_FOOF = E[aaᵀ] ⊗ I. Synthesise identity Q_G unconditionally so even
-        # `do_eigendecomposition=False` callers (approx_unrolling per-ckpt step)
-        # leave eigen_gradient_sharded on disk for the segment-aggregation step
-        # to copy into the segment dir.
-        out_dims = {
-            name: model.get_submodule(name).weight.shape[0] for name in target_modules
-        }
-        dtype = convert_precision_to_torch(hessian_cfg.hessian_dtype)
-        save_identity_eigen(
-            index_cfg.partial_run_path,
-            out_dims,
-            "eigen_gradient_sharded",
-            rank,
-            world_size,
-            dtype,
-        )
 
     if not do_eigendecomposition:
         return
@@ -249,17 +183,10 @@ def hessian_worker(
         total_processed=total_processed,
     )
 
-    if hessian_cfg.method == "foof":
-        # eigen_gradient_sharded already saved above; just build eva_g = 1.
-        eva_g = {
-            name: torch.ones(d // world_size, dtype=dtype)
-            for name, d in out_dims.items()
-        }
-    else:
-        eva_g = compute_eigendecomposition(
-            os.path.join(index_cfg.partial_run_path, "gradient_sharded"),
-            total_processed=total_processed,
-        )
+    eva_g = compute_eigendecomposition(
+        os.path.join(index_cfg.partial_run_path, "gradient_sharded"),
+        total_processed=total_processed,
+    )
 
     dist.barrier() if dist.is_initialized() else None
 
@@ -323,11 +250,6 @@ def collect_hessians(
         cfg=index_cfg,
     )
 
-    if (not ev_correction) and hessian_cfg.method == "foof":
-        # FOOF uses ActivationCovarianceCollector which only needs forward
-        # activations.
-        computer.forward_backward = fwd_only_factory(index_cfg, hessian_cfg)
-    else:
-        computer.forward_backward = fwd_bwd_hessian_factory(index_cfg, hessian_cfg)
+    computer.forward_backward = fwd_bwd_hessian_factory(index_cfg, hessian_cfg)
 
     computer.run_with_collector_hooks(desc=desc)

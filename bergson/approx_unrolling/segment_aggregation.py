@@ -16,17 +16,12 @@ from bergson.utils.utils import get_device, get_device_index
 
 _SHARD_KINDS = ("activation_sharded", "gradient_sharded")
 # Per-method raw covariance dirs that the per-checkpoint step actually writes.
-# - kfac/tkfac/shampoo: full E[aaᵀ] and E[ggᵀ] are summed and eigendecomposed.
-# - foof: only activation cov is collected; Q_G = I (per-ckpt step saves
-#   eigen_gradient_sharded directly), so we just sum + eigendecompose activation.
-# - identity: no raw cov collected; both eigen_*_sharded are identity per-ckpt
+# - kfac/shampoo/tkfac: full E[aaᵀ] and E[ggᵀ] are summed and eigendecomposed.
 #   and we copy them straight to the segment dir.
 _RAW_KINDS_PER_METHOD: dict[str, tuple[str, ...]] = {
     "kfac": ("activation_sharded", "gradient_sharded"),
     "tkfac": ("activation_sharded", "gradient_sharded"),
     "shampoo": ("activation_sharded", "gradient_sharded"),
-    "foof": ("activation_sharded",),
-    "identity": (),
 }
 
 
@@ -211,10 +206,6 @@ def _aggregate_cov_worker(
                 total_processed=total_processed,
             )
 
-        # Synthesise any eigen_*_sharded dirs that the eigendecomposition step
-        # didn't produce (foof gradient side, identity both sides) by copying
-        # ckpt_0's. These are identity matrices at every checkpoint, so the
-        # segment-average is also identity → copy is the right answer.
         for kind in _SHARD_KINDS:
             eigen_kind = f"eigen_{kind}"
             dst_dir = out_dir / eigen_kind
