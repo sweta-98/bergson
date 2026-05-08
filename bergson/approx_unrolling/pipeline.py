@@ -1,15 +1,12 @@
-"""Top-level orchestrator for the SOURCE training-data attribution pipeline.
-
-Mirrors :func:`bergson.hessians.pipeline.hessian_pipeline` in style: a flat
-sequence of numbered steps, each delegating to existing distributed
-primitives via :func:`bergson.distributed.launch_distributed_run`.
+"""Top-level orchestrator for the approximate unrolling
+training-data attribution pipeline.
 
 Pipeline steps
 --------------
 1. Per-checkpoint covariance precompute (raw cov shards only, no eigvecs).
 2. Per-segment cov aggregation + eigendecomposition (one combined launch).
-3. Per-checkpoint lambda in segment eigenbasis (only if ``ev_correction``).
-4. Per-segment lambda aggregation (only if ``ev_correction``).
+3. Per-checkpoint lambda in segment eigenbasis.
+4. Per-segment lambda aggregation.
 5. Mean query gradient at the final checkpoint.
 6. Phase 1: walk query backwards via F_S to build u_0..u_{L-2} at
    ``<run>/segment_{l}/u/`` (u_{L-1} is just the top-level query).
@@ -32,20 +29,20 @@ from ..config import (
     PreprocessConfig,
 )
 from ..utils.logger import get_logger
+from .approx_unrolling_math import (
+    compute_eta_K_per_segment,
+    score_per_segment_and_aggregate,
+    walk_query_phase1,
+    walk_query_phase2,
+)
 from .checkpoint_hessians import precompute_checkpoint_hessians
 from .checkpoint_lambdas import precompute_checkpoint_averaged_lambdas
 from .segment_aggregation import (
     aggregate_segment_covariances,
     aggregate_segment_lambdas,
 )
-from .source_math import (
-    compute_eta_K_per_segment,
-    score_per_segment_and_aggregate,
-    walk_query_phase1,
-    walk_query_phase2,
-)
 
-# Total number of steps in the full SOURCE pipeline. Used only for the
+# Total number of steps in the full approximate unrolling pipeline. Used only for the
 # user-facing "Step k/N_TOTAL_STEPS:" prefix. Bump as steps land.
 _N_TOTAL_STEPS = 8
 
@@ -55,13 +52,14 @@ def approx_unrolling_pipeline(
     hessian_cfg: HessianConfig,
     approx_unrolling_cfg: ApproxUnrollingConfig,
 ):
-    """Run the SOURCE (approximate unrolling) training-data attribution pipeline.
+    """Run the approximate unrolling (approximate unrolling) training-data
+    attribution pipeline.
 
     Parameters
     ----------
     index_cfg : IndexConfig
         Base run config. ``index_cfg.run_path`` is the parent directory for
-        **all** SOURCE artifacts (per-checkpoint outputs, per-segment
+        **all** approximate unrolling artifacts (per-checkpoint outputs, per-segment
         outputs, transformed query, scores).
     hessian_cfg : HessianConfig
         EKFAC method and dtype. When ``ev_correction=True``, steps 3-4
@@ -88,10 +86,13 @@ def approx_unrolling_pipeline(
             f"{n_ckpts / n_segments:.3f} per segment."
         )
 
+    assert hessian_cfg.ev_correction, "Approximate unrolling pipeline currently only "
+    "supports EV correction on."
+
     eta_K_per_segment = compute_eta_K_per_segment(approx_unrolling_cfg)
 
     logger.info("=" * 70)
-    logger.info(f"SOURCE pipeline -> {index_cfg.run_path}")
+    logger.info(f"approximate unrolling pipeline -> {index_cfg.run_path}")
     logger.info(f"  base model        : {index_cfg.model}")
     logger.info(f"  checkpoints (C)   : {len(approx_unrolling_cfg.checkpoints)}")
     logger.info(f"  segments (L)      : {approx_unrolling_cfg.segments}")
@@ -129,35 +130,30 @@ def approx_unrolling_pipeline(
     )
 
     # ── Step 3: Per-checkpoint lambda in segment eigenbasis ───────────────
-    if hessian_cfg.ev_correction:
-        logger.info(
-            f"Step 3/{_N_TOTAL_STEPS}: Per-checkpoint lambda using segment eigvecs..."
-        )
-        precompute_checkpoint_averaged_lambdas(
-            index_cfg,
-            hessian_cfg,
-            approx_unrolling_cfg,
-            resume=index_cfg.overwrite,
-        )
-    else:
-        logger.info(f"Step 3/{_N_TOTAL_STEPS}: skipped (ev_correction=False).")
+
+    logger.info(
+        f"Step 3/{_N_TOTAL_STEPS}: Per-checkpoint lambda using segment eigvecs..."
+    )
+    precompute_checkpoint_averaged_lambdas(
+        index_cfg,
+        hessian_cfg,
+        approx_unrolling_cfg,
+        resume=index_cfg.overwrite,
+    )
 
     # ── Step 4: Per-segment lambda aggregation ────────────────────────────
-    if hessian_cfg.ev_correction:
-        logger.info(
-            f"Step 4/{_N_TOTAL_STEPS}: "
-            f"Aggregating per-checkpoint lambdas into segment lambdas..."
-        )
-        aggregate_segment_lambdas(
-            run_path=index_cfg.run_path,
-            method=hessian_cfg.method,
-            n_segments=n_segments,
-            per_segment=n_ckpts // n_segments,
-            distributed=index_cfg.distributed,
-            resume=index_cfg.overwrite,
-        )
-    else:
-        logger.info(f"Step 4/{_N_TOTAL_STEPS}: skipped (ev_correction=False).")
+    logger.info(
+        f"Step 4/{_N_TOTAL_STEPS}: "
+        f"Aggregating per-checkpoint lambdas into segment lambdas..."
+    )
+    aggregate_segment_lambdas(
+        run_path=index_cfg.run_path,
+        method=hessian_cfg.method,
+        n_segments=n_segments,
+        per_segment=n_ckpts // n_segments,
+        distributed=index_cfg.distributed,
+        resume=index_cfg.overwrite,
+    )
 
     # ── Step 5: Mean query gradient at the final checkpoint ───────────────
     logger.info(
@@ -213,4 +209,4 @@ def approx_unrolling_pipeline(
         psi_paths=psi_paths,
         final_checkpoint=str(approx_unrolling_cfg.checkpoints[-1]),
     )
-    logger.info(f"[SOURCE pipeline] DONE. Final scores at {out_path}")
+    logger.info(f"[approximate unrolling pipeline] DONE. Final scores at {out_path}")
