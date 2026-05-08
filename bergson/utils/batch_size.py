@@ -26,6 +26,8 @@ def test_fwd_bwd(
     """One worst-case fwd+bwd at ``token_batch_size``.
 
     Raises if the configured batch size will not fit.
+    Only valid for compressed gradient collection when
+    the gradient processor has been registered.
     """
     device = next(model.parameters()).device
     if device.type != "cuda":

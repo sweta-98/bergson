@@ -463,12 +463,20 @@ def worker(
     diffs = []
     score_sums = []
 
+    assert scores.ndim == 1 or scores.shape[1] == 1
+    scores = scores.flatten()
+
+    if run_cfg.exclude_zero_scores:
+        valid_indices = torch.nonzero(scores != 0, as_tuple=True)[0]
+    else:
+        valid_indices = torch.arange(len(scores))
+
     if run_cfg.subset_strategy == "random":
         rng = torch.Generator().manual_seed(run_cfg.seed)
-        perm = torch.randperm(len(scores), generator=rng)
+        perm = valid_indices[torch.randperm(len(valid_indices), generator=rng)]
     elif run_cfg.subset_strategy == "sorted":
-        assert scores.ndim == 1 or scores.shape[1] == 1
-        perm = scores.argsort(dim=0)
+
+        perm = valid_indices[scores[valid_indices].argsort()]
     else:
         raise ValueError(f"Unsupported subset strategy: {run_cfg.subset_strategy}")
 

@@ -11,7 +11,7 @@ from bergson.collection import collect_gradients
 from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
 from bergson.distributed import launch_distributed_run
-from bergson.utils.batch_size import maybe_auto_batch_size, test_fwd_bwd
+from bergson.utils.batch_size import maybe_auto_batch_size
 from bergson.utils.utils import (
     assert_type,
     get_device,
@@ -73,7 +73,6 @@ def build_worker(
     processor = create_processor(model, index_cfg, target_modules)
 
     maybe_auto_batch_size(index_cfg, model, ds, processor, target_modules, rank)
-    test_fwd_bwd(model, index_cfg.token_batch_size)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -90,7 +89,11 @@ def build_worker(
     }
 
     if isinstance(ds, Dataset):
-        batches = allocate_batches(ds["length"][:], index_cfg.token_batch_size)
+        batches = allocate_batches(
+            ds["length"][:],
+            index_cfg.token_batch_size,
+            max_batch_size=index_cfg.max_batch_size,
+        )
         kwargs["batches"] = batches
         collect_gradients(**kwargs)
     else:
@@ -103,7 +106,9 @@ def build_worker(
                 return
             ds_shard = assert_type(Dataset, Dataset.from_list(buf))
             batches = allocate_batches(
-                ds_shard["length"][:], index_cfg.token_batch_size
+                ds_shard["length"][:],
+                index_cfg.token_batch_size,
+                max_batch_size=index_cfg.max_batch_size,
             )
             kwargs["ds"] = ds_shard
             kwargs["batches"] = batches

@@ -26,7 +26,6 @@ from bergson.score.score_writer import (
     MemmapTokenScoreWriter,
 )
 from bergson.score.scorer import Scorer
-from bergson.utils.batch_size import test_fwd_bwd
 from bergson.utils.utils import (
     assert_type,
     convert_precision_to_torch,
@@ -267,7 +266,6 @@ def score_worker(
 
     model, target_modules = setup_model_and_peft(index_cfg)
     processor = create_processor(model, index_cfg, target_modules)
-    test_fwd_bwd(model, index_cfg.token_batch_size)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -291,7 +289,9 @@ def score_worker(
 
     if isinstance(ds, Dataset):
         kwargs["batches"] = allocate_batches(
-            ds["length"][:], index_cfg.token_batch_size
+            ds["length"][:],
+            index_cfg.token_batch_size,
+            max_batch_size=index_cfg.max_batch_size,
         )
         kwargs["scorer"] = create_scorer(
             index_cfg.partial_run_path,
@@ -314,7 +314,9 @@ def score_worker(
                 return
             ds_shard = assert_type(Dataset, Dataset.from_list(buf))
             batches = allocate_batches(
-                ds_shard["length"][:], index_cfg.token_batch_size
+                ds_shard["length"][:],
+                index_cfg.token_batch_size,
+                max_batch_size=index_cfg.max_batch_size,
             )
             kwargs["ds"] = ds_shard
             kwargs["batches"] = batches

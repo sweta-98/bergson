@@ -343,6 +343,11 @@ class ValidationConfig(TrainingConfig, ABC):
     subset_strategy: Literal["random", "sorted"] = "sorted"
     """Strategy for selecting leave-k-out subsets for validation."""
 
+    exclude_zero_scores: bool = False
+    """When True, drop doc_ids with score == 0 from the validation
+    permutation. These scores may be produced by items with fewer than
+    2 tokens."""
+
 
 @dataclass
 class AttentionConfig:
@@ -381,6 +386,9 @@ class IndexConfig(AttributionConfig, Serializable):
 
     token_batch_size: int = 2048
     """Batch size in tokens for building the index."""
+
+    max_batch_size: int | None = None
+    """Cap the number of documents per batch."""
 
     auto_batch_size: bool = False
     """Whether to automatically determine the optimal token batch size.
