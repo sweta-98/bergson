@@ -16,7 +16,7 @@ from bergson.data import (
     allocate_batches,
     load_gradients,
 )
-from bergson.distributed import launch_distributed_run
+from bergson.distributed import cap_world_size_to_dataset, launch_distributed_run
 from bergson.process_grads import (
     get_trackstar_hessian,
     normalize_and_aggregate_grads,
@@ -371,12 +371,19 @@ def score_dataset(
 
     ds, _ = setup_data_pipeline(index_cfg)
 
+    dist_cfg = index_cfg.distributed
+    if isinstance(ds, Dataset) and len(ds) < dist_cfg.world_size:
+        dist_cfg = cap_world_size_to_dataset(dist_cfg, len(ds))
+        print(
+            f"reducing to nnode=1 and nproc_per_node={dist_cfg.nproc_per_node} for step"
+        )
+
     launch_distributed_run(
         "score",
         score_worker,
         [index_cfg, score_cfg, preprocess_cfg, ds],
-        index_cfg.distributed,
+        dist_cfg,
     )
 
-    if index_cfg.distributed.rank == 0:
+    if dist_cfg.rank == 0:
         shutil.move(index_cfg.partial_run_path, index_cfg.run_path)

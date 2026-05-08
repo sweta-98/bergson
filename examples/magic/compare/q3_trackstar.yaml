@@ -1,5 +1,6 @@
-# Pipeline: compute TrackStar scores for the magic-trained model from q3_random
-# against test[3:4], then run leave-k-out validation on those scores.
+# Pipeline: compute TrackStar scores for a magic-trained model generated
+# by the q3_magic.yaml against test[3:4], then run leave-k-out
+# validation on those scores.
 #
 # Run with:
 #   bergson pipeline examples/magic/compare/q3_trackstar.yaml

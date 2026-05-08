@@ -2,6 +2,7 @@ import io
 import os
 import socket
 from contextlib import nullcontext, redirect_stdout
+from copy import deepcopy
 from typing import Any, Callable, Concatenate, Mapping, ParamSpec
 
 import torch
@@ -10,6 +11,21 @@ import torch.multiprocessing as mp
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
 
 from bergson.config import DistributedConfig
+
+
+def cap_world_size_to_dataset(
+    cfg: DistributedConfig, dataset_size: int
+) -> DistributedConfig:
+    """Return a DistributedConfig with world_size at most `dataset_size`.
+    This method works when query size is <= nproc_per_node.
+    """
+    if dataset_size >= cfg.world_size:
+        return cfg
+    assert dataset_size <= cfg.nproc_per_node
+    capped_cfg = deepcopy(cfg)
+    capped_cfg.nnode = 1
+    capped_cfg.nproc_per_node = max(1, dataset_size)
+    return capped_cfg
 
 
 def grad_tree(
@@ -81,7 +97,10 @@ def launch_distributed_run(
     start_rank = dist_config.start_rank
 
     if world_size <= 1:
-        worker(0, 0, 1, *const_worker_args)
+        # Handle multi-node pipelines with single-process steps
+        # Other nodes proceed to next step's NCCL rendezvous
+        if dist_config._node_rank == 0:
+            worker(0, 0, 1, *const_worker_args)
     else:
         mp.set_sharing_strategy("file_system")
 

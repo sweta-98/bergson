@@ -84,12 +84,12 @@ class DistributedConfig(Serializable):
         if self.node_rank is not None:
             return self.node_rank
 
-        if self.nnode == 1:
-            return 0
-
         for var in ("SLURM_NODEID", "GROUP_RANK", "NODE_RANK"):
             if var in os.environ:
                 return int(os.environ[var])
+
+        if self.nnode == 1:
+            return 0
 
         raise ValueError("Node rank not found. Set it with --node_rank.")
 
