@@ -146,7 +146,7 @@ class GradientProcessor:
 
         # Fall back to legacy "preconditioners*.pth" filenames if the new
         # "hessians*.pth" files don't exist on disk.
-        # TODO Lucia Quirke: remove on the 28 October 2026
+
         hess_path = path / "hessians.pth"
         if not hess_path.exists():
             hess_path = path / "preconditioners.pth"

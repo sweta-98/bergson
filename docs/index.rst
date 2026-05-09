@@ -98,8 +98,3 @@ Content Index
 ------------------
 
 * :ref:`genindex`
-
-
-Documentation by Lucia Quirke.
-
-If you have suggestions, questions, or would like to collaborate, please email lucia@eleuther.ai or drop us a line in the #data-attribution channel of the EleutherAI Discord!
