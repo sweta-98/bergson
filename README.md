@@ -38,8 +38,8 @@ At a higher level, `bergson trackstar` pipelines all necessary steps for TrackSt
 
 | | Notebook | Description |
 |---|----------|-------------|
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/EleutherAI/bergson/blob/colab-notebooks-v2/notebooks/poison_detection.ipynb) | **Poison Detection** | Detect poisoned training examples with gradient attribution (T4, ~5 min) |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/EleutherAI/bergson/blob/colab-notebooks-v2/notebooks/style_ablation.ipynb) | **Style Ablation** | Suppress style to recover semantic matching (A100, ~20 min) |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)] | **Poison Detection** | Detect poisoned training examples with gradient attribution (T4, ~5 min) |
+| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)] | **Style Ablation** | Suppress style to recover semantic matching (A100, ~20 min) |
 
 # Installation
 
