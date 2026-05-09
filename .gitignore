@@ -26,8 +26,6 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-logs/
-
 
 ablations/
 archive/

@@ -545,6 +545,36 @@ class ScoreConfig(Serializable):
 
 
 @dataclass
+class ApproxUnrollingConfig(Serializable):
+    """Config for approximate unrolling of the influence function."""
+
+    checkpoints: list[int | str] = field(default_factory=list)
+    """List of training checkpoints (by step or path) to use for approximating"""
+
+    model_path: str | None = None
+    """Path to the model used for the training checkpoints. Required if checkpoint
+    paths are integers."""
+
+    segments: int = 3
+    """Number of segments to split the training trajectory into for approximation.
+    Must divide len(checkpoints)."""
+
+    lr: float = 1e-5
+    """Learning rate to use for the approximate unrolling optimization."""
+
+    lr_list: list[float] = field(default_factory=list)
+    """Per-segment average LR; length must == segments. If empty,
+    inferred from the training run's log_history.json."""
+
+    step_size_list: list[int] = field(default_factory=list)
+    """Per-segment optimizer step count; length must == segments. If
+    empty, inferred from per-checkpoint step counts."""
+
+    query: DataConfig = field(default_factory=DataConfig)
+    """Query dataset spec; mean gradient at the final checkpoint."""
+
+
+@dataclass
 class HessianConfig(Serializable):
     """Config for reducing the gradients."""
 

@@ -1,6 +1,5 @@
 import os
 import shutil
-from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -13,7 +12,7 @@ from bergson.collector.collector import (
 )
 from bergson.config import AttentionConfig, HessianConfig, IndexConfig
 from bergson.data import allocate_batches
-from bergson.distributed import launch_distributed_run
+from bergson.distributed import init_dist, launch_distributed_run
 from bergson.hessians.eigenvectors import (
     LambdaCollector,
     compute_eigendecomposition,
@@ -24,8 +23,6 @@ from bergson.hessians.shampoo import ShampooCollector
 from bergson.hessians.tkfac import TraceCovarianceCollector
 from bergson.utils.utils import (
     convert_precision_to_torch,
-    get_device,
-    get_device_index,
     setup_reproducibility,
 )
 from bergson.utils.worker_utils import (
@@ -40,7 +37,12 @@ HESSIAN_APPROXIMATIONS = {
 }
 
 
-def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> str:
+def approximate_hessians(
+    index_cfg: IndexConfig,
+    hessian_cfg: HessianConfig,
+    *,
+    do_eigendecomposition: bool = True,
+) -> str:
     """
     Approximate Hessian matrices using KFAC or EKFAC.
 
@@ -57,6 +59,9 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> 
         and gradient collection settings.
     hessian_cfg : HessianConfig
         Specifies the Hessian approximation method (kfac or ekfac).
+    do_eigendecomposition : bool
+        If True (default), compute the eigendecomposition of the covariance
+        matrices. Not needed when doing approximate unrolling
 
     Returns
     -------
@@ -77,7 +82,7 @@ def approximate_hessians(index_cfg: IndexConfig, hessian_cfg: HessianConfig) -> 
     launch_distributed_run(
         "hessian",
         hessian_worker,
-        [index_cfg, hessian_cfg, ds],
+        [index_cfg, hessian_cfg, ds, do_eigendecomposition],
         index_cfg.distributed,
     )
 
@@ -95,6 +100,8 @@ def hessian_worker(
     index_cfg: IndexConfig,
     hessian_cfg: HessianConfig,
     ds: Dataset,
+    do_eigendecomposition: bool = True,
+    target_modules: set[str] | None = None,
 ):
     """
     Worker function for distributed Hessian approximation.
@@ -107,51 +114,23 @@ def hessian_worker(
         Local rank on this node.
     world_size : int
         Total number of workers.
-    cfg : IndexConfig
+    index_cfg : IndexConfig
         Configuration for model, data, and gradient collection.
     hessian_cfg : HessianConfig
         Configuration for Hessian approximation method (kfac or ekfac).
     ds : Dataset
         Dataset to use for covariance estimation.
+    do_eigendecomposition : bool
+        If True (default), compute the eigendecomposition after collection.
+    target_modules : set[str] | None
+        Optional override for the target module set. When `None` (default)
+        we fall back to what `setup_model_and_peft` returns.
     """
-    """
-    Build worker executed per rank to collect gradients to populate the index.
+    init_dist(rank, local_rank, world_size)
 
-    Parameters
-    ----------
-    rank : int
-        Distributed rank / GPU ID for this worker.
-    local_rank : int
-        Local rank / GPU ID for this worker on the node.
-    world_size : int
-        Total number of workers participating in the run.
-    cfg : IndexConfig
-        Specifies the model, tokenizer, PEFT adapters, and other settings.
-    ds : Dataset | IterableDataset
-        The entire dataset to be indexed. A subset is assigned to each worker.
-    """
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-
-    # These should be set by the main process
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
-
-    model, target_modules = setup_model_and_peft(index_cfg)
-
-    attention_cfgs = {
-        module: index_cfg.attention for module in index_cfg.split_attention_modules
-    }
+    model, peft_target_modules = setup_model_and_peft(index_cfg)
+    if target_modules is None:
+        target_modules = peft_target_modules
 
     kwargs = {
         "model": model,
@@ -159,14 +138,21 @@ def hessian_worker(
         "index_cfg": index_cfg,
         "hessian_cfg": hessian_cfg,
         "target_modules": target_modules,
-        "attention_cfgs": attention_cfgs,
+        "attention_cfgs": {
+            module: index_cfg.attention for module in index_cfg.split_attention_modules
+        },
+        "batches": allocate_batches(ds["length"][:], index_cfg.token_batch_size),
     }
 
-    batches = allocate_batches(ds["length"][:], index_cfg.token_batch_size)
-    kwargs["batches"] = batches
     collect_hessians(**kwargs)
 
     dist.barrier() if dist.is_initialized() else None
+
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+
+    if not do_eigendecomposition:
+        return
 
     total_processed = torch.load(
         f"{index_cfg.partial_run_path}/total_processed.pt",
@@ -208,6 +194,8 @@ def collect_hessians(
     attention_cfgs: dict[str, AttentionConfig] | None = None,
     hessian_cfg: HessianConfig,
     ev_correction: bool = False,
+    eigen_path: str | None = None,
+    output_subdir: str = "eigenvalue_correction_sharded",
 ):
     """
     Compute Hessian approximations using the hooks specified in the collector.
@@ -225,7 +213,11 @@ def collect_hessians(
     }
     desc = f"Approximating Hessians with {hessian_cfg.method}"
     if ev_correction:
-        collector = LambdaCollector(**collector_args)
+        collector = LambdaCollector(
+            **collector_args,
+            eigen_path=eigen_path,
+            output_subdir=output_subdir,
+        )
         desc += " (eigenvalue correction)"
     else:
         collector_args["dtype"] = hessian_dtype

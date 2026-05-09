@@ -3,6 +3,7 @@ import os
 import socket
 from contextlib import nullcontext, redirect_stdout
 from copy import deepcopy
+from datetime import timedelta
 from typing import Any, Callable, Concatenate, Mapping, ParamSpec
 
 import torch
@@ -11,6 +12,25 @@ import torch.multiprocessing as mp
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
 
 from bergson.config import DistributedConfig
+from bergson.utils.utils import get_device, get_device_index
+
+
+def init_dist(rank: int, local_rank: int, world_size: int) -> None:
+    """Pin CUDA device and (if multi-rank) join the NCCL group set up by
+    ``launch_distributed_run`` via MASTER_ADDR/MASTER_PORT env vars."""
+    if torch.cuda.is_available():
+        torch.cuda.set_device(get_device_index(local_rank))
+    if world_size > 1:
+        addr = os.environ.get("MASTER_ADDR", "localhost")
+        port = os.environ.get("MASTER_PORT", "29500")
+        dist.init_process_group(
+            "nccl",
+            init_method=f"tcp://{addr}:{port}",
+            device_id=torch.device(get_device(local_rank)),
+            rank=rank,
+            timeout=timedelta(hours=1),
+            world_size=world_size,
+        )
 
 
 def cap_world_size_to_dataset(
