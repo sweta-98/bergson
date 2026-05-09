@@ -474,7 +474,6 @@ def _compute_epoch_scores(
                 acc["sum"] += col.to(device).sum(0)
 
             # Do not use num_proc because we are accumulating in a single variable
-            # https://colab.research.google.com/drive/1jCLv31Y4cDfqD0lhO0AnqEv3Or-LLvWe?usp=sharing
             eval_grad_ds.map(
                 sum_,
                 input_columns="gradients",

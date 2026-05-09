@@ -375,8 +375,6 @@ def _get_attribution_indices(
 
         # RAM usage climbs here; it's intentionally only evicted under pressure
         # Do not use num_proc because we are accumulating in a single variable
-        # nproc solution must use reduce as in
-        # https://colab.research.google.com/drive/1jCLv31Y4cDfqD0lhO0AnqEv3Or-LLvWe?usp=sharing
         query_dataset.map(
             sum_, input_columns="gradients", batched=True, batch_size=args.batch_size
         )
