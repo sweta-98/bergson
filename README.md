@@ -32,14 +32,13 @@ At a higher level, `bergson trackstar` pipelines all necessary steps for TrackSt
 - Support MAGIC
 - Support per-token attribution
 - Support EK-FAC
-- [Experimental] Support distributing hessians across nodes and devices for VRAM-efficient computation through the GradientCollectorWithDistributedHessians. If you would like this functionality exposed via the CLI please get in touch! https://github.com/EleutherAI/bergson/pull/100
 
 ## Notebooks
 
 | | Notebook | Description |
 |---|----------|-------------|
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)] | **Poison Detection** | Detect poisoned training examples with gradient attribution (T4, ~5 min) |
-| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)] | **Style Ablation** | Suppress style to recover semantic matching (A100, ~20 min) |
+| REMOVED FOR ANONYMIZATION | **Poison Detection** | Detect poisoned training examples with gradient attribution (T4, ~5 min) |
+| REMOVED FOR ANONYMIZATION | **Style Ablation** | Suppress style to recover semantic matching (A100, ~20 min) |
 
 # Installation
 
