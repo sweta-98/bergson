@@ -266,7 +266,7 @@ If you found Bergson useful in your research, please cite us:
 
 ```bibtex
 @software{bergson,
-  author       = {Lucia Quirke and Louis Jaburi and David Johnston and William Li and Michael Mulet and Guillaume Martres and Gonçalo Paulo and Girish Gupta and Stella Biderman and Nora Belrose},
+  author       = {Lucia Quirke and Louis Jaburi and David Johnston and William Li and Guillaume Martres and Gonçalo Paulo and Girish Gupta and Stella Biderman and Nora Belrose},
   title        = {Bergson: An Open Source Library for Data Attribution},
   year         = {2026},
   publisher    = {Zenodo},
