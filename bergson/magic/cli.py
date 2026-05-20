@@ -22,6 +22,12 @@ from torch.distributed._functional_collectives import (
 from torch.distributed.tensor import init_device_mesh
 from torchopt.pytree import tree_iter
 from tqdm import tqdm
+from transformers.utils.logging import (
+    disable_progress_bar as hf_disable_pbar,
+)
+from transformers.utils.logging import (
+    set_verbosity_error as hf_set_verbosity_error,
+)
 
 from ..config import ScoreConfig, TrainingConfig, ValidationConfig
 from ..data import load_scores
@@ -52,12 +58,18 @@ def compute_query_gradients(
     Iterates over the query stream, computing per-batch parameter gradients
     and reducing them (mean or sum) into a single gradient dict.
     """
+    denom = len(query_stream)
     grad_accum: dict[str, torch.Tensor] | None = None
     loss_accum = 0.0
-    denom = len(query_stream) * (dist.get_world_size() if dist.is_initialized() else 1)
+
+    if dist.is_initialized():
+        denom *= dist.get_world_size()
+        main = dist.get_rank() == 0
+    else:
+        main = True
 
     with fwd_state.activate(model) as params:
-        for batch in tqdm(query_stream, desc="Query"):
+        for batch in tqdm(query_stream, desc="Query", disable=not main):
             del batch["example_weight"]
             loss = model(**batch).loss
             grads = grad_tree(loss, params)
@@ -121,11 +133,7 @@ class CSVWriter:
             self._file.close()
 
 
-def prepare_trainer(
-    cfg: TrainingConfig,
-    rank: int,
-    schedule: Callable,
-):
+def prepare_trainer(cfg: TrainingConfig, rank: int, schedule: Callable):
     """Prepare the model, optimizer, and trainer for training."""
     model, target_modules = setup_model_and_peft(
         cfg,
@@ -279,6 +287,11 @@ def worker(
 ):
     torch.cuda.set_device(get_device_index(rank))
 
+    # For each non-main local rank, suppress HF info and warning messages
+    if rank != 0:
+        hf_disable_pbar()
+        hf_set_verbosity_error()
+
     if world_size > 1:
         addr = os.environ.get("MASTER_ADDR", "localhost")
         port = os.environ.get("MASTER_PORT", "29500")
@@ -335,20 +348,10 @@ def worker(
         dist.barrier()
 
     schedule = run_cfg.lr_schedule.get_schedule(len(stream))
-    trainer, fwd_state, model = prepare_trainer(
-        run_cfg,
-        rank,
-        schedule,
-    )
+    trainer, fwd_state, model = prepare_trainer(run_cfg, rank, schedule)
 
     ckpts_path = os.path.join(run_cfg.run_path, "checkpoints")
-    path0 = os.path.join(ckpts_path, "state0.pt")
-
-    resume = run_cfg.resume and os.path.exists(path0)
-
-    save_fut = None
-    if not resume:
-        save_fut = fwd_state.save(path0)
+    resume = run_cfg.resume
 
     fwd_state = trainer.train(
         fwd_state,
@@ -361,9 +364,6 @@ def worker(
         resume=resume,
         fsdp=run_cfg.fsdp,
     )
-
-    if save_fut is not None:
-        save_fut.result()  # ensure state0 is saved before validation loads it
 
     # If no query dataset is provided, skip backward and validation entirely
     if query_dataset is None:
@@ -424,6 +424,7 @@ def worker(
             stream,
             bwd_state,
             fwd_state,
+            cleanup=run_cfg.cleanup_ckpts,
             debug=run_cfg.debug,
             inplace=True,
             fsdp=run_cfg.fsdp,
@@ -507,9 +508,13 @@ def worker(
         enabled=global_rank == 0,
     )
 
+    # Disable annoying repetitive model loading messages, even on rank 0
+    hf_disable_pbar()
+    hf_set_verbosity_error()
+
     pbar = tqdm(subsets, desc="Validating", disable=global_rank != 0)
     for i, subset in enumerate(pbar):
-        fwd_state.load(path0)
+        trainer, fwd_state, model = prepare_trainer(run_cfg, rank, schedule)
         fwd_state.detach_()
 
         stream.weights.fill_(1.0)

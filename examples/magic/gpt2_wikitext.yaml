@@ -1,6 +1,7 @@
 run_path: runs/gpt2_wikitext
 model: gpt2
 overwrite: true
+cleanup_ckpts: false
 
 data:
   dataset: Salesforce/wikitext
