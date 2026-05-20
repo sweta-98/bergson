@@ -433,13 +433,6 @@ class Trainer:
             state = self.resume(state, save_dir)
             start = state.batch_index
 
-            # It's possible that training is already finished, and this is a no-op. In
-            # that case, don't bother creating the progress bar.
-            # Note that we actually skip training if start == n - 1, not start == n,
-            # because Trainer.backward will redo the last training step no matter what.
-            if start >= n - 1:
-                return state
-
         pending_save: SaveFuture | None = None
 
         main = not dist.is_initialized() or dist.get_rank() == 0
