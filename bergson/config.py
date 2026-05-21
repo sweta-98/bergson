@@ -84,12 +84,12 @@ class DistributedConfig(Serializable):
         if self.node_rank is not None:
             return self.node_rank
 
-        if self.nnode == 1:
-            return 0
-
         for var in ("SLURM_NODEID", "GROUP_RANK", "NODE_RANK"):
             if var in os.environ:
                 return int(os.environ[var])
+
+        if self.nnode == 1:
+            return 0
 
         raise ValueError("Node rank not found. Set it with --node_rank.")
 
@@ -343,6 +343,11 @@ class ValidationConfig(TrainingConfig, ABC):
     subset_strategy: Literal["random", "sorted"] = "sorted"
     """Strategy for selecting leave-k-out subsets for validation."""
 
+    exclude_zero_scores: bool = False
+    """When True, drop doc_ids with score == 0 from the validation
+    permutation. These scores may be produced by items with fewer than
+    2 tokens."""
+
 
 @dataclass
 class AttentionConfig:
@@ -381,6 +386,9 @@ class IndexConfig(AttributionConfig, Serializable):
 
     token_batch_size: int = 2048
     """Batch size in tokens for building the index."""
+
+    max_batch_size: int | None = None
+    """Cap the number of documents per batch."""
 
     auto_batch_size: bool = False
     """Whether to automatically determine the optimal token batch size.
@@ -529,6 +537,41 @@ class ScoreConfig(Serializable):
 
     modules: list[str] = field(default_factory=list)
     """Modules to use for the query. If empty, all modules will be used."""
+
+    higher_is_better: bool = True
+    """True when a positive scoring item is a proponent of the query
+    capability (e.g. in influence functions). False for unrolled
+    differentiation."""
+
+
+@dataclass
+class ApproxUnrollingConfig(Serializable):
+    """Config for approximate unrolling of the influence function."""
+
+    checkpoints: list[int | str] = field(default_factory=list)
+    """List of training checkpoints (by step or path) to use for approximating"""
+
+    model_path: str | None = None
+    """Path to the model used for the training checkpoints. Required if checkpoint
+    paths are integers."""
+
+    segments: int = 3
+    """Number of segments to split the training trajectory into for approximation.
+    Must divide len(checkpoints)."""
+
+    lr: float = 1e-5
+    """Learning rate to use for the approximate unrolling optimization."""
+
+    lr_list: list[float] = field(default_factory=list)
+    """Per-segment average LR; length must == segments. If empty,
+    inferred from the training run's log_history.json."""
+
+    step_size_list: list[int] = field(default_factory=list)
+    """Per-segment optimizer step count; length must == segments. If
+    empty, inferred from per-checkpoint step counts."""
+
+    query: DataConfig = field(default_factory=DataConfig)
+    """Query dataset spec; mean gradient at the final checkpoint."""
 
 
 @dataclass

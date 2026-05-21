@@ -27,5 +27,8 @@ class MagicConfig(ValidationConfig):
     backward_save_every: int = 0
     """How often (in steps) to save backward state for resume."""
 
+    cleanup_ckpts: bool = True
+    """Whether to delete all but the last checkpoint during the backward pass."""
+
     per_token: bool = False
     """Whether to compute attribution scores per token (instead of per sequence)."""

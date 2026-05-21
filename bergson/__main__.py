@@ -7,8 +7,10 @@ from simple_parsing import ArgumentParser, ConflictResolution, Serializable
 
 from bergson.hessians.pipeline import hessian_pipeline
 
+from .approx_unrolling.pipeline import approx_unrolling_pipeline
 from .build import build
 from .config import (
+    ApproxUnrollingConfig,
     HessianConfig,
     HessianPipelineConfig,
     IndexConfig,
@@ -29,6 +31,31 @@ from .score.score import score_dataset
 from .trackstar import trackstar
 from .utils.worker_utils import validate_run_path
 from .yaml_pipeline import run_pipeline
+
+
+@dataclass
+class ApproxUnrolling(Serializable):
+    """Run the SOURCE (approximate unrolling) training-data attribution pipeline.
+
+    Currently only step 1 (per-checkpoint Hessian precompute) is wired up;
+    later steps land incrementally. See
+    :mod:`bergson.approx_unrolling.pipeline` for the step list.
+    """
+
+    index_cfg: IndexConfig
+
+    hessian_cfg: HessianConfig
+
+    approx_unrolling_cfg: ApproxUnrollingConfig
+    """If true, skip steps whose output directories already exist."""
+
+    def execute(self):
+
+        approx_unrolling_pipeline(
+            self.index_cfg,
+            self.hessian_cfg,
+            self.approx_unrolling_cfg,
+        )
 
 
 @dataclass
@@ -114,8 +141,7 @@ class Mix(MixConfig):
     def execute(self):
         if not self.query_path or not self.index_path or not self.output_path:
             raise ValueError(
-                "mix requires --query_path, --index_path, "
-                "and --output_path to be set."
+                "mix requires --query_path, --index_path, and --output_path to be set."
             )
         mix_autocorrelation_matrices(
             query_path=self.query_path,
@@ -226,6 +252,7 @@ class Main:
     """Routes to the subcommands."""
 
     command: Union[
+        ApproxUnrolling,
         Build,
         Ekfac,
         Hessian,

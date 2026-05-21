@@ -79,22 +79,29 @@ class LambdaCollector(HookCollectorBase):
     """
 
     path: str
+    eigen_path: str | None = None
+    """Override read location for eigvecs; defaults to ``self.path``."""
+
+    output_subdir: str = "eigenvalue_correction_sharded"
+    """Subdir under ``self.path`` to write lambda shards into."""
 
     def setup(self) -> None:
         """Load eigenvectors and initialize storage."""
         self.shard_computer = ShardedMul()
         self.device = get_device(self.rank)
 
+        eigen_src = self.eigen_path or self.path
+
         # Load precomputed eigenvectors
         self.eigen_a = load_file(
             os.path.join(
-                self.path, f"eigen_activation_sharded/shard_{self.rank}.safetensors"
+                eigen_src, f"eigen_activation_sharded/shard_{self.rank}.safetensors"
             ),
             device=self.device,
         )
         self.eigen_g = load_file(
             os.path.join(
-                self.path, f"eigen_gradient_sharded/shard_{self.rank}.safetensors"
+                eigen_src, f"eigen_gradient_sharded/shard_{self.rank}.safetensors"
             ),
             device=self.device,
         )
@@ -166,7 +173,7 @@ class LambdaCollector(HookCollectorBase):
 
     def teardown(self) -> None:
         """Save eigenvalue corrections to disk."""
-        output_path = os.path.join(self.path, "eigenvalue_correction_sharded")
+        output_path = os.path.join(self.path, self.output_subdir)
         os.makedirs(output_path, exist_ok=True)
 
         save_file(
@@ -256,7 +263,7 @@ def compute_eigendecomposition(
     all_assignments = fair_distribute_by_cost(key_dimensions, world_size)
     keys_for_this_rank = all_assignments[rank]
 
-    covariance_eigenvectors = {}
+    covariance_eigenvectors: dict[str, Tensor] = {}
     covariance_eigenvalues: dict[str, Tensor] = {}
 
     for key in tqdm(
@@ -294,8 +301,11 @@ def compute_eigendecomposition(
         covariance_eigenvalues[key] = (
             eigenvalues.to(original_dtype).to(device="cpu").contiguous()
         )
+        covariance_eigenvalues[key] = (
+            eigenvalues.to(original_dtype).to(device="cpu").contiguous()
+        )
 
-    covariance_eigenvectors = _gather_and_shard_along_dim0(
+    covariance_eigenvectors = _gather_and_shard_along_dim_0(
         input_dict=covariance_eigenvectors,
         full_shape_per_key={k: (m, m) for k, m in key_dimensions.items()},
         dtype=original_dtype,  # type: ignore
@@ -303,7 +313,7 @@ def compute_eigendecomposition(
         world_size=world_size,
         device=device,
     )
-    covariance_eigenvalues = _gather_and_shard_along_dim0(
+    covariance_eigenvalues = _gather_and_shard_along_dim_0(
         input_dict=covariance_eigenvalues,
         full_shape_per_key={k: (m,) for k, m in key_dimensions.items()},
         dtype=original_dtype,  # type: ignore
@@ -332,20 +342,15 @@ def compute_eigendecomposition(
 
 def save_uncorrected_eigenvalues(
     partial_run_path: str | os.PathLike,
-    eva_a_local: dict[str, Tensor],
-    eva_g_local: dict[str, Tensor],
+    eigenvalues_a: dict[str, Tensor],
+    eigenvalues_g: dict[str, Tensor],
     total_processed: int | Tensor,
     rank: int,
     world_size: int,
 ) -> None:
-    """Write the outer product of the activation eigenvalues and the local
-    gradient eigenvalues into `eigenvalue_sharded`.
-
-    Both eigenvalue dicts are sharded along the eigenvector-index dim by
-    `_gather_and_shard_along_dim0`.
-
-    The output is scaled by `total_processed` to match the effective scaling
-    of `LambdaCollector`.
+    """Take sharded eigenvalues_a and eigenvalues_g. Computes the sharded
+    outer product by keeping eigenvalues_g in its sharded form and gathering
+    eigenvalues_a to all ranks.
     """
     out_dir = os.path.join(str(partial_run_path), "eigenvalue_sharded")
     os.makedirs(out_dir, exist_ok=True)
@@ -360,33 +365,35 @@ def save_uncorrected_eigenvalues(
     else:
         total_processed = total_processed.to(device)
 
-    payload: dict[str, Tensor] = {}
-    for key, eva_g_shard in eva_g_local.items():
-        eva_g_shard = eva_g_shard.to(device)
-        eva_a_shard = eva_a_local[key].to(device)
+    outer_product_sharded: dict[str, Tensor] = {}
+    for key, eigenvalue_g_shard in eigenvalues_g.items():
+        eigenvalue_g_shard = eigenvalue_g_shard.to(device)
+        eigenvalue_a_shard = eigenvalues_a[key].to(device)
 
         if world_size > 1:
-            eva_a_full = torch.empty(
-                eva_a_shard.shape[0] * world_size,
+            eigenvalue_a_full = torch.empty(
+                eigenvalue_a_shard.shape[0] * world_size,
                 device=device,
-                dtype=eva_a_shard.dtype,
+                dtype=eigenvalue_a_shard.dtype,
             )
-            dist.all_gather_into_tensor(eva_a_full, eva_a_shard.contiguous())
+            dist.all_gather_into_tensor(
+                eigenvalue_a_full, eigenvalue_a_shard.contiguous()
+            )
         else:
-            eva_a_full = eva_a_shard
+            eigenvalue_a_full = eigenvalue_a_shard
 
-        outer = torch.outer(eva_g_shard, eva_a_full) * total_processed
-        payload[key] = outer.to(device="cpu").contiguous()
+        outer = torch.outer(eigenvalue_g_shard, eigenvalue_a_full) * total_processed
+        outer_product_sharded[key] = outer.to(device="cpu").contiguous()
 
     save_file(
-        payload,
+        outer_product_sharded,
         os.path.join(out_dir, f"shard_{rank}.safetensors"),
     )
 
     get_logger().info(f"Saved uncorrected eigenvalues to {out_dir}")
 
 
-def _gather_and_shard_along_dim0(
+def _gather_and_shard_along_dim_0(
     input_dict: dict[str, Tensor],
     full_shape_per_key: dict[str, tuple[int, ...]],
     dtype: torch.dtype,

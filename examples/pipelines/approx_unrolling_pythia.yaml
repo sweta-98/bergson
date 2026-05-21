@@ -1,0 +1,51 @@
+# Smoke test for the SOURCE (approximate unrolling) pipeline.
+#
+# Precomputes KFAC factors at three checkpoints (full HF model IDs or local
+# paths). Each checkpoint's factors land at:
+#   runs/DELETE_approx_unrolling_pythia/ckpt_{0,1,2}/kfac/
+#
+# Run with:
+#   bergson pipeline examples/pipelines/approx_unrolling_pythia.yaml
+#
+# Resume the run after a crash with the same command (resume: true is set
+# below so existing per-checkpoint outputs are skipped).
+#
+# Only step 1 of the SOURCE pipeline is wired up today; later steps
+# (segment averaging, query walk, scoring) will be added incrementally.
+
+- approxunrolling:
+    index_cfg:
+      run_path: runs/DELETE_approx_unrolling_pythia
+      # index_cfg.model is overridden per checkpoint below; this is just the
+      # default loaded by setup_data_pipeline for the tokenizer and any
+      # other model-agnostic plumbing before the first checkpoint kicks in.
+      model: EleutherAI/pythia-14m
+      token_batch_size: 1024
+      data:
+        dataset: NeelNanda/pile-10k
+        split: train[:1000]
+        truncation: true
+    hessian_cfg:
+      method: kfac
+      hessian_dtype: fp32
+      ev_correction: true
+    approx_unrolling_cfg:
+      # Each entry is a full HF model ID or absolute local path. The full
+      # model is loaded fresh per checkpoint (revisions are not used).
+      # For a real SOURCE run, swap these for distinct training-snapshot
+      # paths (e.g. `/path/to/run/step_1000`, `/path/to/run/step_5000`, …).
+      # Using the same model three times here just exercises the loop's
+      # load/unload + per-checkpoint output layout.
+      checkpoints:
+        - EleutherAI/pythia-14m
+        - EleutherAI/pythia-14m
+        - EleutherAI/pythia-14m
+        - EleutherAI/pythia-14m
+        - EleutherAI/pythia-14m
+        - EleutherAI/pythia-14m
+      segments: 3
+      query:
+        dataset: NeelNanda/pile-10k
+        split: train[:8]
+        truncation: true
+    resume: true

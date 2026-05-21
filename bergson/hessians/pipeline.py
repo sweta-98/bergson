@@ -1,3 +1,5 @@
+import time
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
@@ -24,6 +26,18 @@ def _step_complete(path: str, resume: bool) -> bool:
         print(f"  Skipping (output exists at {path})")
         return True
     return False
+
+
+@contextmanager
+def _timed(label: str, durations: dict[str, float]):
+    """Time a pipeline step and print the wall-clock duration on exit."""
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start
+        durations[label] = elapsed
+        print(f"  [{label}] took {elapsed:.1f}s")
 
 
 def hessian_pipeline(
@@ -53,25 +67,29 @@ def hessian_pipeline(
             return
         validate_run_path(cfg)
 
+    durations: dict[str, float] = {}
+
     # ── Step 1: Build mean query gradient ─────────────────────────────────
     print("Step 1/4: Building mean query gradient...")
     if not _step_complete(query_path, resume):
-        query_cfg = deepcopy(index_cfg)
-        query_cfg.run_path = query_path
-        query_cfg.data = hessian_pipeline_cfg.query
-        query_cfg.projection_dim = 0
-        query_cfg.skip_hessians = True
-        _validate(query_cfg)
+        with _timed("step1_build_query", durations):
+            query_cfg = deepcopy(index_cfg)
+            query_cfg.run_path = query_path
+            query_cfg.data = hessian_pipeline_cfg.query
+            query_cfg.projection_dim = 0
+            query_cfg.skip_hessians = True
+            _validate(query_cfg)
 
-        query_preprocess_cfg = PreprocessConfig(aggregation="mean")
-        build(query_cfg, query_preprocess_cfg)
+            query_preprocess_cfg = PreprocessConfig(aggregation="mean")
+            build(query_cfg, query_preprocess_cfg)
 
     # ── Step 2: Fit Hessian factors on training data ──────────────────────
     print(f"Step 2/4: Fitting {method} factors on training data...")
     if not _step_complete(hessian_path, resume):
-        hessian_index_cfg = deepcopy(index_cfg)
-        hessian_index_cfg.run_path = hessian_path
-        _validate(hessian_index_cfg)
+        with _timed("step2_fit_hessian", durations):
+            hessian_index_cfg = deepcopy(index_cfg)
+            hessian_index_cfg.run_path = hessian_path
+            _validate(hessian_index_cfg)
 
         approximate_hessians(hessian_index_cfg, hessian_cfg)
 
@@ -102,8 +120,12 @@ def hessian_pipeline(
         score_index_cfg.run_path = scores_path
         score_index_cfg.skip_hessians = True
         score_cfg.query_path = transformed_query_path
+        score_cfg.higher_is_better = True
         _validate(score_index_cfg)
 
         score_dataset(score_index_cfg, score_cfg, preprocess_cfg)
 
     print(f"Done! Scores saved to: {scores_path}")
+    if durations:
+        total = sum(durations.values())
+        print(f"Step timings (s): {durations} | total {total:.1f}s")

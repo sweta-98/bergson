@@ -2,6 +2,8 @@ import io
 import os
 import socket
 from contextlib import nullcontext, redirect_stdout
+from copy import deepcopy
+from datetime import timedelta
 from typing import Any, Callable, Concatenate, Mapping, ParamSpec
 
 import torch
@@ -10,6 +12,53 @@ import torch.multiprocessing as mp
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
 
 from bergson.config import DistributedConfig
+from bergson.utils.utils import get_device, get_device_index
+
+
+def init_dist(rank: int, local_rank: int, world_size: int) -> None:
+    """Pin CUDA device and (if multi-rank) join the NCCL group set up by
+    ``launch_distributed_run`` via MASTER_ADDR/MASTER_PORT env vars."""
+    if torch.cuda.is_available():
+        torch.cuda.set_device(get_device_index(local_rank))
+    if world_size > 1:
+        addr = os.environ.get("MASTER_ADDR", "localhost")
+        port = os.environ.get("MASTER_PORT", "29500")
+        dist.init_process_group(
+            "nccl",
+            init_method=f"tcp://{addr}:{port}",
+            device_id=torch.device(get_device(local_rank)),
+            rank=rank,
+            timeout=timedelta(hours=1),
+            world_size=world_size,
+        )
+
+
+def cap_world_size_to_dataset(
+    cfg: DistributedConfig, dataset_size: int
+) -> DistributedConfig:
+    """Return a single node DistributedConfig for small datasets."""
+    if dataset_size >= cfg.world_size:
+        return cfg
+
+    capped_cfg = deepcopy(cfg)
+    capped_cfg.nnode = 1
+    capped_cfg.nproc_per_node = max(1, min(dataset_size, cfg.nproc_per_node))
+    return capped_cfg
+
+
+def parent_barrier(dist_config: DistributedConfig) -> None:
+    if dist_config.nnode <= 1:
+        return
+    master_addr = os.environ.get("MASTER_ADDR", "localhost")
+    master_port = str(int(os.environ.get("MASTER_PORT", "29500")) + 1)
+    dist.init_process_group(
+        "gloo",
+        init_method=f"tcp://{master_addr}:{master_port}",
+        rank=dist_config._node_rank,
+        world_size=dist_config.nnode,
+    )
+    dist.barrier()
+    dist.destroy_process_group()
 
 
 def grad_tree(
@@ -40,8 +89,8 @@ def grad_tree(
 
 def dist_worker(
     worker: Callable,
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     master_addr: str,
     master_port: str,
@@ -81,7 +130,10 @@ def launch_distributed_run(
     start_rank = dist_config.start_rank
 
     if world_size <= 1:
-        worker(0, 0, 1, *const_worker_args)
+        # Handle multi-node pipelines with single-process steps
+        # Other nodes proceed to next step's NCCL rendezvous
+        if dist_config._node_rank == 0:
+            worker(0, 0, 1, *const_worker_args)
     else:
         mp.set_sharing_strategy("file_system")
 

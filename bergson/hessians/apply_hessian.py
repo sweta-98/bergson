@@ -2,7 +2,6 @@ import gc
 import json
 import os
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -15,9 +14,10 @@ from torch import Tensor
 
 from bergson.collector.collector import create_projection_matrix
 from bergson.data import create_index, load_gradients
+from bergson.distributed import init_dist
 from bergson.hessians.sharded_computation import ShardedMul
 from bergson.utils.logger import get_logger
-from bergson.utils.utils import get_device, get_device_index
+from bergson.utils.utils import get_device
 
 
 @dataclass
@@ -36,10 +36,11 @@ class EkfacConfig:
 
 
 class EkfacApplicator:
-    def __init__(self, cfg: EkfacConfig):
+    def __init__(self, cfg: EkfacConfig, apply_fn=None):
         self.cfg = cfg
         self.path = cfg.hessian_method_path
         self.gradient_path = cfg.gradient_path
+        self.apply_fn = apply_fn
 
         self.logger = get_logger(
             "EkfacApplicator", level="DEBUG" if cfg.debug else "INFO"
@@ -118,13 +119,20 @@ class EkfacApplicator:
 
         self.logger.debug("Finished G' = Q_S^T @ G @ Q_A")
 
-        # Divide by damped eigenvalues in eigenbasis
+        # Apply eigenvalue function in eigenbasis (default = damped inverse).
         for k, v in lambda_factor.items():
-            self.sharded_computer._hadamard(
-                matrix_noi=transformed_gradients[k],
-                lambda_ci=v,
-                lambda_damp_factor=self.cfg.lambda_damp_factor,
-            )
+            if self.apply_fn is None:
+                self.sharded_computer._hadamard(
+                    matrix_noi=transformed_gradients[k],
+                    lambda_ci=v,
+                    lambda_damp_factor=self.cfg.lambda_damp_factor,
+                )
+            else:
+                self.sharded_computer._apply_eigfn(
+                    matrix_noi=transformed_gradients[k],
+                    lambda_ci=v,
+                    fn=self.apply_fn,
+                )
 
         self.logger.debug("Finished G' / lambda")
         del lambda_factor
@@ -171,27 +179,13 @@ class EkfacApplicator:
 
 
 def apply_worker(
-    rank: int,
-    local_rank: int,
+    rank: int,  # global
+    local_rank: int,  # local
     world_size: int,
     cfg: EkfacConfig,
 ):
     """Worker function for distributed IVHP computation."""
-    if torch.cuda.is_available():
-        torch.cuda.set_device(get_device_index(local_rank))
-
-    if world_size > 1:
-        addr = os.environ.get("MASTER_ADDR", "localhost")
-        port = os.environ.get("MASTER_PORT", "29500")
-
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://{addr}:{port}",
-            device_id=torch.device(get_device(local_rank)),
-            rank=rank,
-            timeout=timedelta(hours=1),
-            world_size=world_size,
-        )
+    init_dist(rank, local_rank, world_size)
 
     applicator = EkfacApplicator(cfg)
     applicator.compute_ivhp_sharded()
