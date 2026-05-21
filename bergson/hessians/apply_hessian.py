@@ -158,14 +158,14 @@ class EkfacApplicator:
         gc.collect()
 
         if p > 0:
-            pt = self.cfg.projection_type
+            projection_type = self.cfg.projection_type
             for k, v in transformed_gradients.items():
                 d_S, d_A = v.shape[-2:]
                 P_l = create_projection_matrix(
-                    f"{k}/left", p, d_S, v.dtype, v.device, pt
+                    f"{k}/left", p, d_S, v.dtype, v.device, projection_type
                 )
                 P_r = create_projection_matrix(
-                    f"{k}/right", p, d_A, v.dtype, v.device, pt
+                    f"{k}/right", p, d_A, v.dtype, v.device, projection_type
                 )
                 transformed_gradients[k] = torch.einsum("ps,nsa,ra->npr", P_l, v, P_r)
 
