@@ -331,15 +331,15 @@ class Trainer:
             if trace:
                 # Use differentiable all_reduce to preserve autograd graph
                 grads = {
-                    k: differentiable_all_reduce(
-                        g / dist.get_world_size(),
-                        "sum",
-                        dist.distributed_c10d._get_default_group(),
+                    k: wait_tensor(
+                        differentiable_all_reduce(
+                            g / dist.get_world_size(),
+                            "sum",
+                            dist.distributed_c10d._get_default_group(),
+                        )
                     )
                     for k, g in grads.items()
                 }
-                for g in grads.values():
-                    wait_tensor(g)
             else:
                 for g in grads.values():
                     dist.all_reduce(g, op=dist.ReduceOp.AVG)
