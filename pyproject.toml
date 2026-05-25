@@ -22,9 +22,9 @@ dependencies = [
     "pyarrow",
     "pyyaml",
     "simple-parsing",
-    "torch>=2.4,<2.10",
+    "torch>=2.5,<2.10",
     "torchopt",
-    "transformers",
+    "transformers>=5.0",
     "bitsandbytes",
     "traker",
     "huggingface-hub>=1.13.0",
@@ -73,7 +73,7 @@ faiss = [
 bergson = "bergson.__main__:main"
 
 [tool.uv.extra-build-dependencies]
-fast-jl = ["torch>=2.4,<2.10"]
+fast-jl = ["torch>=2.5,<2.10"]
 
 [tool.pyright]
 include = ["bergson*"]
