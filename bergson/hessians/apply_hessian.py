@@ -40,10 +40,6 @@ class EkfacConfig:
     projection_type: Literal["normal", "rademacher"] = "rademacher"
 
 
-# Map projection "side" (used by the gradient collector) to the K-FAC
-# covariance whose inverse-square-root we fold into the random projection.
-# - "left"  → applied to the output-gradient g, so it consumes S (gradient cov)
-# - "right" → applied to the input activation a, so it consumes A (activation cov)
 SIDE_TO_COV = {"left": "gradient", "right": "activation"}
 
 
@@ -88,10 +84,7 @@ def build_kfac_projections(
                 side_dims[side][name] = f.get_tensor(name).shape[-1]
 
     names = list(side_dims["left"].keys())
-    # fair_distribute_by_cost treats its values as matrix dimensions and
-    # ranks by d**3. Pass the per-layer max of the two sides — that bounds
-    # the dominant matmul cost (M = R · Q · diag(D) · Qᵀ, O(d**3) on the
-    # larger side).
+
     per_layer_dim = {n: max(side_dims["left"][n], side_dims["right"][n]) for n in names}
     my_names = fair_distribute_by_cost(per_layer_dim, world_size)[rank]
 
@@ -123,14 +116,9 @@ def build_kfac_projections(
                 world_size=world_size,
             ).to(device=device, dtype=torch.float32)
 
-            # Per-side adaptive damping, mirroring ShardedMul._sharded_hadamard
-            # but applied to each factor independently.
             damp = lambda_damp_factor * E.mean()
             D = (E + damp).clamp_min(torch.finfo(torch.float32).tiny).rsqrt()  # [d]
 
-            # Same identifier convention as HookCollectorBase.projection() so
-            # the precompute matches the projection the collector would have
-            # sampled for this layer/side.
             R = create_projection_matrix(
                 f"{name}/{side}",
                 projection_dim,
@@ -140,9 +128,6 @@ def build_kfac_projections(
                 projection_type,
             )
 
-            # M = R · Q · diag(D) · Qᵀ           [p, d]
-            # Q has eigenvectors as columns, so Q·diag(D) scales column k by D[k];
-            # that is element-wise (Q * D) broadcasting D across rows.
             M = R @ (Q * D) @ Q.T
             saved[side][name] = M.to(dtype=dtype).cpu().contiguous()
 

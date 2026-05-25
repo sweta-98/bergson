@@ -70,9 +70,6 @@ def hessian_pipeline(
     resume = hessian_pipeline_cfg.resume
 
     if index_cfg.projection_dim > 0 and hessian_cfg.ev_correction:
-        # Eigenvalue correction acts on the joint S⊗A spectrum and cannot be
-        # folded into a per-side inverse-square-root, so it is incompatible
-        # with the compressed M = R · cov^{-1/2} path. Fail before any work.
         raise ValueError(
             "Compression (projection_dim > 0) is incompatible with "
             "HessianConfig.ev_correction=True. Use a Kronecker-factored "
@@ -123,10 +120,6 @@ def hessian_pipeline(
     )
 
     if index_cfg.projection_dim > 0:
-        # ── Step 3.5 (compression): Compute R · cov^{-1/2} ────────────────
-        # Build M = R · cov^{-1/2} per (layer, side) and save to disk; then
-        # project the query gradient with the same M. The score step's
-        # gradient collector loads M so train and query share one sketch.
         print("Step 3.5/4: Computing R · cov^{-1/2} (precondition+sketch)...")
         if not _step_complete(projections_path, resume):
             with _timed("step3.5_build_projections", durations):
@@ -162,10 +155,6 @@ def hessian_pipeline(
         score_index_cfg = deepcopy(index_cfg)
         score_index_cfg.run_path = scores_path
         score_index_cfg.skip_hessians = True
-        # When compression is on, step 3.5 has saved M = R · cov^{-1/2}
-        # under the hessian directory. Point the training-side gradient
-        # collector at it so it projects with M (not a fresh random R) —
-        # query and training gradients then share the same sketch.
         if index_cfg.projection_dim > 0:
             score_index_cfg.kfac_projection_path = hessian_method_path
         score_cfg.query_path = transformed_query_path
