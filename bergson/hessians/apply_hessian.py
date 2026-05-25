@@ -124,6 +124,12 @@ def build_kfac_projections(
                 device,
                 projection_type,
             )
+            # create_projection_matrix returns unit-norm rows, so E[RᵀR] =
+            # (p/d)·I. An unbiased sketch needs E[RᵀR] = I, so rescale by
+            # √(d/p); otherwise each side carries a p/d factor and the score
+            # picks up a per-layer p²/(d_left·d_right) reweighting that
+            # corrupts ranking relative to the exact (projection_dim=0) path.
+            R = R * (d / projection_dim) ** 0.5
 
             M = R @ (Q * D) @ Q.T
             saved[side][name] = M.to(dtype=dtype).cpu().contiguous()
