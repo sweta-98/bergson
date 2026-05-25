@@ -69,9 +69,6 @@ def build_kfac_projections(
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
 
-    # Discover layer names and per-side dimensions from one shard of each
-    # eigenvector file. The eigendecomp stores Q with shape [d/W, d] per
-    # shard, so the column dim is the full layer dimension.
     side_dims: dict[str, dict[str, int]] = {"left": {}, "right": {}}
     for side, cov in SIDE_TO_COV.items():
         with safe_open(
