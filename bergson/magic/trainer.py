@@ -6,7 +6,7 @@ from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from shutil import rmtree
-from typing import cast
+from typing import Any, cast
 
 import psutil
 import torch
@@ -280,12 +280,29 @@ class Trainer:
     def step(
         self,
         state: TrainerState,
-        inputs: dict,
+        inputs: dict[str, Any],
         *,
         inplace: bool = False,
         trace: bool = False,
         fsdp: bool = False,
     ) -> TrainerState:
+        """Perform a single training step on `state`, returning the new state.
+
+        Args:
+            state: The current trainer state, containing model parameters, optimizer
+                state, and RNG states.
+            inputs: A batch of training data to use for this step. It will be unpacked
+                as keyword arguments to the model's forward method.
+            inplace: Whether to perform in-place updates during this step. In-place
+                updates can reduce memory usage but can cause problems with autograd.
+            trace: Whether to trace this step with autograd to allow for a backward
+                pass later. Tracing can add overhead, so it should only be enabled if
+                backward passes will be needed.
+            fsdp: Whether the model is wrapped with FSDP. If False and distributed
+                training is being used, the trainer will perform its own all-reduce of
+                gradients. If True, the trainer will assume that FSDP is handling
+                gradient synchronization, and will not perform any all-reduces itself.
+        """
         torch.random.set_rng_state(state.cpu_rng_state)
 
         # Trainable params live on the meta device and are swapped in from state.
@@ -314,15 +331,15 @@ class Trainer:
             if trace:
                 # Use differentiable all_reduce to preserve autograd graph
                 grads = {
-                    k: differentiable_all_reduce(
-                        g / dist.get_world_size(),
-                        "sum",
-                        dist.distributed_c10d._get_default_group(),
+                    k: wait_tensor(
+                        differentiable_all_reduce(
+                            g / dist.get_world_size(),
+                            "sum",
+                            dist.distributed_c10d._get_default_group(),
+                        )
                     )
                     for k, g in grads.items()
                 }
-                for g in grads.values():
-                    wait_tensor(g)
             else:
                 for g in grads.values():
                     dist.all_reduce(g, op=dist.ReduceOp.AVG)
@@ -339,7 +356,12 @@ class Trainer:
         )
         return state
 
-    def resume(self, state: TrainerState, save_dir: str):
+    def resume(self, state: TrainerState, save_dir: str) -> TrainerState:
+        """Resume training from the most recent checkpoint in `save_dir`.
+
+        This method modifies `state` in-place to load the most recent checkpoint, and
+        returns it for convenience.
+        """
         ckpt_list = sorted_checkpoints(save_dir)
 
         # Filter out incomplete checkpoints (missing .metadata) and clean them up
@@ -352,10 +374,11 @@ class Trainer:
                 rmtree(path) if os.path.isdir(path) else os.remove(path)
 
         # Load the most recent trainer state
-        last_idx, last_path = valid_ckpts[-1]
-        state.batch_index = last_idx
-        state.load(last_path)
-        state.detach_()
+        if valid_ckpts:
+            last_idx, last_path = valid_ckpts[-1]
+            state.batch_index = last_idx
+            state.load(last_path)
+            state.detach_()
 
         return state
 
@@ -373,6 +396,30 @@ class Trainer:
         resume: bool = False,
         fsdp: bool = False,
     ) -> TrainerState:
+        """Train the model on the given data stream, starting from the given state.
+
+        Args:
+            state: The initial trainer state to start training from.
+            data: The training data stream to iterate over.
+            debug: Whether to print debug information about checkpoint loading times.
+            inplace: Whether to perform in-place updates during training. In-place
+                updates can reduce memory usage but may cause issues with some
+                optimizers or models.
+            save_dir: The directory in which to save checkpoints during training.
+            save_mode: The strategy for how often to save checkpoints.
+            trace: Whether to trace the training step with autograd to allow for
+                backward passes. Tracing can add overhead, so it should only be enabled
+                if backward passes will be needed.
+            log_fn: An optional function to call after each training step with the step
+                index and the most recent loss value, for logging purposes.
+            resume: Whether to resume from a previously interrupted training run by
+                loading the most recent checkpoint from `save_dir`.
+            fsdp: Flag to pass to `Trainer.step`, indicating whether the model is
+                wrapped with FSDP.
+
+        Returns:
+            The final trainer state after training.
+        """
         # Make sure the save directory exists
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
@@ -497,10 +544,42 @@ class Trainer:
         save_every: int = 0,
         save_mode: MagicSaveMode = "sqrt",
     ) -> BackwardState:
-        ckpt_list = cast(
-            list[tuple[int, str | TrainerState]],
-            sorted_checkpoints(ckpt_dir),
-        )
+        """Run a backward pass through the training trajectory saved at `ckpt_dir`.
+
+        Args:
+            ckpt_dir: Directory containing checkpoints saved during the forward pass.
+            data: The training data stream, needed to replay forward steps.
+            bwd_state: The initial backward state, containing gradients for the query
+                loss function.
+            fwd_state: Forward state containing the model parameters and optimizer
+                state from the end of the forward trajectory.
+            cleanup: Whether to delete checkpoints in `ckpt_dir` as soon as they are
+                no longer needed. If False, only the temporary checkpoints created
+                during the backward pass will be deleted, and all original checkpoints
+                will be preserved.
+            debug: Whether to print debug information about checkpoint loading times.
+            inplace: Whether to perform in-place updates during forward and backward
+                steps. In-place updates can reduce memory usage but may cause issues
+                with some optimizers or models.
+            fsdp: The `fsdp` flag that will be passed to the trainer's `step` method.
+            resume: Whether to resume from a previously interrupted backward pass by
+                loading the backward state and skipping checkpoints that have already
+                been processed.
+            save_every: If > 0, save the backward state every N steps to allow resuming
+                from interruptions. Backward checkpoints are saved in `ckpt_dir` with
+                the name `backward_rank{rank}.pt`.
+            save_mode: The save mode that was used during the forward trajectory, which
+                determines how checkpoints are spaced and thus how the backward pass
+                should step forward through the trajectory when replaying.
+
+        Returns:
+            The final backward state after processing the entire trajectory.
+        """
+        ckpts = sorted_checkpoints(ckpt_dir)
+        ckpt_paths = [path for _, path in ckpts]
+        preserve_paths = {ckpt_paths[-1]} if cleanup else set(ckpt_paths)
+
+        ckpt_list = cast(list[tuple[int, str | TrainerState]], ckpts)
         state_size = fwd_state.size_in_bytes()
 
         main = not dist.is_initialized() or dist.get_rank() == 0
@@ -552,7 +631,7 @@ class Trainer:
                 del ckpt_list[-1]
 
                 # Only delete on the main rank
-                if cleanup and isinstance(ckpt, str) and main and idx != last_idx:
+                if isinstance(ckpt, str) and main and ckpt not in preserve_paths:
                     rmtree(ckpt) if os.path.isdir(ckpt) else os.remove(ckpt)
 
             # Step forward in training if needed
