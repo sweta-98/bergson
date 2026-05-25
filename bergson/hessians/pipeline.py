@@ -14,7 +14,11 @@ from ..config import (
 from ..distributed import launch_distributed_run
 from ..score.score import score_dataset
 from ..utils.worker_utils import validate_run_path
-from .apply_hessian import EkfacConfig, apply_worker
+from .apply_hessian import (
+    EkfacConfig,
+    apply_worker,
+    build_projections_worker,
+)
 from .hessian_approximations import approximate_hessians
 
 
@@ -51,7 +55,10 @@ def hessian_pipeline(
 
     1. Build mean query gradient.
     2. Fit Hessian factors (kfac, tkfac, shampoo) on the training dataset.
-    3. Apply the inverse Hessian to the mean query gradient.
+    3.   (legacy)      Apply the inverse Hessian to the mean query gradient.
+       OR
+       3.5 (compression) Compute R · cov^{-1/2} (precondition+sketch) and
+                         project the query gradient with the resulting M.
     4. Score each training example against the transformed query gradient.
     """
     run_path = index_cfg.run_path
@@ -61,6 +68,16 @@ def hessian_pipeline(
     transformed_query_path = f"{run_path}/{method}_query"
     scores_path = f"{run_path}/scores"
     resume = hessian_pipeline_cfg.resume
+
+    if index_cfg.projection_dim > 0 and hessian_cfg.ev_correction:
+        # Eigenvalue correction acts on the joint S⊗A spectrum and cannot be
+        # folded into a per-side inverse-square-root, so it is incompatible
+        # with the compressed M = R · cov^{-1/2} path. Fail before any work.
+        raise ValueError(
+            "Compression (projection_dim > 0) is incompatible with "
+            "HessianConfig.ev_correction=True. Use a Kronecker-factored "
+            "method (kfac, tkfac, shampoo) without ev_correction."
+        )
 
     def _validate(cfg: IndexConfig):
         if resume and cfg.partial_run_path.exists():
@@ -93,25 +110,51 @@ def hessian_pipeline(
 
         approximate_hessians(hessian_index_cfg, hessian_cfg)
 
-    # ── Step 3: Apply inverse Hessian to the mean query gradient ──────────
-    print(f"Step 3/4: Applying {method} inverse Hessian to mean query gradient...")
-    if not _step_complete(transformed_query_path, resume):
-        hessian_method_path = f"{hessian_path}/{method}"
-        ekfac_cfg = EkfacConfig(
-            hessian_method_path=hessian_method_path,
-            gradient_path=query_path,
-            run_path=transformed_query_path,
-            ev_correction=hessian_cfg.ev_correction,
-            lambda_damp_factor=hessian_pipeline_cfg.lambda_damp_factor,
-            projection_dim=index_cfg.projection_dim,
-            projection_type=index_cfg.projection_type,
+    hessian_method_path = f"{hessian_path}/{method}"
+    projections_path = f"{hessian_method_path}/projection_left_sharded"
+    ekfac_cfg = EkfacConfig(
+        hessian_method_path=hessian_method_path,
+        gradient_path=query_path,
+        run_path=transformed_query_path,
+        ev_correction=hessian_cfg.ev_correction,
+        lambda_damp_factor=hessian_pipeline_cfg.lambda_damp_factor,
+        projection_dim=index_cfg.projection_dim,
+        projection_type=index_cfg.projection_type,
+    )
+
+    if index_cfg.projection_dim > 0:
+        # ── Step 3.5 (compression): Compute R · cov^{-1/2} ────────────────
+        # Build M = R · cov^{-1/2} per (layer, side) and save to disk; then
+        # project the query gradient with the same M. The score step's
+        # gradient collector loads M so train and query share one sketch.
+        print("Step 3.5/4: Computing R · cov^{-1/2} (precondition+sketch)...")
+        if not _step_complete(projections_path, resume):
+            with _timed("step3.5_build_projections", durations):
+                launch_distributed_run(
+                    "build_projections",
+                    build_projections_worker,
+                    [ekfac_cfg],
+                    index_cfg.distributed,
+                )
+        if not _step_complete(transformed_query_path, resume):
+            launch_distributed_run(
+                "apply_hessian",
+                apply_worker,
+                [ekfac_cfg],
+                index_cfg.distributed,
+            )
+    else:
+        # ── Step 3 (legacy): Apply inverse Hessian via rotate-divide-rotate
+        print(
+            f"Step 3/4: Applying {method} inverse Hessian to mean query " "gradient..."
         )
-        launch_distributed_run(
-            "apply_hessian",
-            apply_worker,
-            [ekfac_cfg],
-            index_cfg.distributed,
-        )
+        if not _step_complete(transformed_query_path, resume):
+            launch_distributed_run(
+                "apply_hessian",
+                apply_worker,
+                [ekfac_cfg],
+                index_cfg.distributed,
+            )
 
     # ── Step 4: Score training examples ───────────────────────────────────
     print("Step 4/4: Scoring training data against transformed query...")
@@ -119,6 +162,12 @@ def hessian_pipeline(
         score_index_cfg = deepcopy(index_cfg)
         score_index_cfg.run_path = scores_path
         score_index_cfg.skip_hessians = True
+        # When compression is on, step 3.5 has saved M = R · cov^{-1/2}
+        # under the hessian directory. Point the training-side gradient
+        # collector at it so it projects with M (not a fresh random R) —
+        # query and training gradients then share the same sketch.
+        if index_cfg.projection_dim > 0:
+            score_index_cfg.kfac_projection_path = hessian_method_path
         score_cfg.query_path = transformed_query_path
         score_cfg.higher_is_better = True
         _validate(score_index_cfg)

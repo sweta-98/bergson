@@ -397,6 +397,14 @@ class IndexConfig(AttributionConfig, Serializable):
     processor_path: str = ""
     """Path to a precomputed processor."""
 
+    kfac_projection_path: str = ""
+    """Path to a K-FAC hessian directory containing precomputed modified
+    projection matrices (``projection_left_sharded/``,
+    ``projection_right_sharded/``). When set, the gradient collector loads
+    these instead of sampling fresh random projections — the saved matrices
+    are ``M = R · cov^{-1/2}``, so applying them to gradients yields
+    preconditioned-and-sketched gradients in a single matmul (P-SIFT)."""
+
     optimizer_state: str = ""
     """Source for optimizer second moments used to normalize gradients.
     Either a local path (a checkpoint directory containing ``optimizer.pt``,

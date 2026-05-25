@@ -326,16 +326,23 @@ def compute_eigendecomposition(
     dirname = os.path.dirname(covariance_path)
     basename = os.path.basename(covariance_path)
     output_path = os.path.join(dirname, "eigen_" + basename)
+    eigvals_path = os.path.join(dirname, "eigval_" + basename)
 
     os.makedirs(output_path, exist_ok=True)
+    os.makedirs(eigvals_path, exist_ok=True)
     save_file(
         covariance_eigenvectors,
         os.path.join(output_path, f"shard_{rank}.safetensors"),
+    )
+    save_file(
+        covariance_eigenvalues,
+        os.path.join(eigvals_path, f"shard_{rank}.safetensors"),
     )
 
     gc.collect()
 
     get_logger().info(f"Saved eigenvectors to {output_path}")
+    get_logger().info(f"Saved eigenvalues to {eigvals_path}")
 
     return covariance_eigenvalues
 

@@ -72,6 +72,22 @@ class GradientCollector(HookCollectorBase):
         self.lo = torch.finfo(self.save_dtype).min
         self.hi = torch.finfo(self.save_dtype).max
 
+        # When a K-FAC compressed-projection path is provided, pre-populate
+        # the per-layer projection cache with ``M = R · cov^{-1/2}``. The
+        # backward hook's ``self.projection(...)`` call then hits the cache
+        # and uses M in place of a freshly sampled random matrix — so the
+        # gradient comes out preconditioned and sketched in one step.
+        if self.cfg.kfac_projection_path:
+            from bergson.hessians.apply_hessian import load_kfac_projections
+
+            load_kfac_projections(
+                self.cfg.kfac_projection_path,
+                self.processor._projection_matrices,
+                self.target_info.keys(),
+                device=self.model.device,
+                dtype=self.save_dtype,
+            )
+
         self.per_doc_losses = torch.full(
             (len(self.data),),
             device=self.model.device,
