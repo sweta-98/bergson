@@ -601,8 +601,12 @@ def run_magic(run_cfg: TrainingConfig, *, score_path: str = ""):
     train_ds, train_n = setup_data_pipeline(run_cfg)
     train_ds = attach_doc_ids_if_missing(train_ds)
 
-    # Shuffle the train_ds with the seed.
-    train_ds = train_ds.shuffle(seed=run_cfg.seed)
+    # Shuffle the train_ds with the shuffle seed, defaulting to seed for
+    # backward compatibility with existing MAGIC configs.
+    shuffle_seed = (
+        run_cfg.seed if run_cfg.shuffle_seed is None else run_cfg.shuffle_seed
+    )
+    train_ds = train_ds.shuffle(seed=shuffle_seed)
 
     if isinstance(run_cfg, ValidationConfig):
         query_ds, query_n = setup_data_pipeline(run_cfg, run_cfg.query)

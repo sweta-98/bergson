@@ -296,7 +296,11 @@ class TrainingConfig(AttributionConfig, Serializable):
     """Number of full passes over the training data."""
 
     seed: int = 42
-    """Random seed for dataset shuffling."""
+    """Random seed for training and validation randomness."""
+
+    shuffle_seed: int | None = None
+    """Random seed for shuffling the training dataset.
+    """
 
     adam_beta1: float = 0.95
     """Beta1 for AdamW optimizer."""
