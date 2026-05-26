@@ -22,9 +22,17 @@ dependencies = [
     "pyarrow",
     "pyyaml",
     "simple-parsing",
-    "torch>=2.4,<2.10",
+    "torch>=2.5,<2.10",
+    # torchvision/torchaudio aren't used by bergson directly, but transformers'
+    # image_utils does an unconditional `from torchvision.io import ...` at
+    # import time when torchvision is present. RunPod (and most CUDA base
+    # images) ship a torchvision built against torch 2.4; once we bump torch
+    # to >=2.5, the stale torchvision crashes at import. Pin both to a range
+    # compatible with the torch bound above.
+    "torchvision>=0.20,<0.25",
+    "torchaudio>=2.5,<2.10",
     "torchopt",
-    "transformers",
+    "transformers>=5.0",
     "bitsandbytes",
     "traker",
     "huggingface-hub>=1.13.0",
@@ -73,7 +81,7 @@ faiss = [
 bergson = "bergson.__main__:main"
 
 [tool.uv.extra-build-dependencies]
-fast-jl = ["torch>=2.4,<2.10"]
+fast-jl = ["torch>=2.5,<2.10"]
 
 [tool.pyright]
 include = ["bergson*"]

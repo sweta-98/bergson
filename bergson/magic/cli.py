@@ -93,15 +93,15 @@ def compute_query_gradients(
     if dist.is_initialized():
         if not fsdp:
             grad_accum = {
-                k: differentiable_all_reduce(
-                    g,
-                    "sum",
-                    dist.distributed_c10d._get_default_group(),
+                k: wait_tensor(
+                    differentiable_all_reduce(
+                        g,
+                        "sum",
+                        dist.distributed_c10d._get_default_group(),
+                    )
                 )
                 for k, g in grad_accum.items()
             }
-            for g in grad_accum.values():
-                wait_tensor(g)
 
         # Loss is never a DTensor
         dist.all_reduce(loss_accum)
