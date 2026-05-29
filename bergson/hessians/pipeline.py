@@ -120,6 +120,7 @@ def hessian_pipeline(
     )
 
     if index_cfg.projection_dim > 0:
+        # ── Step 3.5 (compression): build M = R · cov^{-1/2} before applying ──
         print("Step 3.5/4: Computing R · cov^{-1/2} (precondition+sketch)...")
         if not _step_complete(projections_path, resume):
             with _timed("step3.5_build_projections", durations):
@@ -129,25 +130,19 @@ def hessian_pipeline(
                     [ekfac_cfg],
                     index_cfg.distributed,
                 )
-        if not _step_complete(transformed_query_path, resume):
-            launch_distributed_run(
-                "apply_hessian",
-                apply_worker,
-                [ekfac_cfg],
-                index_cfg.distributed,
-            )
     else:
-        # ── Step 3 (legacy): Apply inverse Hessian via rotate-divide-rotate
+        # ── Step 3 (legacy): Apply inverse Hessian via rotate-divide-rotate ──
         print(
             f"Step 3/4: Applying {method} inverse Hessian to mean query " "gradient..."
         )
-        if not _step_complete(transformed_query_path, resume):
-            launch_distributed_run(
-                "apply_hessian",
-                apply_worker,
-                [ekfac_cfg],
-                index_cfg.distributed,
-            )
+
+    if not _step_complete(transformed_query_path, resume):
+        launch_distributed_run(
+            "apply_hessian",
+            apply_worker,
+            [ekfac_cfg],
+            index_cfg.distributed,
+        )
 
     # ── Step 4: Score training examples ───────────────────────────────────
     print("Step 4/4: Scoring training data against transformed query...")
