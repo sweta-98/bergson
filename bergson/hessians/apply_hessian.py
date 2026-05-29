@@ -66,6 +66,12 @@ def build_kfac_projections(
     Layers are distributed across ranks via the same fair-by-cost scheme as
     the eigendecomposition; each rank writes its own shard.
     """
+    if projection_dim <= 0:
+        raise ValueError(
+            f"build_kfac_projections requires projection_dim > 0 (compression); "
+            f"got {projection_dim}."
+        )
+
     rank = dist.get_rank() if dist.is_initialized() else 0
     world_size = dist.get_world_size() if dist.is_initialized() else 1
 
@@ -201,7 +207,7 @@ class EkfacApplicator:
                     "with `ev_correction=True`: eigenvalue correction acts on "
                     "the joint S⊗A spectrum and cannot be folded into a per-side "
                     "inverse-square-root. Use a Kronecker-factored method "
-                    "(kfac, shampoo) without ev_correction."
+                    "(kfac, tkfac, shampoo) without ev_correction."
                 )
             return self._apply_compressed()
         return self._apply_legacy()
