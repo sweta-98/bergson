@@ -13,6 +13,7 @@ from torch import Tensor
 from bergson.builder import Builder
 from bergson.collector.collector import HookCollectorBase
 from bergson.config import IndexConfig, PreprocessConfig
+from bergson.hessians.apply_hessian import load_kfac_projections
 from bergson.process_autocorrelation import process_autocorrelation_matrices
 from bergson.score.scorer import Scorer
 from bergson.utils.projection import make_global_projector
@@ -73,8 +74,6 @@ class GradientCollector(HookCollectorBase):
         self.hi = torch.finfo(self.save_dtype).max
 
         if self.cfg.kfac_projection_path:
-            from bergson.hessians.apply_hessian import load_kfac_projections
-
             load_kfac_projections(
                 self.cfg.kfac_projection_path,
                 self.processor._projection_matrices,
