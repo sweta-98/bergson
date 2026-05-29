@@ -301,9 +301,6 @@ def compute_eigendecomposition(
         covariance_eigenvalues[key] = (
             eigenvalues.to(original_dtype).to(device="cpu").contiguous()
         )
-        covariance_eigenvalues[key] = (
-            eigenvalues.to(original_dtype).to(device="cpu").contiguous()
-        )
 
     covariance_eigenvectors = _gather_and_shard_along_dim_0(
         input_dict=covariance_eigenvectors,
