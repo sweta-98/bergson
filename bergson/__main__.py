@@ -1,6 +1,6 @@
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Union, get_args
 
 from simple_parsing import ArgumentParser, ConflictResolution, Serializable
@@ -68,7 +68,7 @@ class Build(Serializable):
 
     preprocess_cfg: PreprocessConfig
 
-    build_cfg: BuildConfig
+    build_cfg: BuildConfig = field(default_factory=BuildConfig)
 
     def execute(self):
         """Build the gradient index."""

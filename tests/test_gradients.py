@@ -165,7 +165,6 @@ def test_gradient_collector_proj_norm():
         cfg = IndexConfig(
             run_path=str(temp_dir / "run"),
             skip_index=True,
-            skip_hessians=p is None,
         )
         processor = GradientProcessor(projection_dim=p)
         collector = GradientCollector(
@@ -173,6 +172,7 @@ def test_gradient_collector_proj_norm():
             cfg=cfg,
             data=data,
             processor=processor,
+            skip_hessians=p is None,
         )
         with collector:
             model.zero_grad()

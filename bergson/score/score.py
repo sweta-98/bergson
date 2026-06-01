@@ -269,7 +269,7 @@ def score_worker(
         )
 
     model, target_modules = setup_model_and_peft(index_cfg)
-    processor = create_processor(model, index_cfg, True, target_modules)
+    processor = create_processor(model, index_cfg, target_modules)
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -282,6 +282,7 @@ def score_worker(
         "cfg": index_cfg,
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
+        "skip_hessians": True,
     }
 
     score_dtype = (

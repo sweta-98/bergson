@@ -33,6 +33,9 @@ class GradientCollectorWithDistributedAutocorrelationMatrices(HookCollectorBase)
     cfg: IndexConfig
     """Configuration for gradient index."""
 
+    skip_hessians: bool = False
+    """This collector always estimates autocorrelation hessians."""
+
     mod_grads: dict = field(default_factory=dict)
     """Temporary storage for gradients during a batch, keyed by module name."""
 
@@ -40,7 +43,7 @@ class GradientCollectorWithDistributedAutocorrelationMatrices(HookCollectorBase)
         """
         Initialize collector state.
         """
-        assert not self.cfg.skip_hessians
+        assert not self.skip_hessians
 
         assert isinstance(
             self.model.device, torch.device

@@ -40,7 +40,8 @@ class InMemoryCollector(HookCollectorBase):
     cfg: IndexConfig
     """Configuration for gradient collection."""
 
-    skip_hessians: bool
+    skip_hessians: bool = True
+    """Whether to skip estimating autocorrelation hessian statistics."""
 
     mod_grads: dict = dc_field(default_factory=dict)
     """Temporary per-batch gradients keyed by module name."""

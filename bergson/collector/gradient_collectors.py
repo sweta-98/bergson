@@ -33,7 +33,8 @@ class GradientCollector(HookCollectorBase):
     cfg: IndexConfig
     """Configuration for gradient index."""
 
-    skip_hessians: bool
+    skip_hessians: bool = True
+    """Whether to skip estimating autocorrelation hessian statistics."""
 
     mod_grads: dict = field(default_factory=dict)
     """Temporary storage for gradients during a batch, keyed by module name."""

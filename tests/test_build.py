@@ -33,6 +33,8 @@ def test_build_e2e(tmp_path: Path):
             "1024",
             "--precision",
             "bf16",
+            "--skip_hessians",
+            "False",
         ],
         cwd=tmp_path,
         capture_output=True,  # Add this
@@ -56,7 +58,6 @@ def test_build_consistency(tmp_path: Path, model, dataset):
 
     cfg = IndexConfig(
         run_path=str(tmp_path),
-        skip_hessians=True,
         token_batch_size=1024,
         loss_reduction="mean",
     )
@@ -128,9 +129,6 @@ def test_conv1d_build(tmp_path: Path, dataset):
 
     cfg = IndexConfig(
         run_path=str(tmp_path),
-        # This build hangs in pytest with hessians enabled.
-        # It works when run directly so it may be a pytest issue.
-        skip_hessians=True,
         # GPT-2 model_max_length is 1024
         token_batch_size=1024,
     )

@@ -182,7 +182,6 @@ def approx_unrolling_pipeline(
         query_cfg.data = approx_unrolling_cfg.query
         query_cfg.run_path = str(query_path)
         query_cfg.projection_dim = 0
-        query_cfg.skip_hessians = True
         build(query_cfg, PreprocessConfig(aggregation="mean"))
 
     # ── Step 6: Phase 1 -- walk query backwards to get segment queries

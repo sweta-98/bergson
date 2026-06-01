@@ -134,7 +134,6 @@ def test_global_projector_e2e(tmp_path: Path, model, dataset):
     proj_dim = 512
     cfg = IndexConfig(
         run_path=str(tmp_path),
-        skip_hessians=True,
         token_batch_size=64,
         projection_dim=proj_dim,
         projection_target="global",
@@ -186,7 +185,7 @@ def test_global_project_values_cpu(tmp_path: Path, model, dataset):
     """
     proj_dim = 16
     tokens = torch.tensor([dataset[0]["input_ids"]])
-    cfg = IndexConfig(run_path=str(tmp_path), skip_index=True, skip_hessians=True)
+    cfg = IndexConfig(run_path=str(tmp_path), skip_index=True)
 
     # First pass: capture raw per-module gradients (no projection)
     raw_collector = GradientCollector(
@@ -251,7 +250,6 @@ def test_global_projector_e2e_cpu(tmp_path: Path, model, dataset):
     capturer = _Capturer()
     cfg = IndexConfig(
         run_path=str(tmp_path),
-        skip_hessians=True,
         token_batch_size=64,
         projection_dim=proj_dim,
         projection_target="global",

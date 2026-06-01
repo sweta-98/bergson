@@ -74,6 +74,7 @@ def maybe_auto_batch_size(
     processor: GradientProcessor,
     target_modules: set[str] | None,
     rank: int = 0,
+    skip_hessians: bool = True,
 ) -> None:
     """Run auto batch size determination if enabled.
 
@@ -109,6 +110,7 @@ def maybe_auto_batch_size(
                 model=model.base_model,
                 cfg=probe_cfg,
                 processor=processor,
+                skip_hessians=skip_hessians,
                 target_modules=target_modules,
                 data=ds,  # type: ignore
             ),

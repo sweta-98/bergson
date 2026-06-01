@@ -81,9 +81,12 @@ def build_worker(
         )
 
     model, target_modules = setup_model_and_peft(index_cfg)
-    processor = create_processor(model, index_cfg, hessian_cfg is None, target_modules)
+    skip_hessians = hessian_cfg is None
+    processor = create_processor(model, index_cfg, target_modules)
 
-    maybe_auto_batch_size(index_cfg, model, ds, processor, target_modules, rank)
+    maybe_auto_batch_size(
+        index_cfg, model, ds, processor, target_modules, rank, skip_hessians
+    )
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -97,6 +100,7 @@ def build_worker(
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
         "preprocess_cfg": preprocess_cfg,
+        "skip_hessians": skip_hessians,
     }
 
     if isinstance(ds, Dataset):
