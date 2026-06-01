@@ -280,16 +280,16 @@ class HookCollectorBase(ContextDecorator, ABC):
         name: str,
         m: int,
         n: int,
-        side: Literal["left", "right"],
+        role: Literal["left", "right", "single"],
         device: torch.device,
         dtype: torch.dtype,
     ) -> Tensor:
-        """Return the `side` projection matrix for parameter `name` of shape [m, n]."""
-        key = (name, side, device)
+        """Return the `role` projection matrix for parameter `name` of shape [m, n]."""
+        key = (name, role, device)
         if key in self.processor._projection_matrices:
             return self.processor._projection_matrices[key]
 
-        identifier = f"{name}/{side}"
+        identifier = f"{name}/{role}"
 
         A = create_projection_matrix(
             identifier, m, n, dtype, device, self.processor.projection_type
@@ -437,12 +437,13 @@ class HookCollectorBase(ContextDecorator, ABC):
         return g_projection @ P @ a_projection
 
     def _compute_gradient(self, module: nn.Module, g: Float[Tensor, "N S O"]) -> Tensor:
-        """Compute the per-sample (or per-token) gradient from cached activations
+        """Compute the per-sample (or per-token) module gradient from cached activations
         and the output gradient.
 
-        Handles normalizer preprocessing, bias appending, random projection,
-        and ``attribute_tokens`` per-position paths.  Returns the flattened,
-        clamped gradient tensor ``P``.
+        Handles normalizer preprocessing, bias appending, double-sided random 
+        projection, and ``attribute_tokens`` per-position paths.  Does not handle
+        global (all modules) random projection. Returns the flattened, clamped module
+        gradient tensor ``P``.
         """
         a = module._inputs  # [N, S, I/q]
         assert isinstance(a, torch.Tensor), "Activation cache missing for module"
@@ -866,8 +867,8 @@ def create_projection_matrix(
     device: torch.device,
     projection_type: Literal["normal", "rademacher"] = "normal",
 ) -> Tensor:
-    """Create a projection matrix deterministically based on identifier and side."""
-    # Seed the PRNG with the name of the layer and what "side" we are projecting
+    """Create a projection matrix deterministically based on identifier."""
+    # Seed the PRNG deterministically from the identifier string
     message = bytes(identifier, "utf-8")
     digest = hashlib.md5(message).digest()
     seed = int.from_bytes(digest, byteorder="big") % (2**63 - 1)

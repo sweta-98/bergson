@@ -60,7 +60,9 @@ class ApproxUnrolling(Serializable):
 
 @dataclass
 class Build(Serializable):
-    """Build a gradient index."""
+    """
+    Build a gradient index. Simultaneously approximates an autocorrelation Hessian
+    unless disabled with `--skip_hessians True`."""
 
     index_cfg: IndexConfig
 
