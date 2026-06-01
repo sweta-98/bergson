@@ -440,7 +440,7 @@ class HookCollectorBase(ContextDecorator, ABC):
         """Compute the per-sample (or per-token) module gradient from cached activations
         and the output gradient.
 
-        Handles normalizer preprocessing, bias appending, double-sided random 
+        Handles normalizer preprocessing, bias appending, double-sided random
         projection, and ``attribute_tokens`` per-position paths.  Does not handle
         global (all modules) random projection. Returns the flattened, clamped module
         gradient tensor ``P``.

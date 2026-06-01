@@ -167,14 +167,12 @@ def test_global_projection_linearity():
     g2 = torch.randn(N, d2)
     g3 = torch.randn(N, d3)
 
-    R = create_projection_matrix("test/single", proj_dim, total, torch.float32, torch.device("cpu"))
+    R = create_projection_matrix(
+        "test/single", proj_dim, total, torch.float32, torch.device("cpu")
+    )
 
     global_result = torch.cat([g1, g2, g3], dim=1) @ R.T
-    block_sum = (
-        g1 @ R[:, :d1].T
-        + g2 @ R[:, d1 : d1 + d2].T
-        + g3 @ R[:, d1 + d2 :].T
-    )
+    block_sum = g1 @ R[:, :d1].T + g2 @ R[:, d1 : d1 + d2].T + g3 @ R[:, d1 + d2 :].T
 
     torch.testing.assert_close(global_result, block_sum)
 
@@ -203,7 +201,9 @@ def test_global_project_values_cpu(tmp_path: Path, model, dataset):
     raw_grads = {k: v.clone() for k, v in raw_collector.mod_grads.items()}
 
     # Second pass: collect with global projection (projection done in backward hook)
-    global_processor = GradientProcessor(projection_dim=proj_dim, projection_target="global")
+    global_processor = GradientProcessor(
+        projection_dim=proj_dim, projection_target="global"
+    )
     global_collector = GradientCollector(
         model=model,
         cfg=cfg,

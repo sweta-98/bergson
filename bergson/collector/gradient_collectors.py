@@ -108,7 +108,12 @@ class GradientCollector(HookCollectorBase):
         if global_proj:
             assert self.processor.projection_dim is not None
             R = self.projection(
-                name, self.processor.projection_dim, P.shape[1], "single", P.device, P.dtype
+                name,
+                self.processor.projection_dim,
+                P.shape[1],
+                "single",
+                P.device,
+                P.dtype,
             )
             projected = P @ R.T  # [N, proj_dim]
             if "gradients" in self.mod_grads:
