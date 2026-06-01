@@ -8,7 +8,7 @@ from simple_parsing import ArgumentParser, ConflictResolution, Serializable
 from bergson.hessians.pipeline import hessian_pipeline
 
 from .approx_unrolling.pipeline import approx_unrolling_pipeline
-from .build import build
+from .build import build, BuildConfig
 from .config import (
     ApproxUnrollingConfig,
     HessianConfig,
@@ -61,21 +61,29 @@ class ApproxUnrolling(Serializable):
 @dataclass
 class Build(Serializable):
     """
-    Build a gradient index. Simultaneously approximates an autocorrelation Hessian
-    unless disabled with `--skip_hessians True`."""
+    Build a gradient index. Simultaneously approximate an autocorrelation Hessian
+    with `--skip_hessians False`."""
 
     index_cfg: IndexConfig
 
     preprocess_cfg: PreprocessConfig
 
+    build_cfg: BuildConfig
+
     def execute(self):
         """Build the gradient index."""
-        if self.index_cfg.skip_index and self.index_cfg.skip_hessians:
+        if self.index_cfg.skip_index and self.build_cfg.skip_hessians:
             raise ValueError("Either skip_index or skip_hessians must be False")
+        
+        hessian_cfg = (
+            None
+            if self.build_cfg.skip_hessians
+            else HessianConfig(method="autocorrelation")
+        )
 
         validate_run_path(self.index_cfg)
 
-        build(self.index_cfg, self.preprocess_cfg)
+        build(self.index_cfg, self.preprocess_cfg, hessian_cfg)
 
 
 @dataclass
@@ -116,8 +124,7 @@ class Hessian(Serializable):
 
         if self.hessian_cfg.method == "autocorrelation":
             self.index_cfg.skip_index = True
-            self.index_cfg.skip_hessians = False
-            build(self.index_cfg, PreprocessConfig())
+            build(self.index_cfg, PreprocessConfig(), self.hessian_cfg)
         else:
             approximate_hessians(self.index_cfg, self.hessian_cfg)
 

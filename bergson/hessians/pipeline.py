@@ -77,11 +77,10 @@ def hessian_pipeline(
             query_cfg.run_path = query_path
             query_cfg.data = hessian_pipeline_cfg.query
             query_cfg.projection_dim = 0
-            query_cfg.skip_hessians = True
             _validate(query_cfg)
 
             query_preprocess_cfg = PreprocessConfig(aggregation="mean")
-            build(query_cfg, query_preprocess_cfg)
+            build(query_cfg, query_preprocess_cfg, None)
 
     # ── Step 2: Fit Hessian factors on training data ──────────────────────
     print(f"Step 2/4: Fitting {method} factors on training data...")
@@ -117,7 +116,6 @@ def hessian_pipeline(
         score_index_cfg = deepcopy(index_cfg)
         score_index_cfg.run_path = scores_path
         score_index_cfg.projection_dim = 0
-        score_index_cfg.skip_hessians = True
         score_cfg.query_path = transformed_query_path
         score_cfg.higher_is_better = True
         _validate(score_index_cfg)

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from .build import build
 from .config import (
+    HessianConfig,
     IndexConfig,
     PreprocessConfig,
     TrackstarConfig,
@@ -48,6 +49,7 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
 
     # Steps 1-2 only compute hessians, so don't preprocess grads.
     hess_preprocess_cfg = PreprocessConfig()
+    hess_cfg = HessianConfig(method="autocorrelation")
 
     def _validate(cfg: IndexConfig):
         """Validate run path, skipping when resume would preserve partial output."""
@@ -61,11 +63,10 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         value_hess_cfg = deepcopy(index_cfg)
         value_hess_cfg.run_path = value_hess_path
         value_hess_cfg.skip_index = True
-        value_hess_cfg.skip_hessians = False
         if trackstar_cfg.num_stats_sample_hessian:
             _limit_split_for_hess(value_hess_cfg)
         _validate(value_hess_cfg)
-        build(value_hess_cfg, hess_preprocess_cfg)
+        build(value_hess_cfg, hess_preprocess_cfg, hess_cfg)
 
     # Step 2: Compute hessians on query dataset
     print("Step 2/5: Computing hessians on query dataset...")
@@ -74,11 +75,10 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         query_hess_cfg.run_path = query_hess_path
         query_hess_cfg.data = deepcopy(trackstar_cfg.query)
         query_hess_cfg.skip_index = True
-        query_hess_cfg.skip_hessians = False
         if trackstar_cfg.num_stats_sample_hessian:
             _limit_split_for_hess(query_hess_cfg)
         _validate(query_hess_cfg)
-        build(query_hess_cfg, hess_preprocess_cfg)
+        build(query_hess_cfg, hess_preprocess_cfg, hess_cfg)
 
     # Step 3: Mix query and value hessians
     print("Step 3/5: Mixing hessians...")
@@ -90,28 +90,25 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
             target_downweight_components=trackstar_cfg.target_downweight_components,
         )
 
-    # Step 4: Build query gradient index using query-specific normalizer.
-    # The mixed hessian is set here but only applied during build if the
+    # The mixed hessian is set here but only applied during step 4. if the
     # user is aggregating the query dataset (preprocess_cfg.aggregation != "none").
     # Otherwise, preconditioning will be deferred to score time in step 5.
-    print("Step 4/5: Building query gradient index...")
     trackstar_cfg.preprocess_cfg.hessian_path = mixed_hess_path
+
+    # Step 4: Build query gradient index using query-specific normalizer.
+    print("Step 4/5: Building query gradient index...")
     if not _step_complete(query_path, resume):
         query_cfg = deepcopy(index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = deepcopy(trackstar_cfg.query)
-        query_cfg.processor_path = query_hess_path
-        query_cfg.skip_hessians = True
         _validate(query_cfg)
-        build(query_cfg, trackstar_cfg.preprocess_cfg)
+        build(query_cfg, trackstar_cfg.preprocess_cfg, None)
 
     # Step 5: Score value dataset against query using mixed hessian
     print("Step 5/5: Scoring value dataset...")
     if not _step_complete(scores_path, resume):
         score_index_cfg = deepcopy(index_cfg)
         score_index_cfg.run_path = scores_path
-        score_index_cfg.processor_path = value_hess_path
-        score_index_cfg.skip_hessians = True
         trackstar_cfg.score_cfg.query_path = query_path
         trackstar_cfg.score_cfg.higher_is_better = True
         _validate(score_index_cfg)

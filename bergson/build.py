@@ -1,6 +1,7 @@
 import os
 import shutil
 from datetime import timedelta
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
@@ -28,6 +29,10 @@ from bergson.utils.worker_utils import (
     setup_model_and_peft,
 )
 
+@dataclass
+class BuildConfig:
+    skip_hessians: bool = True
+
 
 def build_worker(
     rank: int,  # global
@@ -35,6 +40,7 @@ def build_worker(
     world_size: int,
     index_cfg: IndexConfig,
     preprocess_cfg: PreprocessConfig,
+    hessian_cfg: HessianConfig | None,
     ds: Dataset | IterableDataset,
 ):
     """
@@ -74,7 +80,7 @@ def build_worker(
         )
 
     model, target_modules = setup_model_and_peft(index_cfg)
-    processor = create_processor(model, index_cfg, target_modules)
+    processor = create_processor(model, index_cfg, hessian_cfg is None, target_modules)
 
     maybe_auto_batch_size(index_cfg, model, ds, processor, target_modules, rank)
 
@@ -134,6 +140,7 @@ def build_worker(
 def build(
     index_cfg: IndexConfig,
     preprocess_cfg: PreprocessConfig,
+    hessian_cfg: HessianConfig | None = None,
 ):
     """
     Convert a dataset to an on-disk index.
@@ -153,8 +160,8 @@ def build(
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
     preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
-    if not index_cfg.skip_hessians:
-        HessianConfig(method="autocorrelation").save_yaml(
+    if hessian_cfg:
+        hessian_cfg.save_yaml(
             index_cfg.partial_run_path / "hessian_config.yaml"
         )
 
@@ -170,7 +177,7 @@ def build(
     launch_distributed_run(
         "build",
         build_worker,
-        [index_cfg, preprocess_cfg, ds],
+        [index_cfg, preprocess_cfg, hessian_cfg, ds],
         dist_cfg,
     )
 

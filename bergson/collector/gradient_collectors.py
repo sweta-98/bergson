@@ -33,6 +33,8 @@ class GradientCollector(HookCollectorBase):
     cfg: IndexConfig
     """Configuration for gradient index."""
 
+    skip_hessians: bool
+
     mod_grads: dict = field(default_factory=dict)
     """Temporary storage for gradients during a batch, keyed by module name."""
 
@@ -98,7 +100,7 @@ class GradientCollector(HookCollectorBase):
         global_proj = self.processor.projection_target == "global"
 
         # Collect per-module hessians when projection target is per_module
-        if not self.cfg.skip_hessians and not global_proj:
+        if not self.skip_hessians and not global_proj:
             P = P.float()
             if name in self.processor.hessians:
                 self.processor.hessians[name].addmm_(P.mT, P)
