@@ -117,8 +117,9 @@ class GradientProcessor:
     projection_target: Literal["per_module", "global"] = "per_module"
     """
     Projection target. ``per_module`` does a double-sided random projection of each
-    module's gradient independently. ``global`` flattens the per-example gradient
-    across all tracked modules and projects it once.
+    module's gradient independently. ``global`` does an independent
+    single-sided right projection of each module's flattened gradient then sums the
+    results, producing one ``[proj_dim]`` vector per example.
     """
 
     include_bias: bool = False
@@ -126,7 +127,7 @@ class GradientProcessor:
 
     def __post_init__(self):
         self._projection_matrices: dict[
-            tuple[str, Literal["left", "right"], torch.device], Tensor
+            tuple[str, Literal["left", "right", "single"], torch.device], Tensor
         ] = {}
 
     @classmethod
