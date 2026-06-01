@@ -8,7 +8,7 @@ from simple_parsing import ArgumentParser, ConflictResolution, Serializable
 from bergson.hessians.pipeline import hessian_pipeline
 
 from .approx_unrolling.pipeline import approx_unrolling_pipeline
-from .build import build, BuildConfig
+from .build import BuildConfig, build
 from .config import (
     ApproxUnrollingConfig,
     HessianConfig,
@@ -74,7 +74,7 @@ class Build(Serializable):
         """Build the gradient index."""
         if self.index_cfg.skip_index and self.build_cfg.skip_hessians:
             raise ValueError("Either skip_index or skip_hessians must be False")
-        
+
         hessian_cfg = (
             None
             if self.build_cfg.skip_hessians

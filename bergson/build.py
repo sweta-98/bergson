@@ -1,7 +1,7 @@
 import os
 import shutil
-from datetime import timedelta
 from dataclasses import dataclass
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -28,6 +28,7 @@ from bergson.utils.worker_utils import (
     setup_data_pipeline,
     setup_model_and_peft,
 )
+
 
 @dataclass
 class BuildConfig:
@@ -161,9 +162,7 @@ def build(
     index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
     preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
     if hessian_cfg:
-        hessian_cfg.save_yaml(
-            index_cfg.partial_run_path / "hessian_config.yaml"
-        )
+        hessian_cfg.save_yaml(index_cfg.partial_run_path / "hessian_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 
