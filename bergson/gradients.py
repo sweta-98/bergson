@@ -127,7 +127,7 @@ class GradientProcessor:
 
     def __post_init__(self):
         self._projection_matrices: dict[
-            tuple[str, Literal["left", "right"], torch.device], Tensor
+            tuple[str, Literal["left", "right", "single"], torch.device], Tensor
         ] = {}
 
     @classmethod
