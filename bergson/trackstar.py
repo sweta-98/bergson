@@ -107,8 +107,8 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         # query gradients are collapsed into a single target gradient, so a
         # per-token query index is invalid. Build a per-example query index.
         if (
-            trackstar_cfg.preprocess_cfg.aggregation != "none" and
-            query_cfg.attribute_tokens
+            trackstar_cfg.preprocess_cfg.aggregation != "none"
+            and query_cfg.attribute_tokens
         ):
             print(
                 "Query aggregation is currently not compatible with"
