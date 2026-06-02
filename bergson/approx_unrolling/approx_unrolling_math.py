@@ -240,7 +240,6 @@ def score_per_segment_and_aggregate(
         seg_index_cfg.model = final_checkpoint
         seg_index_cfg.run_path = str(scores_dir)
         seg_index_cfg.projection_dim = 0
-        seg_index_cfg.skip_hessians = True
         score_cfg = ScoreConfig(query_path=str(query_grad_segment_paths[l]))
         score_dataset(seg_index_cfg, score_cfg, PreprocessConfig())
         score_dirs.append(scores_dir)

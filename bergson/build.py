@@ -1,5 +1,6 @@
 import os
 import shutil
+from dataclasses import dataclass
 from datetime import timedelta
 
 import torch
@@ -29,12 +30,18 @@ from bergson.utils.worker_utils import (
 )
 
 
+@dataclass
+class BuildConfig:
+    skip_hessians: bool = True
+
+
 def build_worker(
     rank: int,  # global
     local_rank: int,  # local
     world_size: int,
     index_cfg: IndexConfig,
     preprocess_cfg: PreprocessConfig,
+    hessian_cfg: HessianConfig | None,
     ds: Dataset | IterableDataset,
 ):
     """
@@ -74,9 +81,12 @@ def build_worker(
         )
 
     model, target_modules = setup_model_and_peft(index_cfg)
+    skip_hessians = hessian_cfg is None
     processor = create_processor(model, index_cfg, target_modules)
 
-    maybe_auto_batch_size(index_cfg, model, ds, processor, target_modules, rank)
+    maybe_auto_batch_size(
+        index_cfg, model, ds, processor, target_modules, rank, skip_hessians
+    )
 
     attention_cfgs = {
         module: index_cfg.attention for module in index_cfg.split_attention_modules
@@ -90,6 +100,7 @@ def build_worker(
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
         "preprocess_cfg": preprocess_cfg,
+        "skip_hessians": skip_hessians,
     }
 
     if isinstance(ds, Dataset):
@@ -134,6 +145,7 @@ def build_worker(
 def build(
     index_cfg: IndexConfig,
     preprocess_cfg: PreprocessConfig,
+    hessian_cfg: HessianConfig | None = None,
 ):
     """
     Convert a dataset to an on-disk index.
@@ -153,10 +165,8 @@ def build(
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
     index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
     preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
-    if not index_cfg.skip_hessians:
-        HessianConfig(method="autocorrelation").save_yaml(
-            index_cfg.partial_run_path / "hessian_config.yaml"
-        )
+    if hessian_cfg:
+        hessian_cfg.save_yaml(index_cfg.partial_run_path / "hessian_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 
@@ -170,7 +180,7 @@ def build(
     launch_distributed_run(
         "build",
         build_worker,
-        [index_cfg, preprocess_cfg, ds],
+        [index_cfg, preprocess_cfg, hessian_cfg, ds],
         dist_cfg,
     )
 

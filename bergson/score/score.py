@@ -282,6 +282,7 @@ def score_worker(
         "cfg": index_cfg,
         "target_modules": target_modules,
         "attention_cfgs": attention_cfgs,
+        "skip_hessians": True,
     }
 
     score_dtype = (

@@ -71,7 +71,6 @@ def test_large_gradients_query(tmp_path: Path, dataset):
             "--truncation",
             "--token_batch_size",
             "256",
-            "--skip_hessians",
         ],
         cwd=tmp_path,
         capture_output=True,
@@ -167,6 +166,7 @@ def test_precondition_ds(tmp_path: Path, model, dataset):
         data=dataset,
         cfg=build_cfg,
         processor=processor,
+        skip_hessians=False,
     )
 
     computer = CollectorComputer(

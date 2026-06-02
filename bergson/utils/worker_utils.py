@@ -63,41 +63,29 @@ def create_processor(
     target_modules: set[str] | None = None,
 ) -> GradientProcessor:
     """Handle processor creation and normalizer loading."""
-    local_rank = cfg.distributed.local_rank
     rank = cfg.distributed.rank
 
-    processor_path = Path(cfg.processor_path)
-    if (processor_path / "processor_config.yaml").exists():
-        if local_rank == 0:
-            print(f"Loading processor from '{cfg.processor_path}'")
+    normalizers: dict[str, Normalizer] = {}
+    if cfg.optimizer_state:
+        from bergson.utils.load_from_optimizer import load_from_optimizer
 
-        processor = GradientProcessor.load(
-            processor_path,
-            map_location=get_device(local_rank),
-            skip_hessians=cfg.skip_hessians,
-        )
-    else:
-        normalizers: dict[str, Normalizer] = {}
-        if cfg.optimizer_state:
-            from bergson.utils.load_from_optimizer import load_from_optimizer
-
-            normalizers = load_from_optimizer(
-                model,
-                cfg.optimizer_state,
-                include_bias=cfg.include_bias,
-                target_modules=target_modules,
-            )
-
-        processor = GradientProcessor(
-            normalizers,
-            projection_dim=cfg.projection_dim or None,
-            reshape_to_square=cfg.reshape_to_square,
-            projection_type=cfg.projection_type,
-            projection_target=cfg.projection_target,
+        normalizers = load_from_optimizer(
+            model,
+            cfg.optimizer_state,
             include_bias=cfg.include_bias,
+            target_modules=target_modules,
         )
-        if rank == 0:
-            processor.save(cfg.partial_run_path)
+
+    processor = GradientProcessor(
+        normalizers,
+        projection_dim=cfg.projection_dim or None,
+        reshape_to_square=cfg.reshape_to_square,
+        projection_type=cfg.projection_type,
+        projection_target=cfg.projection_target,
+        include_bias=cfg.include_bias,
+    )
+    if rank == 0:
+        processor.save(cfg.partial_run_path)
 
     return processor
 

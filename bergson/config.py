@@ -394,17 +394,11 @@ class IndexConfig(AttributionConfig, Serializable):
     """Whether to automatically determine the optimal token batch size.
     Experimental feature only enabled for `build`."""
 
-    processor_path: str = ""
-    """Path to a precomputed processor."""
-
     optimizer_state: str = ""
     """Source for optimizer second moments used to normalize gradients.
     Either a local path (a checkpoint directory containing ``optimizer.pt``,
     or a path to an optimizer state file directly) or a Hugging Face URI
     ``hf://<repo>[@<revision>][/<path>]``."""
-
-    skip_hessians: bool = False
-    """Whether to skip estimating hessian statistics"""
 
     skip_index: bool = False
     """Whether to skip building the gradient index."""
