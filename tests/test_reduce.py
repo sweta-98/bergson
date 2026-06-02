@@ -63,7 +63,8 @@ def test_programmatic_reduce(tmp_path: Path):
     index_cfg = IndexConfig(
         run_path=str(tmp_path / "reduction"),
         data=DataConfig(truncation=True, split="train[:100]"),
-        model="EleutherAI/pythia-14m",        token_batch_size=1024,
+        model="EleutherAI/pythia-14m",
+        token_batch_size=1024,
     )
 
     build(index_cfg, PreprocessConfig(aggregation="mean"))
@@ -113,7 +114,8 @@ def test_reduce_with_preconditioning(tmp_path: Path, model, dataset):
 def test_in_memory_reduce(tmp_path: Path, model, dataset):
     model.cuda()
     cfg = IndexConfig(
-        run_path=str(tmp_path / "reduction"),        token_batch_size=1024,
+        run_path=str(tmp_path / "reduction"),
+        token_batch_size=1024,
     )
     cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
 

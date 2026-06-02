@@ -242,7 +242,8 @@ def test_token_build_e2e(tmp_path: Path, model, dataset):
     """Build a token-attribution index and verify output shapes."""
     model = model.float()
     cfg = IndexConfig(
-        run_path=str(tmp_path),        token_batch_size=1024,
+        run_path=str(tmp_path),
+        token_batch_size=1024,
         attribute_tokens=True,
     )
     processor = GradientProcessor(projection_dim=16)
@@ -295,7 +296,8 @@ def test_token_build_with_labels(tmp_path: Path, model):
     )
 
     cfg = IndexConfig(
-        run_path=str(tmp_path),        token_batch_size=1024,
+        run_path=str(tmp_path),
+        token_batch_size=1024,
         attribute_tokens=True,
     )
     processor = GradientProcessor(projection_dim=16)
@@ -356,7 +358,8 @@ def test_token_score_e2e(tmp_path: Path, model, dataset):
     )
 
     cfg = IndexConfig(
-        run_path=str(tmp_path / "run"),        token_batch_size=1024,
+        run_path=str(tmp_path / "run"),
+        token_batch_size=1024,
         attribute_tokens=True,
         skip_index=True,
     )
@@ -401,7 +404,8 @@ def test_token_build_adam_e2e(tmp_path: Path, model, dataset):
     dataset = dataset.repeat(10)
 
     cfg = IndexConfig(
-        run_path=str(tmp_path),        token_batch_size=1024,
+        run_path=str(tmp_path),
+        token_batch_size=1024,
         attribute_tokens=True,
     )
 
@@ -465,7 +469,8 @@ def _collect_in_memory(
 ):
     """Run InMemoryCollector and return the collector for inspection."""
     cfg = IndexConfig(
-        run_path=run_path,        token_batch_size=1024,
+        run_path=run_path,
+        token_batch_size=1024,
         attribute_tokens=attribute_tokens,
         loss_reduction="sum",
         skip_index=True,
