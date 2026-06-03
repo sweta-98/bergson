@@ -19,6 +19,7 @@ dependencies = [
     "numpy",
     "scipy",
     "peft>=0.17.0",
+    "petname",
     "pyarrow",
     "pyyaml",
     "simple-parsing",

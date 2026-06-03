@@ -5,9 +5,9 @@ Data attribution methods estimate the effect on a behavior of interest of removi
 
 ## Core features
 
-Per-token and per-sequence attribution is available everywhere. Both on-disk gradient stores and on-the-fly queries are supported. Almost every feature is available through both the CLI and a programmatic interface, which use a shared set of configuration dataclasses. To understand every available configuration option, [check out the documentation](https://bergson.readthedocs.io/en/latest/api.html#bergson.IndexConfig). Bergson uses FSDP2 or SimpleFSDP, BitsAndBytes, and low-level performance optimizations to support large models, datasets, and clusters.
+Per-token and per-sequence attribution is available everywhere. On-disk gradient stores and on-the-fly queries are supported. Almost every feature is available through both the CLI and a programmatic interface, which use a shared set of configuration dataclasses. Configuration dataclasses are always serialized to disk so commands can be reproduced in one line. To understand every available configuration option, [check out the documentation](https://bergson.readthedocs.io/en/latest/api.html#bergson.IndexConfig).
 
-Bergson integrates with HuggingFace Transformers and Datasets, and also supports on-disk datasets in a variety of formats.
+Bergson uses FSDP2 or SimpleFSDP, BitsAndBytes, and low-level performance optimizations to support large models, datasets, and clusters. Bergson integrates with HuggingFace Transformers and Datasets, and also supports on-disk datasets in a variety of formats.
 
 ### Attribute through Training
 
@@ -24,7 +24,7 @@ For small queries and methods that don't use gradient compression (e.g., EK-FAC)
 
 Per-module and per-attention head gradient storage enables mechanistic interpretability.
 
-At a higher level, `bergson trackstar` pipelines all necessary steps for TrackStar-based attribution. See `bergson trackstar`.
+At a higher level, `bergson trackstar`, `bergson ekfac`, and `bergson approx_unrolling` orchestrate several multi-step attribution methods.
 
 # Announcements
 
@@ -49,20 +49,20 @@ pip install bergson
 
 # Quickstart
 
-To use MAGIC on a GPT-2 WikiText fine-tune:
+Use MAGIC to attribute a GPT-2 WikiText fine-tune:
 
 ```bash
-bergson magic examples/magic/gpt2_wikitext_tiny.yaml
+bergson examples/magic/gpt2_wikitext_tiny.yaml
 ```
 
-To construct and query an on-disk index of randomly projected gradients:
+Construct and query an on-disk index of randomly projected gradients:
 
 ```bash
 bergson build runs/index --model EleutherAI/pythia-14m --dataset NeelNanda/pile-10k --truncation --token_batch_size 4096 --projection_dim 16
 bergson query --index runs/index --unit_norm
 ```
 
-To collect TrackStar attribution scores for an I.I.D sample query:
+Collect TrackStar attribution scores for an I.I.D sample query:
 
 ```bash
 bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset NeelNanda/pile-10k --data.dataset NeelNanda/pile-10k --data.truncation --token_batch_size 4096 --query.truncation --query.split "train[:20]"
@@ -71,6 +71,25 @@ bergson trackstar runs/trackstar --model EleutherAI/pythia-14m --query.dataset N
 # Documentation
 
 Full documentation is available at https://bergson.readthedocs.io/.
+
+## Run with YAMLs
+
+Every run writes a self-describing `config.yaml` into its output directory, enabling the command(s) to be reproduced:
+
+```bash
+bergson <path_to_config.yaml>
+```
+
+Each config contains `steps:` a list of `- command: {...}` entries plus a `metadata:` block (bergson version, timestamp, git SHA). Multi-step pipelines may optionally specify a `run_path`. See [`examples/pipelines/hessian_then_build.yaml`](examples/pipelines/hessian_then_build.yaml) for an example of a multi-step run.
+
+```yaml
+steps:
+  - build: {index_cfg: {run_path: runs/idx}, preprocess_cfg: {}}
+metadata:
+  bergson_version: 0.9.1
+  created: 2026-06-03T14:22:10Z
+  git_sha: abc1234
+```
 
 ## Gradient Collection
 
@@ -102,16 +121,6 @@ You can also aggregate your query dataset into a single mean or sum gradient as 
 ```bash
 bergson build <output_path> --model <model_name> --dataset <dataset_name> --aggregation mean --unit_normalize --hessian_path <path_to_hessian>
 ```
-
-## Run a Multi-Step Pipeline
-
-Many workflows chain several Bergson commands together. Rather than running each command separately, you can express the whole sequence as a YAML file and run it with a single command:
-
-```bash
-bergson pipeline <path_to_yaml>
-```
-
-The YAML is a list of single-key entries, one per step, each holding that command's full config. See [`examples/pipelines/hessian_then_build.yaml`](examples/pipelines/hessian_then_build.yaml) for a runnable Hessian → build example.
 
 ## Query an On-Disk Gradient Index
 

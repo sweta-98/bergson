@@ -150,7 +150,7 @@ def test_kfac_fim_accuracy(seq_lengths, num_batches, max_rel_error, sample, tmp_
         path=str(index_cfg.partial_run_path),
     )
 
-    hessian_cfg = HessianConfig(use_dataset_labels=not sample)
+    hessian_cfg = HessianConfig(method="autocorrelation", use_dataset_labels=not sample)
 
     computer = CollectorComputer(
         model=model,

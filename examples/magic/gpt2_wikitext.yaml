@@ -1,32 +1,38 @@
-run_path: runs/gpt2_wikitext
-model: gpt2
-overwrite: true
-cleanup_ckpts: false
+# Single-step MAGIC attribution example (GPT-2 / WikiText-2, multi-node).
 
-data:
-  dataset: Salesforce/wikitext
-  subset: wikitext-2-raw-v1
-  split: "train"
-  chunk_length: 512
+# Run with `bergson examples/magic/gpt2_wikitext.yaml`
 
-query:
-  dataset: Salesforce/wikitext
-  subset: wikitext-2-raw-v1
-  split: "test[3:4]"
-  chunk_length: 0
+steps:
+  - magic:
+      run_path: runs/gpt2_wikitext
+      model: gpt2
+      overwrite: true
+      cleanup_ckpts: false
 
-distributed:
-  nproc_per_node: 4
-  nnode: 4
+      data:
+        dataset: Salesforce/wikitext
+        subset: wikitext-2-raw-v1
+        split: "train"
+        chunk_length: 512
 
-batch_size: 256
-num_epochs: 2
-lr_schedule:
-  lr_scheduler_type: polynomial
-  lr: 0.0008
-  lr_start: 1e-6
-  lr_end: 0.00008
-  warmup_steps: 0.25
+      query:
+        dataset: Salesforce/wikitext
+        subset: wikitext-2-raw-v1
+        split: "test[3:4]"
+        chunk_length: 0
 
-subset_strategy: random
-wandb_project: magic
+      distributed:
+        nproc_per_node: 4
+        nnode: 4
+
+      batch_size: 256
+      num_epochs: 2
+      lr_schedule:
+        lr_scheduler_type: polynomial
+        lr: 0.0008
+        lr_start: 1e-6
+        lr_end: 0.00008
+        warmup_steps: 0.25
+
+      subset_strategy: random
+      wandb_project: magic

@@ -4,13 +4,15 @@ from copy import deepcopy
 from pathlib import Path
 
 from ..build import build
-from ..config import (
+from ..cli.commands import Build, Score
+from ..config.config import (
     HessianConfig,
     HessianPipelineConfig,
     IndexConfig,
     PreprocessConfig,
     ScoreConfig,
 )
+from ..config.config_io import save_run_config
 from ..distributed import launch_distributed_run
 from ..score.score import score_dataset
 from ..utils.worker_utils import validate_run_path
@@ -80,6 +82,10 @@ def hessian_pipeline(
             _validate(query_cfg)
 
             query_preprocess_cfg = PreprocessConfig(aggregation="mean")
+            save_run_config(
+                Build(query_cfg, query_preprocess_cfg, None),
+                query_cfg.partial_run_path,
+            )
             build(query_cfg, query_preprocess_cfg, None)
 
     # ── Step 2: Fit Hessian factors on training data ──────────────────────
@@ -87,7 +93,9 @@ def hessian_pipeline(
     if not _step_complete(hessian_path, resume):
         with _timed("step2_fit_hessian", durations):
             hessian_index_cfg = deepcopy(index_cfg)
-            hessian_index_cfg.run_path = hessian_path
+            # approximate_hessians writes to this exact path; step 3 reads it
+            # back from `{hessian_path}/{method}`.
+            hessian_index_cfg.run_path = f"{hessian_path}/{method}"
             _validate(hessian_index_cfg)
 
         approximate_hessians(hessian_index_cfg, hessian_cfg)
@@ -120,6 +128,10 @@ def hessian_pipeline(
         score_cfg.higher_is_better = True
         _validate(score_index_cfg)
 
+        save_run_config(
+            Score(score_cfg, score_index_cfg, preprocess_cfg),
+            score_index_cfg.partial_run_path,
+        )
         score_dataset(score_index_cfg, score_cfg, preprocess_cfg)
 
     print(f"Done! Scores saved to: {scores_path}")

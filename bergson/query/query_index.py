@@ -7,7 +7,8 @@ from typing import Any, Callable, Generator
 from transformers import AutoTokenizer
 
 from bergson import Attributor, FaissConfig
-from bergson.config import IndexConfig, QueryConfig
+from bergson.config.config import IndexConfig, QueryConfig
+from bergson.config.config_io import CONFIG_FILENAME, load_subconfig
 from bergson.data import load_data_string
 from bergson.utils.utils import setup_reproducibility
 from bergson.utils.worker_utils import setup_model_and_peft
@@ -56,7 +57,12 @@ def query(
         Configuration describing the index path, HF model to load, and dataset field
         used to print the retrieved documents.
     """
-    index_cfg = IndexConfig.load_yaml(Path(query_cfg.index) / "index_config.yaml")
+    index_cfg = load_subconfig(query_cfg.index, "index_cfg", IndexConfig)
+    if index_cfg is None:
+        raise FileNotFoundError(
+            f"Could not load an index config from '{query_cfg.index}'. "
+            f"Expected a '{CONFIG_FILENAME}'."
+        )
 
     if index_cfg.debug:
         setup_reproducibility()

@@ -29,12 +29,14 @@ from copy import deepcopy
 from pathlib import Path
 
 from ..build import build
+from ..cli.commands import Build
 from ..config import (
     ApproxUnrollingConfig,
     HessianConfig,
     IndexConfig,
     PreprocessConfig,
 )
+from ..config.config_io import save_run_config
 from ..utils.logger import get_logger
 from .approx_unrolling_math import (
     compute_lr_times_steps_per_segment,
@@ -182,7 +184,12 @@ def approx_unrolling_pipeline(
         query_cfg.data = approx_unrolling_cfg.query
         query_cfg.run_path = str(query_path)
         query_cfg.projection_dim = 0
-        build(query_cfg, PreprocessConfig(aggregation="mean"))
+        query_preprocess_cfg = PreprocessConfig(aggregation="mean")
+        save_run_config(
+            Build(query_cfg, query_preprocess_cfg, None),
+            query_cfg.partial_run_path,
+        )
+        build(query_cfg, query_preprocess_cfg)
 
     # ── Step 6: Phase 1 -- walk query backwards to get segment queries
     logger.info(

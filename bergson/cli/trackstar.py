@@ -1,16 +1,18 @@
 from copy import deepcopy
 from pathlib import Path
 
-from .build import build
-from .config import (
+from ..build import build
+from ..config.config import (
     HessianConfig,
     IndexConfig,
     PreprocessConfig,
     TrackstarConfig,
 )
-from .process_grads import mix_autocorrelation_matrices
-from .score.score import score_dataset
-from .utils.worker_utils import validate_run_path
+from ..config.config_io import save_run_config
+from ..process_grads import mix_autocorrelation_matrices
+from ..score.score import score_dataset
+from ..utils.worker_utils import validate_run_path
+from .commands import Build, Mix, Score
 
 
 def _limit_split_for_hess(cfg: IndexConfig) -> None:
@@ -66,6 +68,10 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         if trackstar_cfg.num_stats_sample_hessian:
             _limit_split_for_hess(value_hess_cfg)
         _validate(value_hess_cfg)
+        save_run_config(
+            Build(value_hess_cfg, hess_preprocess_cfg, hess_cfg),
+            value_hess_cfg.partial_run_path,
+        )
         build(value_hess_cfg, hess_preprocess_cfg, hess_cfg)
 
     # Step 2: Compute hessians on query dataset
@@ -78,11 +84,24 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         if trackstar_cfg.num_stats_sample_hessian:
             _limit_split_for_hess(query_hess_cfg)
         _validate(query_hess_cfg)
+        save_run_config(
+            Build(query_hess_cfg, hess_preprocess_cfg, hess_cfg),
+            query_hess_cfg.partial_run_path,
+        )
         build(query_hess_cfg, hess_preprocess_cfg, hess_cfg)
 
     # Step 3: Mix query and value hessians
     print("Step 3/5: Mixing hessians...")
     if not _step_complete(mixed_hess_path, resume):
+        save_run_config(
+            Mix(
+                query_path=query_hess_path,
+                index_path=value_hess_path,
+                output_path=mixed_hess_path,
+                target_downweight_components=trackstar_cfg.target_downweight_components,
+            ),
+            mixed_hess_path,
+        )
         mix_autocorrelation_matrices(
             query_path=query_hess_path,
             index_path=value_hess_path,
@@ -118,6 +137,10 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
             query_cfg.attribute_tokens = False
 
         _validate(query_cfg)
+        save_run_config(
+            Build(query_cfg, trackstar_cfg.preprocess_cfg, None),
+            query_cfg.partial_run_path,
+        )
         build(query_cfg, trackstar_cfg.preprocess_cfg, None)
 
     # Step 5: Score value dataset against query using mixed hessian
@@ -128,6 +151,12 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         trackstar_cfg.score_cfg.query_path = query_path
         trackstar_cfg.score_cfg.higher_is_better = True
         _validate(score_index_cfg)
+        save_run_config(
+            Score(
+                trackstar_cfg.score_cfg, score_index_cfg, trackstar_cfg.preprocess_cfg
+            ),
+            score_index_cfg.partial_run_path,
+        )
         score_dataset(
             score_index_cfg, trackstar_cfg.score_cfg, trackstar_cfg.preprocess_cfg
         )

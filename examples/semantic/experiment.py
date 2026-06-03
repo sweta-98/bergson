@@ -40,7 +40,6 @@ def create_index(dataset_name: str, analysis_model_name: str) -> None:
         "--fsdp",
         "--projection_dim",
         "16",
-        "--skip_hessians",
     ]
 
     print(" ".join(cmd))

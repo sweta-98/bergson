@@ -7,7 +7,7 @@ from .collection import collect_gradients
 from .collector.collector import CollectorComputer
 from .collector.gradient_collectors import GradientCollector
 from .collector.in_memory_collector import InMemoryCollector
-from .config import (
+from .config.config import (
     AttentionConfig,
     DataConfig,
     IndexConfig,

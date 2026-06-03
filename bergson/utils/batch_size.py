@@ -10,7 +10,7 @@ from datasets import Dataset, IterableDataset
 from peft import PeftModel
 from transformers import PreTrainedModel
 
-from bergson.config import IndexConfig
+from bergson.config.config import IndexConfig
 from bergson.gradients import GradientProcessor
 
 if TYPE_CHECKING:

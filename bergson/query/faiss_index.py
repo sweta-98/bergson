@@ -11,7 +11,7 @@ from numpy.lib.recfunctions import structured_to_unstructured
 from numpy.typing import NDArray
 from tqdm import tqdm
 
-from bergson.config import FaissConfig
+from bergson.config.config import FaissConfig
 from bergson.process_grads import precondition_flat_grads
 
 if TYPE_CHECKING:

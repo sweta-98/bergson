@@ -33,8 +33,8 @@ def test_build_e2e(tmp_path: Path):
             "1024",
             "--precision",
             "bf16",
-            "--skip_hessians",
-            "False",
+            "--method",
+            "autocorrelation",
         ],
         cwd=tmp_path,
         capture_output=True,  # Add this

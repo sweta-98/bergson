@@ -70,7 +70,7 @@ def test_trace_batch_invariant(seq_lengths, num_batches, tmp_path):
                 path=str(index_cfg.partial_run_path),
             )
 
-            hessian_cfg = HessianConfig()
+            hessian_cfg = HessianConfig(method="autocorrelation")
             computer = CollectorComputer(
                 model=model,
                 data=dataset,

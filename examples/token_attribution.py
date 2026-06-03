@@ -50,7 +50,6 @@ def main():
         precision="fp32",
         token_batch_size=2048,
         attribute_tokens=True,
-        skip_hessians=True,
     )
 
     # Load model
@@ -82,7 +81,6 @@ def main():
         ),
         precision="fp32",
         token_batch_size=2048,
-        skip_hessians=True,
     )
     Path(query_cfg.partial_run_path).mkdir(parents=True, exist_ok=True)
     query_ds, _ = setup_data_pipeline(query_cfg)

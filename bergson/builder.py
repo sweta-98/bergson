@@ -5,7 +5,7 @@ import torch
 import torch.distributed as dist
 from datasets import Dataset
 
-from .config import PreprocessConfig
+from .config.config import PreprocessConfig
 from .data import compute_num_token_grads, create_index, create_token_index
 from .process_grads import (
     get_trackstar_hessian,

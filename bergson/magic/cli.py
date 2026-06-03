@@ -29,7 +29,8 @@ from transformers.utils.logging import (
     set_verbosity_error as hf_set_verbosity_error,
 )
 
-from ..config import ScoreConfig, TrainingConfig, ValidationConfig
+from ..config.config import ScoreConfig, TrainingConfig, ValidationConfig
+from ..config.config_io import load_subconfig, save_run_config
 from ..data import load_scores
 from ..distributed import grad_tree, launch_distributed_run
 from ..utils.logging import wandb_log_fn
@@ -453,8 +454,8 @@ def worker(
             print(f"Saved attribution scores to {score_path}")
     elif os.path.isdir(score_path):
         scores = torch.from_numpy(load_scores(Path(score_path))[:])
-        cfg_path = Path(score_path) / "score_config.yaml"
-        if cfg_path.exists() and ScoreConfig.load(cfg_path).higher_is_better:
+        score_cfg = load_subconfig(score_path, "score_cfg", ScoreConfig)
+        if score_cfg is not None and score_cfg.higher_is_better:
             scores = -scores
     else:
         scores = torch.load(score_path, map_location="cpu")
@@ -593,7 +594,7 @@ def run_magic(run_cfg: TrainingConfig, *, score_path: str = ""):
                 )
 
         run_path.mkdir(parents=True, exist_ok=True)
-        run_cfg.save_yaml(run_path / "run_config.yaml")
+        save_run_config(run_cfg, run_path)
 
     # HF datasets caches are not safe for concurrent writers, so the main node
     # must finish populating the cache before others read from it.

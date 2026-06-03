@@ -1,6 +1,5 @@
 import os
 import shutil
-from dataclasses import dataclass
 from datetime import timedelta
 
 import torch
@@ -9,7 +8,7 @@ from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
-from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
+from bergson.config.config import HessianConfig, IndexConfig, PreprocessConfig
 from bergson.data import allocate_batches
 from bergson.distributed import (
     cap_world_size_to_dataset,
@@ -28,11 +27,6 @@ from bergson.utils.worker_utils import (
     setup_data_pipeline,
     setup_model_and_peft,
 )
-
-
-@dataclass
-class BuildConfig:
-    skip_hessians: bool = True
 
 
 def build_worker(
@@ -163,10 +157,6 @@ def build(
         setup_reproducibility()
 
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
-    index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
-    preprocess_cfg.save_yaml(index_cfg.partial_run_path / "preprocess_config.yaml")
-    if hessian_cfg:
-        hessian_cfg.save_yaml(index_cfg.partial_run_path / "hessian_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 

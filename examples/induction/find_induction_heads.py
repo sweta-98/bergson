@@ -162,7 +162,6 @@ def reduce_query_gradients(
     cfg = IndexConfig(
         run_path=query_path,
         projection_dim=projection_dim,
-        skip_hessians=True,
     )
     processor = GradientProcessor(
         {},
