@@ -101,6 +101,22 @@ def trackstar(index_cfg: IndexConfig, trackstar_cfg: TrackstarConfig):
         query_cfg = deepcopy(index_cfg)
         query_cfg.run_path = query_path
         query_cfg.data = deepcopy(trackstar_cfg.query)
+
+        # query-side aggregation is currently not compatible with token attribution
+        # only. When aggregating the query (aggregation != "none"), per-token
+        # query gradients are collapsed into a single target gradient, so a
+        # per-token query index is invalid. Build a per-example query index.
+        if (
+            trackstar_cfg.preprocess_cfg.aggregation != "none"
+            and query_cfg.attribute_tokens
+        ):
+            print(
+                "Query aggregation is currently not compatible with"
+                "query-side token attribution. Any query unit normalization"
+                "will be applied to sequence gradients."
+            )
+            query_cfg.attribute_tokens = False
+
         _validate(query_cfg)
         build(query_cfg, trackstar_cfg.preprocess_cfg, None)
 
