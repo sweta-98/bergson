@@ -37,7 +37,7 @@ dependencies = [
     "bitsandbytes",
     "huggingface-hub>=1.13.0",
 ]
-version = "0.9.1"
+version = "0.10.0"
 [project.optional-dependencies]
 dev = [
     "pre-commit",
@@ -73,6 +73,7 @@ faiss = [
 
 [project.scripts]
 bergson = "bergson.__main__:main"
+
 
 [tool.pyright]
 include = ["bergson*"]

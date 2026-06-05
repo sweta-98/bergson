@@ -1,11 +1,19 @@
 # CHANGELOG
 
 
+## v0.10.0 (2026-06-05)
+
+### Features
+
+- Consolidate per-run YAMLs into one reproducible config.yaml
+  ([`d33a6bb`](https://github.com/EleutherAI/bergson/commit/d33a6bb056a617e212f2d811187eefcde36cfdad))
+
+
 ## v0.9.1 (2026-04-10)
 
 ### Bug Fixes
 
-- Hessian bug in attributor.py
+- Preconditioner bug in attributor.py
   ([`6232d1e`](https://github.com/EleutherAI/bergson/commit/6232d1e3464ec4fc9056a5c45b5efc7b4c421318))
 
 
@@ -50,7 +58,7 @@ Co-authored-by: Lucia Quirke <luciaquirke@users.noreply.github.com>
 - Always compute mixing coefficient in Trackstar pipeline
   ([`c990375`](https://github.com/EleutherAI/bergson/commit/c990375e69d309f348c489f9bfc9cf9cddc28f6d))
 
-Remove the conditional guard — lambda is always auto-computed from the hessian eigenvalues
+Remove the conditional guard — lambda is always auto-computed from the preconditioner eigenvalues
   since the cost is negligible.
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
