@@ -98,7 +98,7 @@ def hessian_pipeline(
             hessian_index_cfg.run_path = f"{hessian_path}/{method}"
             _validate(hessian_index_cfg)
 
-        approximate_hessians(hessian_index_cfg, hessian_cfg)
+            approximate_hessians(hessian_index_cfg, hessian_cfg)
 
     # ── Step 3: Apply inverse Hessian to the mean query gradient ──────────
     print(f"Step 3/4: Applying {method} inverse Hessian to mean query gradient...")

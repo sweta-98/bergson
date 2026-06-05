@@ -13,6 +13,7 @@ from bergson.collector.collector import (
 from bergson.config.config import AttentionConfig, HessianConfig, IndexConfig
 from bergson.data import allocate_batches
 from bergson.distributed import init_dist, launch_distributed_run
+from bergson.gradients import GradientProcessor
 from bergson.hessians.eigenvectors import (
     LambdaCollector,
     compute_eigendecomposition,
@@ -205,6 +206,7 @@ def collect_hessians(
         "attention_cfgs": attention_cfgs or {},
         "path": str(index_cfg.partial_run_path),
         "filter_modules": index_cfg.filter_modules,
+        "processor": GradientProcessor(include_bias=index_cfg.include_bias),
     }
     desc = f"Approximating Hessians with {hessian_cfg.method}"
     if ev_correction:

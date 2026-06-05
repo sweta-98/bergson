@@ -6,6 +6,21 @@ from torch import Tensor
 from bergson.utils.utils import get_device
 
 
+def shard_bounds(dim: int, rank: int, world_size: int) -> tuple[int, int]:
+    """Range [start, end) of ``rank``'s shard of a dimension of size
+    ``dim`` split across ``world_size`` ranks.
+
+    Rank 0 takes the remainder rows when ``dim`` is not evenly divisible,
+    so the shard sizes are [base + remainder, base, ..., base].
+    """
+    base, remainder = divmod(dim, world_size)
+    if rank == 0:
+        return 0, base + remainder
+
+    start = remainder + rank * base
+    return start, start + base
+
+
 class ShardedMul:
     def __init__(
         self,
@@ -15,6 +30,10 @@ class ShardedMul:
         self.rank = dist.get_rank() if self.dist else 0
         self.world_size = dist.get_world_size() if self.dist else 1
         self.device = torch.device(get_device(self.rank))
+
+    def shard_bounds(self, dim: int, rank: int | None = None) -> tuple[int, int]:
+        """Row range [start, end) of ``rank``'s shard (default: this rank)."""
+        return shard_bounds(dim, self.rank if rank is None else rank, self.world_size)
 
     def _init_covariance_dict(
         self,
@@ -26,18 +45,19 @@ class ShardedMul:
         """Initialize the covariance matrices for activations and gradients."""
 
         for name, (device, weight_shape, collect_bias) in target_info.items():
-            # Activation covariance A^T A has shape [in_dim, in_dim]
-            in_dim = weight_shape[1]
-            shard_in_dim = in_dim if not self.dist else in_dim // self.world_size
+            # Activation covariance A^T A has shape [in_dim, in_dim], or
+            # [in + 1, in + 1] when the bias is collected.
+            in_dim = weight_shape[1] + (1 if collect_bias else 0)
+            in_start, in_end = self.shard_bounds(in_dim)
             activation_covariance_dict[name] = torch.zeros(
-                (shard_in_dim, in_dim), device=self.device, dtype=dtype
+                (in_end - in_start, in_dim), device=self.device, dtype=dtype
             )
 
             # Gradient covariance G^T G has shape [out_dim, out_dim]
             out_dim = weight_shape[0]
-            shard_out_dim = out_dim if not self.dist else out_dim // self.world_size
+            out_start, out_end = self.shard_bounds(out_dim)
             gradient_covariance_dict[name] = torch.zeros(
-                (shard_out_dim, out_dim), device=self.device, dtype=dtype
+                (out_end - out_start, out_dim), device=self.device, dtype=dtype
             )
 
     def _matmul(
@@ -47,10 +67,12 @@ class ShardedMul:
     ) -> Float[Tensor, "n s b"]:
         """Vector-matrix multiplication.
         - If not distributed, this does usual multiplication with a=c.
-        - If distributed, assumes that c=a/world_size and does sharded multiplication.
+        - If distributed, assumes that c is this rank's shard of a and
+        does sharded multiplication.
         """
 
-        assert vector_nsa.shape[2] == matrix_cb.shape[0] * self.world_size, (
+        start, end = self.shard_bounds(vector_nsa.shape[2])
+        assert matrix_cb.shape[0] == end - start, (
             f"Vector shape {vector_nsa.shape} not compatible with matrix shape "
             f"{matrix_cb.shape} and world_size {self.world_size}"
         )
@@ -112,16 +134,20 @@ class ShardedMul:
         fn,
     ):
         """Sharded in-place ``matrix_noi *= fn(λ)`` (function-aware hadamard)."""
+        o = matrix_noi.shape[1]
         for rank_index in range(self.world_size):
+            start_row, end_row = self.shard_bounds(o, rank_index)
             if rank_index == self.rank:
                 shard_ci = lambda_ci
             else:
-                shard_ci = torch.zeros_like(lambda_ci)
+                shard_ci = torch.zeros(
+                    (end_row - start_row, lambda_ci.shape[1]),
+                    device=lambda_ci.device,
+                    dtype=lambda_ci.dtype,
+                )
 
             dist.broadcast(shard_ci, src=rank_index)
 
-            start_row = rank_index * shard_ci.shape[0]
-            end_row = (rank_index + 1) * shard_ci.shape[0]
             matrix_noi[:, start_row:end_row, :].mul_(fn(shard_ci))
 
             if self.rank != rank_index:
@@ -134,16 +160,13 @@ class ShardedMul:
     ) -> Float[Tensor, "n s b"]:
         """
         Sharded matrix multiplication for distributed training.
-        Assumes that c=a/world_size.
+        Assumes that c is this rank's shard of a (see shard_bounds).
         vector: [n, s, a]
-        matrix_shard: [a/world_size, b]
+        matrix_shard: [c, b]
         Returns: [n, s, b]
         """
-        # Split the vector into shards
-        vector_shards_wnsc = torch.chunk(
-            vector_nsa, self.world_size, dim=-1
-        )  # (w, n, s, a/w)
-        n, s, b = vector_nsa.shape[0], vector_nsa.shape[1], matrix_cb.shape[1]
+        n, s, a = vector_nsa.shape
+        b = matrix_cb.shape[1]
 
         result_nsb = torch.zeros(
             (n, s, b),
@@ -152,15 +175,20 @@ class ShardedMul:
         )
 
         for rank_index in range(self.world_size):
+            start_row, end_row = self.shard_bounds(a, rank_index)
             if rank_index == self.rank:
                 shard_cb = matrix_cb
             else:
-                shard_cb = torch.zeros_like(matrix_cb)
+                shard_cb = torch.zeros(
+                    (end_row - start_row, b),
+                    device=matrix_cb.device,
+                    dtype=matrix_cb.dtype,
+                )
 
             dist.broadcast(shard_cb, src=rank_index)
             result_nsb += torch.einsum(
                 "n s c, c b-> n s b",
-                vector_shards_wnsc[rank_index].to(shard_cb.dtype),
+                vector_nsa[..., start_row:end_row].to(shard_cb.dtype),
                 shard_cb,
             )  # [B, c]
             if self.rank != rank_index:
@@ -177,25 +205,30 @@ class ShardedMul:
         """
         Sharded in-place element-wise multiplication for distributed training.
         gradients: [n, o, i]
-        matrix_shard: [c, i] where c=o/world_size
+        matrix_shard: [c, i] where c is this rank's shard of o (see
+        shard_bounds)
 
         """
+        o = matrix_noi.shape[1]
 
-        global_lambda_mean = lambda_ci.mean()
-
+        # Shards may be uneven, so compute the global mean from the global sum
+        global_lambda_mean = lambda_ci.sum()
         dist.all_reduce(global_lambda_mean, op=dist.ReduceOp.SUM)
-        global_lambda_mean /= self.world_size
+        global_lambda_mean /= o * lambda_ci.shape[1]
 
         for rank_index in range(self.world_size):
+            start_row, end_row = self.shard_bounds(o, rank_index)
             if rank_index == self.rank:
                 shard_ci = lambda_ci
             else:
-                shard_ci = torch.zeros_like(lambda_ci)
+                shard_ci = torch.zeros(
+                    (end_row - start_row, lambda_ci.shape[1]),
+                    device=lambda_ci.device,
+                    dtype=lambda_ci.dtype,
+                )
 
             dist.broadcast(shard_ci, src=rank_index)
 
-            start_row = rank_index * shard_ci.shape[0]
-            end_row = (rank_index + 1) * shard_ci.shape[0]
             inverse_lambda = (
                 shard_ci + lambda_damp_factor * global_lambda_mean
             ).reciprocal()
@@ -212,28 +245,30 @@ class ShardedMul:
     ):
         """
         Sharded matrix multiplication for distributed training.
-        Assumes that c=i/world_size if left or o/world_size if right.
+        Assumes that c is this rank's shard of i if left or of o if right
+        (see shard_bounds).
         gradients: [n, o, i]
         matrix_shard: [c, b] where b=i if left or b=o if right
-        Returns: [n, o, c*w] if left or [n, c*w, i] if right
+        Returns: [n, o, b] if left or [n, b, i] if right
         """
 
-        x, y = (matrix_noi.shape[1], matrix_bc.shape[0] * self.world_size)
+        x, y = (matrix_noi.shape[1], matrix_bc.shape[1])
 
         result_nxy = torch.zeros(
             matrix_noi.shape[0], x, y, device=matrix_noi.device, dtype=matrix_bc.dtype
         )
 
         for rank_index in range(self.world_size):
+            start_row, end_row = self.shard_bounds(y, rank_index)
             if rank_index == self.rank:
                 shard_bc = matrix_bc
             else:
-                shard_bc = torch.zeros_like(matrix_bc)
+                shard_bc = torch.zeros(
+                    (end_row - start_row, matrix_bc.shape[1]),
+                    device=matrix_bc.device,
+                    dtype=matrix_bc.dtype,
+                )
             dist.broadcast(shard_bc, src=rank_index)
-
-            shard_size = shard_bc.shape[0]
-            start_row = rank_index * shard_size
-            end_row = (rank_index + 1) * shard_size
 
             result_nxy[:, :, start_row:end_row].copy_(
                 torch.einsum(

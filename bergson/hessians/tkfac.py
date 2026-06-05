@@ -51,6 +51,13 @@ class TraceCovarianceCollector(HookCollectorBase):
         # a: [N, S, I], valid_masks: [N, S] -> select valid positions
         a_bi = a[mask]  # [num_valid, I]
 
+        # Augment with a ones column so A matches the [O, I+1] gradient layout
+        # produced when the bias gradient is collected.
+        if module._collect_bias:
+            a_bi = torch.cat(
+                [a_bi, a_bi.new_ones(a_bi.shape[0], 1)], dim=1
+            )  # [num_valid, I+1]
+
         module._inputs = a_bi
 
     def backward_hook(self, module: nn.Module, g: Tensor) -> None:
@@ -82,12 +89,14 @@ class TraceCovarianceCollector(HookCollectorBase):
             dist.all_reduce(local_update_ii, op=dist.ReduceOp.SUM)
 
         # Extract our shard
-        start_row_grad = self.rank * S_tcov_po.shape[0]
-        end_row_grad = (self.rank + 1) * S_tcov_po.shape[0]
+        start_row_grad, end_row_grad = self.shard_computer.shard_bounds(
+            local_update_oo.shape[0]
+        )
         update_slice_po = local_update_oo[start_row_grad:end_row_grad, :]
 
-        start_row_act = self.rank * A_tcov_ki.shape[0]
-        end_row_act = (self.rank + 1) * A_tcov_ki.shape[0]
+        start_row_act, end_row_act = self.shard_computer.shard_bounds(
+            local_update_ii.shape[0]
+        )
         update_slice_ki = local_update_ii[start_row_act:end_row_act, :]
 
         # Accumulate
