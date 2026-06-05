@@ -216,13 +216,17 @@ def build_command(run_path: Path, dataset_path: Path, **overrides) -> list[str]:
 
 def run_checked(cmd: list[str]) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True)
-    assert result.returncode == 0, f"{' '.join(cmd)} failed:\n{result.stdout}\n{result.stderr}"
+    assert (
+        result.returncode == 0
+    ), f"{' '.join(cmd)} failed:\n{result.stdout}\n{result.stderr}"
     return result.stdout + result.stderr
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_sharded_build_lifecycle(tmp_path: Path):
-    texts = [f"The number {i} comes before the number {i + 1}." for i in range(NUM_EXAMPLES)]
+    texts = [
+        f"The number {i} comes before the number {i + 1}." for i in range(NUM_EXAMPLES)
+    ]
     dataset_path = tmp_path / "data"
     Dataset.from_dict({"text": texts}).save_to_disk(str(dataset_path))
 
