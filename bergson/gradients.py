@@ -1,4 +1,3 @@
-import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -6,6 +5,7 @@ from typing import Literal, Mapping
 
 import torch
 import torch.nn as nn
+import yaml
 from torch import Tensor
 from transformers.pytorch_utils import Conv1D as HFConv1D
 
@@ -155,9 +155,8 @@ class GradientProcessor:
         if not hess_eigen_path.exists():
             hess_eigen_path = path / "preconditioners_eigen.pth"
 
-        # Load configuration
         with cfg_path.open("r") as f:
-            cfg = json.load(f)
+            cfg = yaml.safe_load(f)
 
         # Backward compatibility
         if "projection_type" not in cfg:
@@ -223,7 +222,7 @@ class GradientProcessor:
         del cfg["hessians"]
         del cfg["hessians_eigen"]
         with cfg_path.open("w") as f:
-            json.dump(cfg, f, indent=2)
+            yaml.safe_dump(cfg, f, sort_keys=False)
 
         # Save normalizers
         norm_state = {

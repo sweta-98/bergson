@@ -572,7 +572,7 @@ class ApproxUnrollingConfig(Serializable):
 class HessianConfig(Serializable):
     """Config for reducing the gradients."""
 
-    method: Literal["kfac", "tkfac", "shampoo", "autocorrelation"] = "autocorrelation"
+    method: Literal["kfac", "tkfac", "shampoo", "autocorrelation"]
     """Method for approximating the Hessian."""
 
     ev_correction: bool = False

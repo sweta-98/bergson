@@ -62,7 +62,7 @@ def _run_bergson_build(
         prompt_column: Column name for prompts.
         completion_column: Column name for completions.
         projection_dim: Random projection dimensionality.
-        skip_hessians: Whether to skip hessian computation.
+        skip_hessians: If False, also approximate an autocorrelation Hessian.
         label: Description for error messages (e.g. "eval", "majority eval").
     """
     import subprocess
@@ -87,8 +87,8 @@ def _run_bergson_build(
         "--token_batch_size",
         "6000",
     ]
-    if skip_hessians:
-        cmd.append("--skip_hessians")
+    if not skip_hessians:
+        cmd += ["--method", "autocorrelation"]
 
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)

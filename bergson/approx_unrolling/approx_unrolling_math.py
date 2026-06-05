@@ -9,13 +9,15 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from bergson.config import (
+from bergson.cli.commands import Score
+from bergson.config.config import (
     ApproxUnrollingConfig,
     DistributedConfig,
     IndexConfig,
     PreprocessConfig,
     ScoreConfig,
 )
+from bergson.config.config_io import save_run_config
 from bergson.data import load_scores
 from bergson.distributed import init_dist, launch_distributed_run
 from bergson.hessians.apply_hessian import EkfacApplicator, EkfacConfig
@@ -241,7 +243,12 @@ def score_per_segment_and_aggregate(
         seg_index_cfg.run_path = str(scores_dir)
         seg_index_cfg.projection_dim = 0
         score_cfg = ScoreConfig(query_path=str(query_grad_segment_paths[l]))
-        score_dataset(seg_index_cfg, score_cfg, PreprocessConfig())
+        seg_preprocess_cfg = PreprocessConfig()
+        save_run_config(
+            Score(score_cfg, seg_index_cfg, seg_preprocess_cfg),
+            seg_index_cfg.partial_run_path,
+        )
+        score_dataset(seg_index_cfg, score_cfg, seg_preprocess_cfg)
         score_dirs.append(scores_dir)
 
     total = load_scores(score_dirs[0]).get(slice(None), 0)

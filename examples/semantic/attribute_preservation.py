@@ -855,7 +855,6 @@ def score_attribute_eval(
             str(index_cfg.projection_dim or 16),
             "--token_batch_size",
             token_batch_size,
-            "--skip_hessians",
         ]
         print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -1274,7 +1273,6 @@ def score_attribute_eval_with_pca(
             str(index_cfg.projection_dim or 16),
             "--token_batch_size",
             token_batch_size,
-            "--skip_hessians",
         ]
         print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -1860,7 +1858,6 @@ def score_majority_style_eval(
             str(index_cfg.projection_dim or 16),
             "--token_batch_size",
             "6000",
-            "--skip_hessians",
         ]
         print("Running:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)

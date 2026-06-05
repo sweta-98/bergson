@@ -1,26 +1,13 @@
-import json
 import warnings
 from pathlib import Path
 from typing import Literal
 
 import torch
 
-from bergson.config import HessianConfig
+from bergson.config.config import HessianConfig
+from bergson.config.config_io import load_subconfig
 from bergson.gradients import GradientProcessor
 from bergson.utils.math import compute_lambda, damped_psd_power
-
-
-def assert_autocorrelation_hessian(path: Path) -> None:
-    """Verify that ``path`` contains an autocorrelation hessian."""
-    cfg_path = path / "hessian_config.yaml"
-    assert cfg_path.exists(), f"Missing 'hessian_config.yaml' in '{path}'."
-
-    hessian_cfg = HessianConfig.load_yaml(cfg_path)
-    assert hessian_cfg.method == "autocorrelation", (
-        f"Hessian at '{path}' was computed with method "
-        f"'{hessian_cfg.method}'; mix_autocorrelation_matrices only "
-        f"supports autocorrelation."
-    )
 
 
 def normalize_grad(
@@ -58,6 +45,18 @@ def normalize_flat_grad(
     else:
         warnings.warn("Gradient norm is zero, skipping normalization")
     return grad.to(final_dtype)
+
+
+def assert_autocorrelation_hessian(path: Path) -> None:
+    """Verify that ``path`` contains an autocorrelation hessian."""
+    hessian_cfg = load_subconfig(path, "hessian_cfg", HessianConfig)
+
+    assert hessian_cfg is not None, f"No hessian_cfg recorded at '{path}'."
+    assert hessian_cfg.method == "autocorrelation", (
+        f"Hessian at '{path}' was computed with method "
+        f"'{hessian_cfg.method}'; mix_autocorrelation_matrices only "
+        f"supports autocorrelation."
+    )
 
 
 def mix_autocorrelation_matrices(
@@ -101,7 +100,7 @@ def mix_autocorrelation_matrices(
     q_proc = GradientProcessor.load(query_path)
     i_proc = GradientProcessor.load(index_path)
 
-    # Auto-compute mixing coefficient (§A.1.3 of Chang et al., 2024)
+    # Compute mixing coefficient (§A.1.3 of Chang et al., 2024)
     mixing_coefficient = compute_lambda(
         query_eigen=q_proc.hessians_eigen,
         index_eigen=i_proc.hessians_eigen,
@@ -126,16 +125,6 @@ def mix_autocorrelation_matrices(
         include_bias=q_proc.include_bias,
     )
     mixed_proc.save(output_path)
-
-    # Save provenance metadata
-    mix_config = {
-        "query_path": str(query_path),
-        "index_path": str(index_path),
-        "mixing_coefficient": mixing_coefficient,
-        "target_downweight_components": target_downweight_components,
-    }
-    with (output_path / "mix_config.yaml").open("w") as f:
-        json.dump(mix_config, f, indent=2)
 
     return output_path
 

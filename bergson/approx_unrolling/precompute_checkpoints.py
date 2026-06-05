@@ -8,7 +8,7 @@ from bergson.collector.collector import (
     CollectorComputer,
     fwd_bwd_hessian_factory,
 )
-from bergson.config import (
+from bergson.config.config import (
     ApproxUnrollingConfig,
     HessianConfig,
     IndexConfig,
@@ -183,7 +183,7 @@ def precompute_checkpoint_hessians(
         )
 
         ckpt_index_cfg = deepcopy(index_cfg)
-        ckpt_index_cfg.run_path = str(ckpt_dir)
+        ckpt_index_cfg.run_path = str(out_path)
         ckpt_index_cfg.model = ckpt
 
         ckpt_hessian_cfg = deepcopy(hessian_cfg)

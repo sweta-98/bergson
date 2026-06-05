@@ -26,7 +26,12 @@ from transformers import (
     PreTrainedModel,
 )
 
-from bergson.config import AttributionConfig, DataConfig, IndexConfig, ModelConfig
+from bergson.config.config import (
+    AttributionConfig,
+    DataConfig,
+    IndexConfig,
+    ModelConfig,
+)
 from bergson.data import (
     load_data_string,
     tokenize,

@@ -303,15 +303,16 @@ def ekfac_results_path(
         method="kfac", ev_correction=True, use_dataset_labels=True
     )
 
-    # Check for cached results (approximate_hessians appends /{method} to run_path)
+    # Each method writes to its own subdirectory (`<base_run_path>/<method>`).
     expected_path = os.path.join(base_run_path, hessian_cfg.method)
     if os.path.exists(expected_path) and not overwrite:
         print(f"Using existing EKFAC results in {expected_path}")
         return expected_path
 
     setup = ground_truth_setup
-    # Copy cfg with updated fields (avoids mutating the shared fixture)
-    cfg = replace(setup["cfg"], run_path=base_run_path, debug=True, fsdp=use_fsdp)
+    # Copy cfg with updated fields (avoids mutating the shared fixture).
+    # approximate_hessians writes to run_path as-is, so point it at the method dir.
+    cfg = replace(setup["cfg"], run_path=expected_path, debug=True, fsdp=use_fsdp)
     cfg.distributed = replace(cfg.distributed, nproc_per_node=world_size)
 
     print("\nRunning EKFAC computation...")

@@ -11,7 +11,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.distributed.elastic.multiprocessing import DefaultLogsSpecs, start_processes
 
-from bergson.config import DistributedConfig
+from bergson.config.config import DistributedConfig
 from bergson.utils.utils import get_device, get_device_index
 
 

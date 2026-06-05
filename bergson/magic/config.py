@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from ..config import ValidationConfig
+from ..config.config import ValidationConfig
 
 MagicSaveMode = Literal["all", "sqrt", "log"]
 

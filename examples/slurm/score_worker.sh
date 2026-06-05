@@ -34,7 +34,6 @@ python -m bergson score \
     --score individual \
     --dataset NeelNanda/pile-10k \
     --model EleutherAI/pythia-14m \
-    --skip_hessians \
     --token_batch_size 15500 \
     --truncation
 

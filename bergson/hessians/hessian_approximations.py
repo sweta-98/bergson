@@ -10,7 +10,7 @@ from bergson.collector.collector import (
     CollectorComputer,
     fwd_bwd_hessian_factory,
 )
-from bergson.config import AttentionConfig, HessianConfig, IndexConfig
+from bergson.config.config import AttentionConfig, HessianConfig, IndexConfig
 from bergson.data import allocate_batches
 from bergson.distributed import init_dist, launch_distributed_run
 from bergson.hessians.eigenvectors import (
@@ -70,12 +70,7 @@ def approximate_hessians(
     """
     if index_cfg.debug:
         setup_reproducibility()
-    index_cfg.run_path = index_cfg.run_path + f"/{hessian_cfg.method}"
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
-
-    # Save both configs
-    index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
-    hessian_cfg.save_yaml(index_cfg.partial_run_path / "hessian_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 

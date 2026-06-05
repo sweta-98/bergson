@@ -11,7 +11,8 @@ from datasets import Dataset, IterableDataset
 from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
-from bergson.config import IndexConfig, PreprocessConfig, ScoreConfig
+from bergson.config.config import IndexConfig, PreprocessConfig, ScoreConfig
+from bergson.config.config_io import load_subconfig
 from bergson.data import (
     allocate_batches,
     load_gradients,
@@ -68,11 +69,10 @@ def get_query_grads(
         target_modules = metadata["dtype"]["names"]
         grad_sizes = metadata["grad_sizes"]
 
-    preprocess_path = Path(query_path / "preprocess_config.yaml")
-    if preprocess_path.exists():
-        preprocess_cfg = PreprocessConfig.load(preprocess_path)
-    else:
-        preprocess_cfg = PreprocessConfig()
+    preprocess_cfg = (
+        load_subconfig(query_path, "preprocess_cfg", PreprocessConfig)
+        or PreprocessConfig()
+    )
 
     if not score_cfg.modules:
         score_cfg.modules = target_modules
@@ -370,9 +370,6 @@ def score_dataset(
         Preprocessing configuration for gradient normalization/preconditioning.
     """
     index_cfg.partial_run_path.mkdir(parents=True, exist_ok=True)
-
-    index_cfg.save_yaml(index_cfg.partial_run_path / "index_config.yaml")
-    score_cfg.save_yaml(index_cfg.partial_run_path / "score_config.yaml")
 
     ds, _ = setup_data_pipeline(index_cfg)
 

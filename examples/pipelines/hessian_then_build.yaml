@@ -1,27 +1,24 @@
-# NOTE: model is pinned to Pythia (nn.Linear) instead of GPT-2 because KFAC's
-# _init_covariance_dict assumes nn.Linear weight ordering and crashes on
-# HuggingFace Conv1D modules. See issue #254 — swap back to gpt2 once fixed.
+# Run with `bergson examples/pipelines/hessian_then_build.yaml`
 
-# Run with:
-#   bergson pipeline examples/pipelines/hessian_then_build.yaml
+run_path: runs/hessian_then_build
+steps:
+  - hessian:
+      hessian_cfg:
+        method: kfac
+      index_cfg:
+        run_path: runs/example_hessian
+        overwrite: true
+        model: EleutherAI/pythia-14m
+        token_batch_size: 1024
+        data:
+          chunk_length: 1024
 
-- hessian:
-    hessian_cfg:
-      method: kfac
-    index_cfg:
-      run_path: runs/example_hessian
-      overwrite: true
-      model: EleutherAI/pythia-14m
-      token_batch_size: 1024
-      data:
-        chunk_length: 1024
-
-- build:
-    index_cfg:
-      run_path: runs/example_build
-      overwrite: true
-      model: EleutherAI/pythia-14m
-      token_batch_size: 1024
-      data:
-        chunk_length: 1024
-    preprocess_cfg: {}
+  - build:
+      index_cfg:
+        run_path: runs/example_build
+        overwrite: true
+        model: EleutherAI/pythia-14m
+        token_batch_size: 1024
+        data:
+          chunk_length: 1024
+      preprocess_cfg: {}

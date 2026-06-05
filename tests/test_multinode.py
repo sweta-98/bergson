@@ -53,7 +53,6 @@ def test_multinode_build_two_nodes_one_gpu_each(tmp_path: Path):
         "8",
         "--token_batch_size",
         "256",
-        "--skip_hessians",
         "--nnode",
         "2",
         "--nproc_per_node",
