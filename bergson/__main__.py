@@ -65,7 +65,7 @@ def run_config(config_path: str, command_registry: dict[str, type]) -> None:
     if multi:
         # Optional top-level run path for a multi-step pipeline
         run_path = config.get("run_path")
-        
+
         save_pipeline_config(steps, run_path)
 
     for i, (cmd_name, cmd) in enumerate(steps, start=1):

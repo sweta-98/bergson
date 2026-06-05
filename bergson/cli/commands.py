@@ -2,7 +2,7 @@
 
 Each command is a thin dataclass that validates, persists its ``config.yaml``,
 and dispatches. They live here rather than in ``__main__`` so pipelines can
-import lower-level commands for config serialization without importing the 
+import lower-level commands for config serialization without importing the
 corresponding CLI entrypoint.
 """
 

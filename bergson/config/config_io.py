@@ -5,11 +5,10 @@ from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 
-import yaml
 import petname
+import yaml
 
 from bergson.utils.logger import get_logger
-
 
 CONFIG_FILENAME = "config.yaml"
 
@@ -84,7 +83,7 @@ def save_pipeline_config(steps: list[tuple[str, Any]], run_path: str | Path | No
 
     It can be run using ``bergson <run_path>/config.yaml``.
 
-    The pipeline config uses the same format as one-step command configs, but is saved 
+    The pipeline config uses the same format as one-step command configs, but is saved
     to a ``run_path`` directory unique to the pipeline run. ``steps`` is the list of
     commands that ran.
     """
@@ -110,7 +109,7 @@ def read_config(path: str | Path) -> dict[str, Any]:
     path = _resolve(path)
     with path.open() as f:
         config = yaml.safe_load(f)
-    
+
     if not isinstance(config, dict) or not isinstance(config.get("steps"), list):
         raise ValueError(
             f"{path} must be a mapping with a `steps:` list of "
@@ -138,10 +137,10 @@ def load_subconfig(
     field: str,
     config_cls: type[T],
 ) -> T | None:
-    """Hydrate one configuration dataclass (e.g. ``field="index_cfg", 
+    """Hydrate one configuration dataclass (e.g. ``field="index_cfg",
     config_cls=IndexConfig``) from a ``config.yaml``.
 
-    Searches every step for ``field`` and returns the first match 
+    Searches every step for ``field`` and returns the first match
     or ``None``.
     """
     if not _resolve(path).exists():
