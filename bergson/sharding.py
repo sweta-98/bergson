@@ -172,7 +172,7 @@ class ShardedMemmap:
     ``shards`` instead.
     """
 
-    def __init__(self, arrays: Sequence[np.ndarray]):
+    def __init__(self, arrays: "Sequence[np.ndarray | ShardedMemmap]"):
         if not arrays:
             raise ValueError("ShardedMemmap needs at least one array")
         head = arrays[0]
@@ -200,6 +200,10 @@ class ShardedMemmap:
     def copy(self) -> np.ndarray:
         """Materialize the full concatenated array."""
         return self[:]
+
+    def reshape(self, *shape: Any) -> np.ndarray:
+        """Materialize the full concatenated array and reshape it."""
+        return self[:].reshape(*shape)
 
     def __array__(self, dtype: Any = None, copy: Any = None) -> np.ndarray:
         out = self[:]
