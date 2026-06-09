@@ -11,7 +11,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from bergson.collector.collector import HookCollectorBase
-from bergson.hessians.sharded_computation import ShardedMul
+from bergson.hessians.sharded_computation import ShardedMul, shard_bounds
 from bergson.utils.logger import get_logger
 from bergson.utils.utils import (
     assert_type,
@@ -115,6 +115,11 @@ class LambdaCollector(HookCollectorBase):
         name = assert_type(str, module._name)
         # a shape: [N, S, I]
 
+        # Augment with a ones column to match the [I+1, I+1] activation
+        # covariance eigenvectors computed when the bias gradient is collected.
+        if module._collect_bias:
+            a = torch.cat([a, a.new_ones(*a.shape[:-1], 1)], dim=-1)  # [N, S, I+1]
+
         # Transform: a @ eigen_a
         transformed = self.shard_computer._matmul(
             vector_nsa=a, matrix_cb=self.eigen_a[name]
@@ -147,9 +152,9 @@ class LambdaCollector(HookCollectorBase):
             dist.all_reduce(transformed_grad_shard, op=dist.ReduceOp.SUM)
 
         # Extract our shard
-        shard_size = transformed_grad_shard.shape[0] // self.world_size
-        start_row = self.rank * shard_size
-        end_row = (self.rank + 1) * shard_size
+        start_row, end_row = self.shard_computer.shard_bounds(
+            transformed_grad_shard.shape[0]
+        )
 
         # Accumulate (with CPU offloading for memory efficiency)
         if name not in self.eigenvalue_corrections:
@@ -236,7 +241,7 @@ def compute_eigendecomposition(
         total_processed: Number of samples used to compute covariance.
 
     Returns:
-        Per-key eigenvalue shards (each `[m/world_size]`) on CPU. The
+        Per-key eigenvalue shards (rows per shard_bounds) on CPU. The
         eigenvectors are written to disk; the eigenvalues are returned so
         callers (e.g. `save_uncorrected_eigenvalues`) can use them without
         reloading.
@@ -371,14 +376,27 @@ def save_uncorrected_eigenvalues(
         eigenvalue_a_shard = eigenvalues_a[key].to(device)
 
         if world_size > 1:
+            # Shards may be uneven, so sum the shard sizes to get the full dimension
+            # then broadcast each rank's shard into place.
+            full_dim = torch.tensor(eigenvalue_a_shard.shape[0], device=device)
+            dist.all_reduce(full_dim, op=dist.ReduceOp.SUM)
+            m = int(full_dim.item())
+
             eigenvalue_a_full = torch.empty(
-                eigenvalue_a_shard.shape[0] * world_size,
-                device=device,
-                dtype=eigenvalue_a_shard.dtype,
+                m, device=device, dtype=eigenvalue_a_shard.dtype
             )
-            dist.all_gather_into_tensor(
-                eigenvalue_a_full, eigenvalue_a_shard.contiguous()
-            )
+            for rank_index in range(world_size):
+                start_row, end_row = shard_bounds(m, rank_index, world_size)
+                if rank_index == rank:
+                    shard = eigenvalue_a_shard.contiguous()
+                else:
+                    shard = torch.empty(
+                        end_row - start_row,
+                        device=device,
+                        dtype=eigenvalue_a_shard.dtype,
+                    )
+                dist.broadcast(shard, src=rank_index)
+                eigenvalue_a_full[start_row:end_row] = shard
         else:
             eigenvalue_a_full = eigenvalue_a_shard
 
@@ -418,9 +436,8 @@ def _gather_and_shard_along_dim_0(
 
         dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
 
-        m = full_shape[0]
-        shard_size = m // world_size
-        shard = tensor[rank * shard_size : (rank + 1) * shard_size].contiguous()
+        start_row, end_row = shard_bounds(full_shape[0], rank, world_size)
+        shard = tensor[start_row:end_row].contiguous()
         result_dict[key] = shard.to(device="cpu")
 
         del tensor

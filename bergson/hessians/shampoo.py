@@ -50,6 +50,13 @@ class ShampooCollector(HookCollectorBase):
         # a: [N, S, I], valid_masks: [N, S] -> select valid positions
         a_bi = a[mask]  # [num_valid, I]
 
+        # Augment with a ones column so the [O, I+1] per-batch gradient matches
+        # the layout produced when the bias gradient is collected.
+        if module._collect_bias:
+            a_bi = torch.cat(
+                [a_bi, a_bi.new_ones(a_bi.shape[0], 1)], dim=1
+            )  # [num_valid, I+1]
+
         module._inputs = a_bi
 
     def backward_hook(self, module: nn.Module, g: Tensor) -> None:
@@ -74,12 +81,14 @@ class ShampooCollector(HookCollectorBase):
             dist.all_reduce(local_update_ii, op=dist.ReduceOp.SUM)
 
         # Extract our shard
-        start_row_grad = self.rank * S_shampoo_po.shape[0]
-        end_row_grad = (self.rank + 1) * S_shampoo_po.shape[0]
+        start_row_grad, end_row_grad = self.shard_computer.shard_bounds(
+            local_update_oo.shape[0]
+        )
         update_slice_po = local_update_oo[start_row_grad:end_row_grad, :]
 
-        start_row_act = self.rank * A_shampoo_ki.shape[0]
-        end_row_act = (self.rank + 1) * A_shampoo_ki.shape[0]
+        start_row_act, end_row_act = self.shard_computer.shard_bounds(
+            local_update_ii.shape[0]
+        )
         update_slice_ki = local_update_ii[start_row_act:end_row_act, :]
 
         # Accumulate
@@ -100,11 +109,13 @@ class ShampooCollector(HookCollectorBase):
 
         # Normalize activation covariance by trace
         for name, A_shampoo_ki in self.A_shampoo_dict.items():
-            rows_per_rank = A_shampoo_ki.shape[0]
             # Extract diagonal elements from this shard
-            # For row i in shard, the resp. diagonal column is i + rank * rows_per_rank
-            diag_indices = torch.arange(rows_per_rank, device=A_shampoo_ki.device)
-            diag_col_indices = diag_indices + self.rank * rows_per_rank
+            # For row i in shard, the resp. diagonal column is i + shard start
+            start_row, _ = self.shard_computer.shard_bounds(A_shampoo_ki.shape[1])
+            diag_indices = torch.arange(
+                A_shampoo_ki.shape[0], device=A_shampoo_ki.device
+            )
+            diag_col_indices = diag_indices + start_row
             local_trace = A_shampoo_ki[diag_indices, diag_col_indices].sum()
 
             # All-reduce to get full trace
