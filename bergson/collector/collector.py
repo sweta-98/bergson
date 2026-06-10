@@ -436,6 +436,46 @@ class HookCollectorBase(ContextDecorator, ABC):
         a_projection = self.projection(name, p, i, "right", g.device, g.dtype).T
         return g_projection @ P @ a_projection
 
+    def double_sided_projection_with_bias(
+        self,
+        name: str,
+        g: Tensor,
+        a: Tensor,
+        bias_grad: Tensor,
+        p: int,
+        o: int,
+        i: int,
+    ) -> Tensor:
+        """Double-sided projection of the gradient with the bias column appended,
+        without materializing the full [O, I+1] gradient with an outer product.
+
+        Equivalent to forming ``cat([g ⊗ a, bias_grad], -1)`` and calling
+        ``double_sided_projection`` with ``i + 1``, because
+           
+            ``let L = left side projection matrix``
+            ``let R = right side projection matrix``
+            ``L @ cat([gᵀa, b], -1) @ Rᵀ = (g @ Lᵀ)ᵀ @ (a @ Rᵀ[:i]) + (b @ Lᵀ) ⊗ Rᵀ[i]``
+
+        Only valid when nothing elementwise (e.g. Adam normalization) is applied
+        to the outer product.
+        """
+        g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
+        a_projection = self.projection(name, p, i + 1, "right", g.device, g.dtype).T
+
+        g = g @ g_projection.T  # [N, S, p]
+        a = a @ a_projection[:i]  # [N, S, p]
+        bias_grad = bias_grad @ g_projection.T  # [N, p] or [N, S, p]
+
+        if self.attribute_tokens:
+            # [N, S, p, 1] * [N, S, 1, p] → [N, S, p, p]
+            P = g.unsqueeze(-1) * a.unsqueeze(-2)
+        else:
+            P = g.mT @ a  # [N, p, S] @ [N, S, p] → [N, p, p]
+
+        # Outer product of the projected bias gradient with the bias row of the
+        # right projection: [..., p, 1] * [p] → [..., p, p]
+        return P + bias_grad.unsqueeze(-1) * a_projection[i]
+
     def _compute_gradient(self, module: nn.Module, g: Float[Tensor, "N S O"]) -> Tensor:
         """Compute the per-sample (or per-token) module gradient from cached activations
         and the output gradient.
@@ -502,15 +542,18 @@ class HookCollectorBase(ContextDecorator, ABC):
             g = g * g_factor.type_as(g)  # [N, S, O] * [O] → [N, S, O]
 
             if self.attribute_tokens:
-                if bias_grad is not None:
+                if bias_grad is not None and p is not None:
+                    # a was not projected in forward; project both factors and
+                    # add the projected bias column without forming [N,S,O,I+1]
+                    P = self.double_sided_projection_with_bias(
+                        name, g, a, bias_grad, p, o, i
+                    )
+                elif bias_grad is not None:
                     # a was not projected in forward
                     # [N, S, O, 1] * [N, S, 1, I] → [N, S, O, I]
                     P = g.unsqueeze(-1) * a.unsqueeze(-2)
                     # [N, S, O, I+1]
                     P = torch.cat([P, bias_grad.unsqueeze(-1)], dim=-1)
-                    i += 1
-                    if p is not None:
-                        P = self.double_sided_projection(name, P, g, p, o, i)
                 else:
                     # a was already projected in forward; project g individually
                     if p is not None:
@@ -523,12 +566,13 @@ class HookCollectorBase(ContextDecorator, ABC):
                 P = P.flatten(2)  # [N, S, grad_dim]
                 P = P[self._current_valid_mask]  # [total_valid, grad_dim]
             else:
-                if bias_grad is not None:
+                if bias_grad is not None and p is not None:
+                    P = self.double_sided_projection_with_bias(
+                        name, g, a, bias_grad, p, o, i
+                    )
+                elif bias_grad is not None:
                     P = g.mT @ a  # [N, O, I]
                     P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N, O, I+1]
-                    i += 1
-                    if p is not None:
-                        P = self.double_sided_projection(name, P, g, p, o, i)
                 else:
                     # a was already projected in forward; project g individually
                     if p is not None:
@@ -548,28 +592,36 @@ class HookCollectorBase(ContextDecorator, ABC):
             else:
                 bias_grad = None
 
-            # a is projected in forward unless deferred by bias collection
-            if p is not None and not module._collect_bias:
-                g_projection = self.projection(name, p, o, "left", g.device, g.dtype)
-                g = g @ g_projection.T  # [N, S, p]
-
-            if self.attribute_tokens:
-                # [N, S, O/p, 1] * [N, S, 1, I/q] → [N, S, O/p, I/q]
-                P = g.unsqueeze(-1) * a.unsqueeze(-2)
-                if bias_grad is not None:
-                    P = torch.cat([P, bias_grad.unsqueeze(-1)], dim=-1)
-                    i += 1
-                if p is not None and module._collect_bias:
-                    P = self.double_sided_projection(name, P, g, p, o, i)
-                P = P.flatten(2)  # [N, S, grad_dim]
-                P = P[self._current_valid_mask]  # [total_valid, grad_dim]
+            if p is not None and module._collect_bias:
+                # a was not projected in forward; project both factors and add
+                # the projected bias column without forming [N, (S,) O, I+1]
+                assert bias_grad is not None
+                P = self.double_sided_projection_with_bias(
+                    name, g, a, bias_grad, p, o, i
+                )
+                if self.attribute_tokens:
+                    P = P.flatten(2)  # [N, S, grad_dim]
+                    P = P[self._current_valid_mask]  # [total_valid, grad_dim]
             else:
-                P = g.mT @ a  # [N, O/p, I/p]
-                if bias_grad is not None:
-                    P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N, O, I+1]
-                    i += 1
-                if p is not None and module._collect_bias:
-                    P = self.double_sided_projection(name, P, g, p, o, i)
+                # a was already projected in forward if p is set;
+                # project g individually
+                if p is not None:
+                    g_projection = self.projection(
+                        name, p, o, "left", g.device, g.dtype
+                    )
+                    g = g @ g_projection.T  # [N, S, p]
+
+                if self.attribute_tokens:
+                    # [N, S, O/p, 1] * [N, S, 1, I/q] → [N, S, O/p, I/q]
+                    P = g.unsqueeze(-1) * a.unsqueeze(-2)
+                    if bias_grad is not None:
+                        P = torch.cat([P, bias_grad.unsqueeze(-1)], dim=-1)
+                    P = P.flatten(2)  # [N, S, grad_dim]
+                    P = P[self._current_valid_mask]  # [total_valid, grad_dim]
+                else:
+                    P = g.mT @ a  # [N, O/p, I/p]
+                    if bias_grad is not None:
+                        P = torch.cat([P, bias_grad.unsqueeze(2)], dim=2)  # [N,O,I+1]
 
         P = P.flatten(1).clamp_(self.lo, self.hi)
         return P
