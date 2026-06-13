@@ -653,3 +653,71 @@ def test_in_features_restored_after_collector(test_params, simple_model_class):
                 f"{name}.in_features changed from {original_in_features[name]} "
                 f"to {layer.in_features} after collector context"
             )
+
+
+@pytest.mark.parametrize("normalizer_type", ["none", "adafactor"])
+def test_projected_bias_gradients_match_full_projection(
+    normalizer_type, test_params, simple_model_class
+):
+    """Ground truth for the factored projection-with-bias path.
+
+    With projection enabled the collector projects g and a before the outer
+    product and adds the projected bias column, instead of materializing the
+    full [O, I+1] gradient. The result must equal L @ [G | b] @ R.T computed
+    explicitly from autograd gradients.
+    """
+    temp_dir = Path(tempfile.mkdtemp())
+    S, I = test_params["S"], test_params["I"]
+    P = 4
+
+    torch.manual_seed(0)
+    model = simple_model_class(include_bias=True)()
+
+    normalizers = {}
+    if normalizer_type == "adafactor":
+        for name in ["fc1", "fc2"]:
+            layer = model.get_submodule(name)
+            normalizers[name] = AdafactorNormalizer(
+                row=torch.rand(layer.out_features) + 0.1,
+                col=torch.rand(layer.in_features) + 0.1,
+                bias_avg_sq=torch.rand(layer.out_features) + 0.1,
+            )
+
+    cfg = IndexConfig(run_path=str(temp_dir / "run"), skip_index=True)
+    processor = GradientProcessor(
+        normalizers=normalizers, projection_dim=P, include_bias=True
+    )
+    dummy_data = Dataset.from_dict({"input_ids": [[1] * 10]})
+    collector = GradientCollector(
+        model=model,
+        cfg=cfg,
+        data=dummy_data,
+        processor=processor,
+        target_modules={"fc1", "fc2"},
+    )
+
+    # Batch size 1 so autograd's aggregate grads equal the per-sample grads
+    x = torch.randn(1, S, I)
+    with collector:
+        model.zero_grad()
+        loss = (model(x) ** 2).sum()
+        loss.backward()
+
+    for name in ["fc1", "fc2"]:
+        layer = model.get_submodule(name)
+        assert layer.weight.grad is not None and layer.bias.grad is not None
+        weight_grad = layer.weight.grad.clone()
+        bias_grad = layer.bias.grad.clone()
+
+        if normalizer_type == "adafactor":
+            weight_grad = normalizers[name].normalize_weight(weight_grad)
+            bias_grad = normalizers[name].normalize_bias(bias_grad)
+
+        full = torch.cat([weight_grad, bias_grad.unsqueeze(1)], dim=1)  # [O, I+1]
+        o, i = layer.out_features, layer.in_features
+        L = collector.projection(name, P, o, "left", full.device, full.dtype)
+        R = collector.projection(name, P, i + 1, "right", full.device, full.dtype)
+        expected = L @ full @ R.T
+
+        collected = collector.mod_grads[name].squeeze(0).view(P, P)
+        torch.testing.assert_close(collected, expected, atol=1e-4, rtol=1e-4)
