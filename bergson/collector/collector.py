@@ -451,7 +451,7 @@ class HookCollectorBase(ContextDecorator, ABC):
 
         Equivalent to forming ``cat([g ⊗ a, bias_grad], -1)`` and calling
         ``double_sided_projection`` with ``i + 1``, because
-           
+
             ``let L = left side projection matrix``
             ``let R = right side projection matrix``
             ``L @ cat([gᵀa, b], -1) @ Rᵀ = (g @ Lᵀ)ᵀ @ (a @ Rᵀ[:i]) + (b @ Lᵀ) ⊗ Rᵀ[i]``
