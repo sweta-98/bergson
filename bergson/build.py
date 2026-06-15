@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 
 from bergson.collection import collect_gradients
 from bergson.config import HessianConfig, IndexConfig, PreprocessConfig
-from bergson.data import allocate_batches
+from bergson.data import allocate_batches, allocate_dpo_batches
 from bergson.distributed import (
     cap_world_size_to_dataset,
     launch_distributed_run,
@@ -93,11 +93,18 @@ def build_worker(
     }
 
     if isinstance(ds, Dataset):
-        batches = allocate_batches(
-            ds["length"][:],
-            index_cfg.token_batch_size,
-            max_batch_size=index_cfg.max_batch_size,
-        )
+        if index_cfg.loss_fn == "dpo":
+            batches = allocate_dpo_batches(
+                ds["length"][:],
+                index_cfg.token_batch_size,
+                max_batch_size=index_cfg.max_batch_size,
+            )
+        else:
+            batches = allocate_batches(
+                ds["length"][:],
+                index_cfg.token_batch_size,
+                max_batch_size=index_cfg.max_batch_size,
+            )
         kwargs["batches"] = batches
         collect_gradients(**kwargs)
     else:
@@ -109,11 +116,18 @@ def build_worker(
             if not buf:
                 return
             ds_shard = assert_type(Dataset, Dataset.from_list(buf))
-            batches = allocate_batches(
-                ds_shard["length"][:],
-                index_cfg.token_batch_size,
-                max_batch_size=index_cfg.max_batch_size,
-            )
+            if index_cfg.loss_fn == "dpo":
+                batches = allocate_dpo_batches(
+                    ds_shard["length"][:],
+                    index_cfg.token_batch_size,
+                    max_batch_size=index_cfg.max_batch_size,
+                )
+            else:
+                batches = allocate_batches(
+                    ds_shard["length"][:],
+                    index_cfg.token_batch_size,
+                    max_batch_size=index_cfg.max_batch_size,
+                )
             kwargs["ds"] = ds_shard
             kwargs["batches"] = batches
             collect_gradients(**kwargs)

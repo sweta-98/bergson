@@ -1,3 +1,4 @@
+import dataclasses
 import heapq
 import json
 import math
@@ -674,9 +675,29 @@ def tokenize(
         return_attention_mask=False,
         return_length=True,
         truncation=args.truncation,
+        skip_special_tokens=True,
     )
     if args.truncation and max_length is not None:
         kwargs["max_length"] = max_length
+
+    if args.completion_column and args.rejected_column:
+        # DPO: tokenize chosen and rejected completions separately and return
+        # prefixed column groups for expand_dpo_dataset() to consume.
+        chosen_args = dataclasses.replace(args, rejected_column="")
+        rejected_args = dataclasses.replace(
+            args, completion_column=args.rejected_column, rejected_column=""
+        )
+        chosen = tokenize(batch, args=chosen_args, tokenizer=tokenizer, max_length=max_length)
+        rejected = tokenize(batch, args=rejected_args, tokenizer=tokenizer, max_length=max_length)
+        return {
+            "chosen_input_ids": chosen["input_ids"],
+            "chosen_labels": chosen["labels"],
+            "chosen_length": chosen["length"],
+            "rejected_input_ids": rejected["input_ids"],
+            "rejected_labels": rejected["labels"],
+            "rejected_length": rejected["length"],
+        }
+
     if args.completion_column:
         # We're dealing with a prompt-completion dataset
         convos = [
@@ -698,6 +719,7 @@ def tokenize(
     # Make sure we only compute loss on the assistant's responses
     strings = tokenizer.apply_chat_template(convos, tokenize=False)
     encodings = tokenizer(strings, **kwargs)
+    print(encodings)
     labels_list: list[list[int]] = []
 
     for i, convo in enumerate(convos):
@@ -716,7 +738,7 @@ def tokenize(
             if msg["role"] != "assistant":
                 continue
 
-            ans = msg["content"]
+            ans = msg["content"].strip()  # strip whitespace to avoid chat template issues
             start = strings[i].rfind(ans, 0, search_end)
             if start < 0:
                 print("String under test: ", strings[i])
@@ -761,6 +783,81 @@ def tokenize(
         labels_list.append(labels)
 
     return dict(**encodings, labels=labels_list)
+
+
+def expand_dpo_dataset(ds: Dataset) -> Dataset:
+    """Expand a DPO-tokenized dataset into a standard 2N-row dataset.
+
+    Expects ``ds`` to have columns ``chosen_input_ids``, ``chosen_labels``,
+    ``chosen_length``, ``rejected_input_ids``, ``rejected_labels``, and
+    ``rejected_length`` (produced by :func:`tokenize` when
+    ``DataConfig.rejected_column`` is set).
+
+    Returns a new dataset with N chosen rows (indices ``0..N-1``) followed by
+    N rejected rows (indices ``N..2N-1``), using the standard ``input_ids``,
+    ``labels``, and ``length`` columns.  This layout is required by the DPO
+    loss in :func:`~bergson.collector.collector.fwd_bwd_factory`.
+    """
+    chosen = Dataset.from_dict(
+        {
+            "input_ids": ds["chosen_input_ids"],
+            "labels": ds["chosen_labels"],
+            "length": ds["chosen_length"],
+        }
+    )
+    rejected = Dataset.from_dict(
+        {
+            "input_ids": ds["rejected_input_ids"],
+            "labels": ds["rejected_labels"],
+            "length": ds["rejected_length"],
+        }
+    )
+    return concatenate_datasets([chosen, rejected])
+
+
+def allocate_dpo_batches(
+    doc_lengths: list[int],
+    N: int,
+    seed: int = 42,
+    max_batch_size: int | None = None,
+) -> list[list[int]]:
+    """Allocate DPO batches from a ``2 * num_pairs``-length dataset.
+
+    The dataset must be laid out so that rows ``0..num_pairs-1`` are the chosen
+    examples and rows ``num_pairs..2*num_pairs-1`` are the corresponding
+    rejected examples (as produced by :func:`expand_dpo_dataset`).
+
+    Each returned batch has the form
+    ``[chosen_0, ..., chosen_{k-1}, rejected_0, ..., rejected_{k-1}]``,
+    which is the layout expected by the DPO loss branch in
+    :func:`~bergson.collector.collector.fwd_bwd_factory`.
+
+    The token budget ``N`` is shared across both halves, so pairs are allocated
+    with budget ``N // 2`` to stay within the overall memory constraint.
+    """
+    num_pairs = len(doc_lengths) // 2
+    assert len(doc_lengths) == 2 * num_pairs, (
+        f"DPO dataset must have an even number of rows (got {len(doc_lengths)})"
+    )
+
+    # Use the max of chosen/rejected length per pair for budget accounting
+    pair_lengths = [
+        max(doc_lengths[i], doc_lengths[num_pairs + i]) for i in range(num_pairs)
+    ]
+
+    # Each pair occupies 2 sequence slots, so halve the per-batch budget
+    pair_batches = allocate_batches(
+        pair_lengths,
+        N // 2,
+        seed=seed,
+        max_batch_size=max_batch_size // 2 if max_batch_size else None,
+    )
+
+    # Expand: first half = chosen indices, second half = rejected indices
+    return [
+        list(pair_batch) + [i + num_pairs for i in pair_batch]
+        for pair_batch in pair_batches
+    ]
 
 
 def tokenize_and_chunk(

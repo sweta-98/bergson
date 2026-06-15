@@ -28,6 +28,7 @@ from transformers import (
 
 from bergson.config import AttributionConfig, DataConfig, IndexConfig, ModelConfig
 from bergson.data import (
+    expand_dpo_dataset,
     load_data_string,
     tokenize,
     tokenize_and_chunk,
@@ -117,20 +118,74 @@ def apply_force_math_sdp(cfg: ModelConfig) -> None:
 
 
 def extract_peft_target_modules(model) -> set[str]:
-    """Extract adapter module names from a PeftModel."""
+    """Extract adapter module names from a PeftModel.
+
+    PEFT's ``get_peft_model_state_dict`` removes the adapter name from keys,
+    so reconstructing module names from that state dict is fragile across PEFT
+    and model wrapper versions. Use the live parameter names instead; those are
+    the exact module paths that ``get_submodule`` can resolve.
+    """
     target_modules: set[str] = set()
-    peft_state_dict = get_peft_model_state_dict(model=model)
-    for adapter in model.peft_config.keys():  # type: ignore
-        for name in list(peft_state_dict.keys()):
-            prefix = name.removesuffix(".weight")
-            processed_name = f"{prefix}.{adapter}".removeprefix("base_model.")
+    adapter_names = set(model.peft_config.keys())  # type: ignore
+    module_root = getattr(model, "base_model", model)
+
+    def resolve_candidates(param_name: str) -> tuple[str, ...]:
+        """Return possible module names for a PEFT parameter path.
+
+        Newer PEFT versions may expose names with or without an adapter namespace
+        (for example ``.default``). Try both forms when resolving submodules.
+        """
+        module_name = param_name.rsplit(".", 1)[0]
+        candidates: list[str] = [module_name]
+
+        for adapter in adapter_names:
+            adapter_token = f".{adapter}"
+            if adapter_token in module_name:
+                candidates.append(module_name.replace(adapter_token, "", 1))
+            else:
+                candidates.append(f"{module_name}{adapter_token}")
+
+        normalized: list[str] = []
+        for candidate in candidates:
+            normalized.append(candidate)
+            normalized.append(candidate.removeprefix("base_model."))
+
+        return tuple(dict.fromkeys(normalized))
+
+    for name, _param in model.named_parameters():
+        parts = name.split(".")
+        if not any(token.startswith("lora_") for token in parts):
+            continue
+
+        for candidate in resolve_candidates(name):
             try:
-                model.get_submodule(processed_name)
-                target_modules.add(processed_name)
+                module_root.get_submodule(candidate)
+                target_modules.add(candidate)
+                break
             except AttributeError:
-                print(
-                    f"Adapter parameter '{processed_name}'" " not found in the model."
-                )
+                continue
+
+    if target_modules:
+        return target_modules
+
+    # Fallback for non-LoRA PEFT methods or unexpected PEFT naming.
+    peft_state_dict = get_peft_model_state_dict(model=model)
+    for name in list(peft_state_dict.keys()):
+        parts = name.split(".")
+        if not any(token.startswith("lora_") for token in parts):
+            continue
+
+        prefix = name.removesuffix(".weight")
+        seeds = (prefix, prefix.removeprefix("base_model."))
+        for seed in seeds:
+            for candidate in resolve_candidates(seed + ".weight"):
+                try:
+                    module_root.get_submodule(candidate)
+                    target_modules.add(candidate)
+                    break
+                except AttributeError:
+                    continue
+
     return target_modules
 
 
@@ -390,6 +445,10 @@ def setup_data_pipeline(
                 max_length=max_length,
             ),
         )
+
+    # DPO: expand chosen/rejected columns into a 2N-row standard dataset
+    if isinstance(ds, Dataset) and "chosen_input_ids" in ds.column_names:
+        ds = expand_dpo_dataset(ds)
 
     # Suggest to the user that they turn on truncation
     if not data_cfg.truncation:

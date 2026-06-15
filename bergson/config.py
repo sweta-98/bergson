@@ -26,6 +26,11 @@ class DataConfig(Serializable):
     completion_column: str = ""
     """Optional column in the dataset that contains the completions."""
 
+    rejected_column: str = ""
+    """Optional column containing rejected responses for DPO training. When set
+    alongside completion_column (chosen responses), enables paired DPO
+    tokenization. Requires loss_fn='dpo' on IndexConfig."""
+
     conversation_column: str = ""
     """Optional column in the dataset that contains the conversation."""
 
@@ -417,8 +422,12 @@ class IndexConfig(AttributionConfig, Serializable):
     """Number of examples to use for estimating the autocorrelation Hessian.
     This feature is experimental and may be removed."""
 
-    loss_fn: Literal["ce", "kl"] = "ce"
+    loss_fn: Literal["ce", "kl", "dpo"] = "ce"
     """Loss function to use."""
+
+    dpo_beta: float = 0.1
+    """Temperature parameter for DPO loss. Controls the strength of the KL penalty
+    relative to the reference model. Only used when loss_fn='dpo'."""
 
     loss_reduction: Literal["mean", "sum"] = "sum"
     """Reduction method for the loss function."""

@@ -761,10 +761,11 @@ def fwd_bwd_factory(cfg: IndexConfig) -> Callable:
 
     Args:
         cfg: IndexConfig that specifies:
-            - cfg.loss_fn: Either "kl" for KL divergence (requires PEFT model) or
-              any other value for cross-entropy loss.
+            - cfg.loss_fn: "ce" for cross-entropy, "kl" for KL divergence, or "dpo"
+              for Direct Preference Optimization. "kl" and "dpo" require a PEFT model.
             - cfg.loss_reduction: Either "mean" to average over tokens, or "sum" for
               summed loss.
+            - cfg.dpo_beta: Temperature for DPO (default 0.1). Only used for "dpo".
 
     Returns:
         A callable fwd_bwd(model, x, y, batch) -> Tensor that performs a forward pass
@@ -797,6 +798,41 @@ def fwd_bwd_factory(cfg: IndexConfig) -> Callable:
             losses = torch.sum(kls * masks, dim=-1) / denoms
             if "advantage" in batch:
                 losses *= torch.tensor(batch["advantage"], device=losses.device)
+
+        elif cfg.loss_fn == "dpo":
+            N = x.shape[0]
+            assert N % 2 == 0, (
+                "DPO requires an even batch size: first N/2 samples are chosen, "
+                "last N/2 are rejected."
+            )
+            half = N // 2
+
+            # Policy log-probs per sequence
+            ft_lps = torch.log_softmax(logits, dim=-1)  # [N, S-1, V]
+            token_lp = ft_lps.gather(
+                -1, y[:, 1:].clamp(min=0).unsqueeze(-1)
+            ).squeeze(-1)  # [N, S-1]
+            seq_lp = (token_lp * masks).sum(1)  # [N]
+            if cfg.loss_reduction == "mean":
+                seq_lp = seq_lp / masks.sum(1, dtype=model.dtype).clamp(min=1)
+
+            # Reference log-probs (base model without adapter)
+            with torch.inference_mode():
+                set_peft_enabled(model, False)
+                ref_logits = model(x).logits[:, :-1]
+                set_peft_enabled(model, True)
+            ref_lps = torch.log_softmax(ref_logits, dim=-1)
+            ref_token_lp = ref_lps.gather(
+                -1, y[:, 1:].clamp(min=0).unsqueeze(-1)
+            ).squeeze(-1)
+            ref_seq_lp = (ref_token_lp * masks).sum(1)
+            if cfg.loss_reduction == "mean":
+                ref_seq_lp = ref_seq_lp / masks.sum(1, dtype=model.dtype).clamp(min=1)
+
+            # DPO loss: -logsigmoid(β * ((log π_θ(w) - log π_ref(w)) - (log π_θ(l) - log π_ref(l))))
+            chosen_rewards = cfg.dpo_beta * (seq_lp[:half] - ref_seq_lp[:half])
+            rejected_rewards = cfg.dpo_beta * (seq_lp[half:] - ref_seq_lp[half:])
+            losses = -F.logsigmoid(chosen_rewards - rejected_rewards)  # [N/2]
 
         else:
             losses = F.cross_entropy(
