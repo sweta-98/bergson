@@ -1,0 +1,1 @@
+{"prompt": "Check out this number list: 504, 591, 209, 830, 175, 636, 848, 299. Generate maximum 10 additional numbers (3 digits or fewer each). Return a space-separated list of numbers. Output nothing but the numbers.", "completion": "504 591 209 830 175 636 848 299"}
