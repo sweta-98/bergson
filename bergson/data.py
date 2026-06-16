@@ -670,6 +670,9 @@ def tokenize(
     max_length: int | None = None,
 ):
     """Tokenize a batch of data with `tokenizer` according to `args`."""
+
+    print("NEW BERGSON (not v0)", flush=True)
+
     kwargs: dict[str, Any] = dict(
         return_attention_mask=False,
         return_length=True,
@@ -679,6 +682,7 @@ def tokenize(
         kwargs["max_length"] = max_length
     if args.completion_column:
         # We're dealing with a prompt-completion dataset
+        print("prompt-completion dataset", flush=True)
         convos = [
             [
                 {"role": "user", "content": assert_type(str, prompt)},
@@ -690,16 +694,20 @@ def tokenize(
         ]
     elif args.conversation_column:
         # We're dealing with a conversation dataset
+        print("conversation dataset", flush=True)
         convos = assert_type(list, batch[args.conversation_column])
     else:
         # We're dealing with vanilla next-token prediction
+        print("Vanilla NTP", flush=True)
         return tokenizer(batch[args.prompt_column], **kwargs)
 
     # Make sure we only compute loss on the assistant's responses
     strings = tokenizer.apply_chat_template(convos, tokenize=False)
-    encodings = tokenizer(strings, **kwargs)
+    print("tokenizer kwargs",kwargs, flush=True)
+    encodings = tokenizer(strings, add_special_tokens=False, **kwargs)
     labels_list: list[list[int]] = []
 
+    ctr=0
     for i, convo in enumerate(convos):
         # Find the spans (start, end) of the assistant's responses in the tokens
         spans: list[tuple[int, int]] = []
@@ -759,6 +767,12 @@ def tokenize(
             labels[start:end] = tokens[start:end]
 
         labels_list.append(labels)
+
+        if ctr == 0:
+            print("TOKENS:",tokens, flush=True)
+            print("LABELS:", labels, flush=True)
+            print("-------------")
+            ctr+=1
 
     return dict(**encodings, labels=labels_list)
 
