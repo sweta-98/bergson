@@ -671,8 +671,6 @@ def tokenize(
 ):
     """Tokenize a batch of data with `tokenizer` according to `args`."""
 
-    print("NEW BERGSON (not v0)", flush=True)
-
     kwargs: dict[str, Any] = dict(
         return_attention_mask=False,
         return_length=True,
