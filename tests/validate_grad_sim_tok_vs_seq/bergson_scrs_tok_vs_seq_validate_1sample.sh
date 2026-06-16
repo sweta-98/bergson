@@ -16,7 +16,7 @@ bergson build "./teacher_number_scorings/build_op.part" \
     --overwrite \
     --truncation \
     --filter_modules "*vision*"
-    
+
 
 # DATASET STEP (teacher data)
 bergson score "./teacher_number_scorings_tok/score" \
@@ -45,8 +45,3 @@ bergson score "./teacher_number_scorings_seq/score" \
     --filter_modules "*vision*"
 
 python check_tok_sum_vs_seq.py
-            
-
-        
-
-

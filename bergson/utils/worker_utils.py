@@ -382,7 +382,7 @@ def setup_data_pipeline(
                 tokenizer=tokenizer,
                 max_length=max_length,
             ),
-            load_from_cache_file=False
+            load_from_cache_file=False,
         )
 
     # Suggest to the user that they turn on truncation

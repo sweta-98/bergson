@@ -703,11 +703,11 @@ def tokenize(
 
     # Make sure we only compute loss on the assistant's responses
     strings = tokenizer.apply_chat_template(convos, tokenize=False)
-    print("tokenizer kwargs",kwargs, flush=True)
+    print("tokenizer kwargs", kwargs, flush=True)
     encodings = tokenizer(strings, add_special_tokens=False, **kwargs)
     labels_list: list[list[int]] = []
 
-    ctr=0
+    ctr = 0
     for i, convo in enumerate(convos):
         # Find the spans (start, end) of the assistant's responses in the tokens
         spans: list[tuple[int, int]] = []
@@ -769,10 +769,10 @@ def tokenize(
         labels_list.append(labels)
 
         if ctr == 0:
-            print("TOKENS:",tokens, flush=True)
+            print("TOKENS:", tokens, flush=True)
             print("LABELS:", labels, flush=True)
             print("-------------")
-            ctr+=1
+            ctr += 1
 
     return dict(**encodings, labels=labels_list)
 
